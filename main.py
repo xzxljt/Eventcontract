@@ -33,6 +33,7 @@ strategy_parameters_config: Dict[str, Any] = {
     "investment_strategies": {}
 }
 STRATEGY_PARAMS_FILE = "config/strategy_parameters.json"
+AUTOX_CLIENTS_FILE = "config/autox_clients_data.json" # AutoX 客户端数据文件
 
 app = FastAPI(
     title="币安事件合约交易信号机器人",
@@ -168,7 +169,106 @@ def ensure_json_serializable(data: Any) -> Any:
     elif isinstance(data, (datetime, pd.Timestamp)): return data.isoformat()
     return data
 
-# --- 策略参数持久化相关函数 ---
+# --- 持久化相关函数 ---
+async def load_autox_clients_from_file():
+    """从文件加载 AutoX 客户端数据。"""
+    global active_autox_clients
+    default_clients = {}
+    try:
+        clients_dir = os.path.dirname(AUTOX_CLIENTS_FILE)
+        if clients_dir and not os.path.exists(clients_dir):
+            try: os.makedirs(clients_dir); print(f"AutoX客户端文件目录 {clients_dir} 已创建。")
+            except OSError as e: print(f"创建AutoX客户端文件目录 {clients_dir} 失败: {e}。")
+
+        if os.path.exists(AUTOX_CLIENTS_FILE):
+            with open(AUTOX_CLIENTS_FILE, "r", encoding="utf-8") as f: content = f.read()
+            if content.strip():
+                try:
+                    loaded_clients_data = json.loads(content)
+                    # 验证加载的数据结构，并只保留有效的客户端信息
+                    valid_clients = {}
+                    for client_id, client_info in loaded_clients_data.items():
+                        try:
+                            # 使用 Pydantic 模型验证并清理数据
+                            client_model = AutoXClientInfo(**client_info)
+                            valid_clients[client_id] = client_model.model_dump()
+                        except Exception as e_val:
+                            print(f"加载AutoX客户端数据时验证失败 (ID: {client_id}): {e_val}. 跳过此客户端。")
+                            # 可选：记录无效的客户端数据
+                            # with open("invalid_autox_clients.log", "a", encoding="utf-8") as log_f:
+                            #     log_f.write(f"Invalid client data for ID {client_id}: {client_info} - Error: {e_val}\n")
+
+                    with autox_clients_lock:
+                         # 注意：这里加载的是离线信息，不包含WebSocket连接对象
+                         # 在客户端实际连接时，会根据client_id匹配并更新active_autox_clients
+                         # 这里只是加载历史信息，以便在前端展示离线客户端或保留备注等信息
+                         # 实际的 active_autox_clients 字典仍然以 WebSocket 对象为键
+                         # 我们需要一个单独的结构来存储持久化的客户端信息，或者在连接时合并
+                         # 为了简化，我们暂时只加载数据，并在连接时查找匹配的持久化信息
+                         # 更完善的方案是维护一个持久化客户端列表，并在连接/断开时更新
+                         # 暂时将加载的数据存储在一个新的全局变量中，或者在需要时查找
+                         # 考虑到当前的 active_autox_clients 结构，直接加载到它不合适
+                         # 我们需要修改 active_autox_clients 的结构或引入新的持久化存储
+                         # 鉴于当前 active_autox_clients 以 WebSocket 为键，我们不能直接加载到它
+                         # 让我们创建一个新的全局变量来存储持久化的客户端信息
+                         global persistent_autox_clients_data
+                         persistent_autox_clients_data = valid_clients
+                         print(f"AutoX客户端数据已从 {AUTOX_CLIENTS_FILE} 加载。加载了 {len(valid_clients)} 个有效客户端。")
+
+                except json.JSONDecodeError:
+                    print(f"错误: {AUTOX_CLIENTS_FILE} 包含无效JSON。将使用默认配置。")
+                    # 不覆盖无效文件，保留原始数据以便调试
+            else:
+                print(f"{AUTOX_CLIENTS_FILE} 为空，使用默认配置。")
+        else:
+            print(f"{AUTOX_CLIENTS_FILE} 未找到，将创建。使用默认配置。")
+            # 文件不存在，不需要创建，保存时会自动创建目录和文件
+    except Exception as e:
+        print(f"加载AutoX客户端数据时发生其他错误: {e}\n{traceback.format_exc()}。将使用默认配置。")
+        # 发生错误时，不加载任何数据，使用默认空配置
+
+async def save_autox_clients_to_file():
+    """将当前活动和持久化的 AutoX 客户端数据保存到文件。"""
+    global active_autox_clients, persistent_autox_clients_data
+    temp_file_path = AUTOX_CLIENTS_FILE + ".tmp"
+    try:
+        clients_dir = os.path.dirname(AUTOX_CLIENTS_FILE)
+        if clients_dir and not os.path.exists(clients_dir): os.makedirs(clients_dir)
+
+        # 合并当前活动客户端信息和持久化客户端信息
+        # 活动客户端信息优先，因为它包含最新状态和last_seen时间
+        all_clients_to_save = {}
+        # 从持久化数据开始，保留离线客户端信息
+        if persistent_autox_clients_data:
+             all_clients_to_save.update(persistent_autox_clients_data)
+
+        # 添加或更新活动客户端信息
+        with autox_clients_lock:
+            for ws, info_dict in active_autox_clients.items():
+                 client_id = info_dict.get('client_id')
+                 if client_id:
+                     # 使用 Pydantic 模型确保数据结构正确
+                     try:
+                         client_model = AutoXClientInfo(**info_dict)
+                         all_clients_to_save[client_id] = client_model.model_dump()
+                     except Exception as e_val:
+                         print(f"保存AutoX客户端数据时验证失败 (ID: {client_id}): {e_val}. 跳过此客户端。")
+
+
+        serializable_clients_data = ensure_json_serializable(all_clients_to_save)
+
+        with open(temp_file_path, "w", encoding="utf-8") as f:
+            json.dump(serializable_clients_data, f, indent=4)
+            f.flush(); os.fsync(f.fileno()) # 确保数据写入磁盘
+        os.replace(temp_file_path, AUTOX_CLIENTS_FILE)
+        print(f"AutoX客户端数据已保存到文件 {AUTOX_CLIENTS_FILE}。")
+    except Exception as e:
+        print(f"保存AutoX客户端数据到文件 {AUTOX_CLIENTS_FILE} 失败: {e}\n{traceback.format_exc()}")
+        if os.path.exists(temp_file_path):
+            try: os.remove(temp_file_path)
+            except Exception as rm_err: print(f"清理临时文件 {temp_file_path} 失败: {rm_err}")
+
+
 async def load_strategy_parameters_from_file():
     global strategy_parameters_config
     default_config = {"prediction_strategies": {}, "investment_strategies": {}}
@@ -264,7 +364,7 @@ async def background_signal_verifier():
     while True:
         await asyncio.sleep(60) # 每分钟检查一次
         verified_something = False; current_time_utc = now_utc()
-        signals_to_verify_copy = [] 
+        signals_to_verify_copy = []
         
         with live_signals_lock: 
             for signal_idx in range(len(live_signals) -1, -1, -1):
@@ -577,6 +677,7 @@ async def stop_kline_websocket_if_not_needed(symbol: str, interval: str):
 async def startup_event():
     await load_live_signals_async()
     await load_strategy_parameters_from_file()
+    await load_autox_clients_from_file() # 加载 AutoX 客户端数据
     asyncio.create_task(process_kline_queue())
     asyncio.create_task(background_signal_verifier())
     print("应用启动完成。后台测试配置为空，K线流未启动。")
@@ -755,6 +856,7 @@ async def autox_websocket_endpoint(websocket: WebSocket):
 
                 # 广播更新后的客户端列表到前端状态WebSocket
                 await broadcast_autox_clients_status()
+                await save_autox_clients_to_file() # 保存 AutoX 客户端数据
 
             elif message_type == "status_update":
                 if not client_id_local:
@@ -784,6 +886,8 @@ async def autox_websocket_endpoint(websocket: WebSocket):
                 await broadcast_autox_clients_status()
 
 
+                await save_autox_clients_to_file() # 保存 AutoX 客户端数据
+
             elif message_type == "pong":
                 with autox_clients_lock:
                      if websocket in active_autox_clients:
@@ -812,6 +916,7 @@ async def autox_websocket_endpoint(websocket: WebSocket):
                 # 并在 GET /api/autox/clients 中合并在线和离线客户端信息
         # 客户端断开连接后，广播更新后的客户端列表到前端状态WebSocket
         await broadcast_autox_clients_status()
+        await save_autox_clients_to_file() # 保存 AutoX 客户端数据
 
 
 # --- WebSocket 端点 for AutoX Status (/ws/autox_status) ---
@@ -1065,9 +1170,10 @@ async def update_client_notes_endpoint(client_id: str, notes_payload: ClientNote
         raise HTTPException(status_code=404, detail=f"未找到 Client ID 为 {client_id} 的活动AutoX客户端。")
     
     print(f"客户端 {client_id} 的备注已更新为: '{notes_payload.notes}'")
+    await save_autox_clients_to_file() # 保存 AutoX 客户端数据
     return updated_client_info
-
-
+ 
+ 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
 
