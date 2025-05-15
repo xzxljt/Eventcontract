@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.pyc
+*.pyd
+*.pyo
+
+# Virtual Environment
+venv/
+.venv/
+
+# Editors and IDEs
+.vscode/
+.idea/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+
+# Environment variables
+.env
+
+# Other common ignored files
+dist/
+build/
+*.swp
+# Kline cache
+kline_cache/
+*.kline
+data_cache/

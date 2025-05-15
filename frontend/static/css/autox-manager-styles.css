@@ -1,0 +1,51 @@
+/* frontend/static/css/autox-manager-styles.css */
+
+/* 
+  此文件用于存放 AutoX 管理页面特有的样式。
+  通用的样式（如卡片、表格、徽章的基本外观）应定义在 shared-styles.css 中。
+  Bootstrap 的类也应优先使用。
+*/
+
+/* 示例：如果需要为 AutoX 页面的某个特定表格列设置固定宽度 */
+/*
+.autox-clients-table .col-client-id {
+    min-width: 200px;
+    max-width: 300px;
+    word-break: break-all; 
+}
+
+.autox-clients-table .col-actions {
+    min-width: 150px;
+}
+*/
+
+/* 备注输入框的样式，如果需要自定义 */
+.notes-input {
+    min-width: 150px; /* 确保输入框有足够宽度 */
+    font-size: 0.9em;
+}
+
+/* 允许日志消息中的详细信息换行并断词 */
+.log-details-cell {
+    white-space: pre-wrap !important; /* 覆盖 shared-styles.css 中可能存在的 nowrap */
+    word-break: break-all !important;
+    max-width: 400px; /* 可以限制一下最大宽度，避免过长 */
+    font-size: 0.9em; /* 略微减小字体，以容纳更多文本 */
+}
+
+/* 客户端支持的交易对列表样式 */
+.supported-symbols-list {
+    list-style-type: none;
+    padding-left: 0;
+    margin-bottom: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem; /* 交易对之间的间隙 */
+}
+
+.supported-symbols-list li {
+    background-color: #e9ecef; /* 浅灰色背景 */
+    padding: 0.1rem 0.4rem;
+    border-radius: 0.2rem;
+    font-size: 0.8em;
+}

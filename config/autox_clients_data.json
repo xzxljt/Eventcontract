@@ -1,0 +1,11 @@
+{
+    "92ae89b2-77b3-476b-b3e5-a7b5b41a86e0": {
+        "client_id": "92ae89b2-77b3-476b-b3e5-a7b5b41a86e0",
+        "supported_symbols": [
+            "ETHUSDT"
+        ],
+        "notes": null,
+        "first_seen_at": "2025-05-15T18:33:34.098082Z",
+        "last_updated_at": "2025-05-15T18:35:48.445735Z"
+    }
+}

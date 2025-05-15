@@ -1,0 +1,184 @@
+/* frontend/static/css/index-styles.css */
+/* 此文件包含 index.html 页面特定的样式。 */
+
+/* 回测结果卡片的特定过渡效果 */
+.result-card {
+    transition: all 0.3s ease;
+}
+
+/* 图表容器样式 */
+.chart-container {
+    height: 400px;
+    margin-bottom: 20px;
+}
+
+/* 页面顶部实时统计栏的特定样式 */
+.live-stats-bar .alert {
+    font-size: 0.85rem;
+    padding: 0.5rem 1rem;
+}
+.live-stats-bar small {
+    margin-right: 15px;
+}
+.live-stats-bar small:last-child {
+    margin-right: 0;
+}
+
+/* --- 回测结果中日历视图相关的样式 --- */
+.calendar-container { 
+    margin-top: 20px; 
+    padding: 15px; 
+    border: 1px solid #e0e0e0; /* 给日历容器一个清晰的边框 */
+    border-radius: 5px; 
+    background-color: #fdfdfd; /* 稍亮的背景 */
+}
+
+.calendar-header { 
+    display: flex; 
+    justify-content: space-between; 
+    align-items: center; 
+    margin-bottom: 15px; 
+}
+.calendar-header h5 { 
+    margin-bottom: 0;
+}
+
+.calendar-grid { 
+    display: grid; 
+    grid-template-columns: repeat(7, 1fr);
+    gap: 1px; /* 使用 gap 来创建细线效果，而不是依赖单元格边框的合并 */
+    background-color: #dcdcdc; /* 网格线的颜色，通过gap和背景色实现 */
+    border: 1px solid #dcdcdc; /* 整个网格的外边框，与网格线颜色一致 */
+}
+
+.calendar-day-header, 
+.calendar-day { 
+    padding: 6px 4px; /* 统一内边距 */
+    text-align: center; 
+    background-color: #ffffff; /* 所有单元格的背景都是白色 */
+    /* border: none; */ /* 移除单个单元格的边框，依赖 .calendar-grid 的 gap 和背景色 */
+    min-height: 75px; /* 确保单元格有足够高度 */
+    font-size: 0.8rem; 
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box; /* 确保 padding 和 border 不会增加元素总宽高 */
+}
+
+.calendar-day-header { 
+    background-color: #f5f5f5; /* 表头背景色 */
+    font-weight: bold; 
+    min-height: auto;
+    justify-content: center; /* 表头文字垂直居中 */
+    align-items: center;   /* 表头文字水平居中 */
+    color: #333;
+}
+
+.calendar-day {
+    /* 默认情况下，让日期数字垂直居中 */
+    justify-content: center; 
+    align-items: center;
+}
+
+/* 当日期单元格包含财务数据时，调整对齐方式 */
+.calendar-day.has-financial-data {
+    justify-content: space-between; /* 日期在顶部，财务数据在底部 */
+    align-items: center; /* 内部元素水平居中 */
+}
+
+.calendar-day.not-current-month { 
+    background-color: #f9f9f9;
+    color: #b0b0b0;
+}
+.calendar-day.not-current-month .day-number {
+    color: #b0b0b0; /* 非当前月份的日期数字颜色 */
+}
+
+
+.calendar-day .day-number { 
+    font-weight: bold;
+    display: block; /* 确保数字占据一行，方便对齐 */
+    line-height: 1.2; /* 调整行高 */
+    color: #444; /* 日期数字的颜色 */
+}
+
+.calendar-day .day-number.today { 
+    background-color: #007bff;
+    color: white !important; /* 确保文字是白色 */
+    border-radius: 50%;
+    width: 24px; 
+    height: 24px; 
+    display: inline-flex; 
+    align-items: center; 
+    justify-content: center; 
+    padding: 0;
+    font-size: 0.75rem; /* 'today' 字体可以小一点 */
+}
+
+.calendar-day .day-financial-details {
+    width: 100%; /* 确保占据全部宽度以正确 text-align: center */
+    text-align: center;
+    /* margin-top: auto; */ /* 移除: 当 .has-financial-data 使用 justify-content: space-between 时不再需要 */
+}
+
+.calendar-day .pnl-value { 
+    font-size: 0.75rem;
+    display: block; /* 确保 PnL 独占一行 */
+    line-height: 1.1;
+}
+.calendar-day .trades-count { 
+    font-size: 0.65rem;
+    color: #555; /* 交易笔数颜色可以深一点 */
+    display: block; /* 确保交易笔数独占一行 */
+    line-height: 1.1;
+    margin-top: 1px; /* 与 PnL 值之间添加微小间距 */
+}
+
+/* 新增：每日余额样式 */
+.calendar-day .day-balance {
+    font-size: 0.65rem; /* 与交易笔数大小一致或类似 */
+    color: #333;       /* 余额使用标准文本颜色 */
+    display: block;
+    line-height: 1.1;
+    margin-top: 1px;   /* 与上方元素（交易笔数或PnL）之间添加微小间距 */
+}
+
+/* 响应式调整日历单元格大小 */
+@media (max-width: 768px) { 
+    .calendar-day-header,
+    .calendar-day { 
+        min-height: 65px; 
+        font-size: 0.75rem; 
+        padding: 4px 2px;
+    } 
+    .calendar-day .day-number { 
+        font-size: 0.75rem; 
+    } 
+    .calendar-day .day-number.today {
+        width: 20px;
+        height: 20px;
+        font-size: 0.7rem;
+    }
+    .calendar-day .pnl-value { font-size: 0.7rem; }
+    .calendar-day .trades-count { font-size: 0.6rem; }
+    .calendar-day .day-balance { font-size: 0.6rem; } /* 新增：响应式余额字体 */
+}
+@media (max-width: 576px) { 
+    .calendar-day-header,
+    .calendar-day { 
+        min-height: 55px; 
+        font-size: 0.7rem;
+    } 
+    .calendar-day .day-number.today { 
+        width: 18px; 
+        height: 18px; 
+        font-size:0.65rem; 
+    }
+    /* 对于更小的屏幕，如果空间不足，可以进一步减小字体 */
+    /* .calendar-day .pnl-value { font-size: 0.65rem; } */
+    /* .calendar-day .trades-count { font-size: 0.55rem; } */
+    /* .calendar-day .day-balance { font-size: 0.55rem; } */
+}
+
+.white-space-pre-wrap {
+    white-space: pre-wrap;
+}

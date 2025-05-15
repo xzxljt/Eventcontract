@@ -1,0 +1,232 @@
+frontend/static/css/shared-styles.css
+
+/* --- Global Resets & Base --- */
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    line-height: 1.6;
+    color: #333;
+    background-color: #f4f7f6; /* Slightly off-white background for the body */
+}
+
+.container, .container-fluid {
+    padding-left: 15px;
+    padding-right: 15px;
+}
+
+/* --- Navigation Bar --- */
+/* 
+  统一导航栏样式将主要通过在 HTML 中使用一致的 Bootstrap 类 (e.g., navbar-dark bg-primary) 来实现。
+  此共享 CSS 文件可以包含对导航栏内部元素的任何自定义调整，如果需要的话。
+  目前，我们将依赖 Bootstrap 提供的类。
+*/
+
+/* --- Cards --- */
+.card {
+    margin-bottom: 20px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.08); /* Softer shadow */
+    border: none; /* Remove default card border for a cleaner look */
+    border-radius: 0.3rem; /* Slightly more rounded corners */
+    overflow: auto; /* Added from live-test-styles, good for content overflow */
+}
+
+.card-header {
+    /* Ensure card headers have consistent padding and background if customized beyond Bootstrap */
+    padding: 0.75rem 1.25rem;
+}
+
+.card-header.bg-primary { /* Example for primary header, can add others */
+    color: white;
+}
+
+
+/* --- Loading Indicators --- */
+.loading-overlay { /* Standardized loading overlay */
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.65); /* Slightly darker */
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    z-index: 10500; /* High z-index */
+    color: white;
+}
+
+.loading-overlay .spinner-border {
+    width: 3rem;
+    height: 3rem;
+}
+
+.loading-overlay span {
+    margin-top: 15px;
+    font-size: 1.1rem;
+}
+
+/* Fallback or simpler loading, if needed for specific inline cases */
+.loading-inline {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 20px;
+    color: #007bff; /* Primary color */
+}
+
+
+/* --- Text Color Utilities --- */
+/* PnL (Profit and Loss) Text Colors */
+.pnl-positive, .text-profit {
+    color: #28a745 !important; /* Bootstrap success green */
+    font-weight: bold;
+}
+
+.pnl-negative, .text-loss {
+    color: #dc3545 !important; /* Bootstrap danger red */
+    font-weight: bold;
+}
+
+.pnl-neutral, .text-neutral {
+    color: #6c757d !important; /* Bootstrap secondary grey */
+}
+
+/* Win Rate Text Colors */
+.win-rate-high {
+    color: #28a745 !important; /* Green for high win rate */
+}
+
+.win-rate-medium {
+    color: #ffc107 !important; /* Yellow for medium win rate */
+}
+
+.win-rate-low {
+    color: #dc3545 !important; /* Red for low win rate */
+}
+
+
+/* --- Badges --- */
+/* Enhanced Bootstrap Badge Styling (from autox-manager-styles.css) */
+.badge {
+    padding: 0.4em 0.7em; /* Slightly larger padding for better readability */
+    font-size: 0.8em;     /* Consistent font size */
+    font-weight: 600;
+    line-height: 1;
+    text-align: center;
+    white-space: nowrap;
+    vertical-align: baseline;
+    border-radius: 0.25rem;
+}
+
+/* Specific badge background colors (can be extended) */
+.badge.bg-info {
+    background-color: #0dcaf0 !important;
+}
+
+.badge.bg-warning {
+    background-color: #ffc107 !important;
+}
+
+.badge.bg-danger {
+    background-color: #dc3545 !important;
+}
+
+.badge.bg-success {
+    background-color: #198754 !important;
+}
+
+.badge.bg-secondary {
+    background-color: #6c757d !important;
+}
+
+
+/* --- Tables --- */
+.table {
+    margin-bottom: 1rem;
+}
+
+.table thead th {
+    vertical-align: bottom;
+    border-bottom: 2px solid #dee2e6;
+    background-color: #f8f9fa; /* Light background for table headers */
+    font-weight: 600;
+}
+
+.table-striped tbody tr:nth-of-type(odd) {
+    background-color: rgba(0, 0, 0, 0.03); /* Softer stripe */
+}
+
+.table-hover tbody tr:hover {
+    background-color: rgba(0, 0, 0, 0.06); /* Softer hover */
+}
+
+.table th, .table td {
+    /* For responsive tables where content might be long */
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.table-responsive {
+    overflow-x: auto;
+}
+
+
+/* --- Buttons --- */
+/* Favorite Button (from index.html and live-test.html style tags) */
+.favorite-btn {
+    border: none;
+    background: none;
+    padding: 0.2rem 0.5rem; /* Standardized padding */
+    cursor: pointer;
+    vertical-align: middle; /* Align with text if inline */
+}
+
+.favorite-btn .bi-star-fill {
+    color: orange;
+}
+
+.favorite-btn .bi-star {
+    color: #adb5bd; /* Lighter grey for unfilled star */
+}
+
+/* --- Misc UI Elements --- */
+/* Status Indicator (from live-test.html style tag) */
+.status-indicator {
+    font-size: 0.8rem;
+    padding: 0.2rem 0.4rem;
+    border-radius: 0.2rem;
+}
+
+/* Helper for small text, e.g., under form fields */
+.x-small {
+  font-size: 0.75rem;
+}
+
+/* Prediction Item Borders (from index-styles.css) */
+.prediction-item {
+    border-left: 4px solid #ccc; /* Default border */
+    padding-left: 10px;
+    margin-bottom: 10px;
+}
+.prediction-item.win {
+    border-left-color: #28a745; /* Success green */
+}
+.prediction-item.loss {
+    border-left-color: #dc3545; /* Danger red */
+}
+
+/* Signal Card Borders (from live-test-styles.css, potentially reusable) */
+.signal-card.pending {
+    border-left: 4px solid #ffc107; /* Warning yellow */
+}
+.signal-card.success {
+    border-left: 4px solid #28a745; /* Success green */
+}
+.signal-card.failed {
+    border-left: 4px solid #dc3545; /* Danger red */
+}
+.signal-card { /* Common styling for signal cards if these classes are used */
+    transition: all 0.3s ease;
+    word-break: break-word;
+}

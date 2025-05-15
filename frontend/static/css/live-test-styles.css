@@ -1,0 +1,80 @@
+/* frontend/static/css/live-test-styles.css */
+/* 此文件包含 live-test.html 页面特定的样式。 */
+/* 通用样式（如 .card, .loading-overlay, .win-rate-*, .pnl-*, .favorite-btn, .status-indicator, .signal-card.*, .x-small）已移至 shared-styles.css */
+
+/* 倒计时特定样式 */
+.countdown {
+    font-weight: bold; /* 倒计时文本加粗 */
+}
+
+/* 信号卡片特定样式（基础样式和状态边框已在 shared-styles.css 中定义） */
+/* 如果需要对信号卡片做进一步的特定于此页面的调整，可以加在这里 */
+.signal-card .card-header, .signal-card .card-body {
+    padding: 0.75rem; /* 调整内边距，使其更紧凑 */
+}
+.signal-card p {
+    margin-bottom: 0.3rem; /* 减少段落间距 */
+    font-size: 0.9rem; /* 稍小字体 */
+}
+.signal-card h6 { /* 卡片内小标题 */
+    font-size: 1rem;
+}
+.signal-card h4 { /* 卡片内主要数字，如金额 */
+    font-size: 1.5rem;
+}
+.signal-card .badge { /* 卡片内徽章 */
+    font-size: 0.85em;
+}
+
+
+/* 筛选卡片特定背景色和内边距 */
+.filter-card {
+    background-color: #f8f9fa; /* 浅灰色背景 */
+    border-radius: 0.25rem; /* 圆角 */
+    padding: 1rem; /* 内边距 */
+    margin-bottom: 1rem; /* 与下方元素间距 */
+}
+
+/* 日期选择器包装器，如果需要特殊定位或样式 */
+.date-picker-wrapper {
+    position: relative; /* 用于可能的绝对定位子元素 */
+    width: 100%;
+}
+
+/* 图表容器样式 */
+.chart-container {
+    min-height: 300px; /* 图表最小高度 */
+    margin-top: 1rem; /* 与上方元素间距 */
+}
+
+/* 表格特定样式调整 */
+/* .table-responsive, .table, .table th, .table td 的基础样式已在 shared-styles.css 中 */
+/* 如果 live-test 页面的表格有更特殊的 nowrap 或 text-overflow 需求，可以在这里覆盖或增强 */
+
+/* 针对小屏幕的特定优化 */
+@media (max-width: 992px) {
+    /* .card-body 基础内边距已由 Bootstrap 或 shared-styles 控制，这里可以按需调整 */
+    /*
+    .card-body {
+        padding: 0.75rem; 
+    }
+    */
+    
+    /* 页面标题的响应式字体大小 */
+    h5, h6 { /* 这可能过于通用，需要审视是否只针对特定区域的 h5, h6 */
+        font-size: 0.95rem;
+    }
+    
+    /* 表格单元格在小屏幕下的内边距和字体大小 */
+    /* 基础的 .table th, .table td 样式已在 shared-styles.css 中 */
+    /* 如果需要进一步缩小，可以在这里添加 */
+    /*
+    .table th, .table td {
+        padding: 0.3rem;
+        font-size: 0.85rem;
+    }
+    */
+}
+
+/* 注意：原 live-test.html 内 <style> 标签中的 .favorite-btn 和 .status-indicator 相关样式 */
+/* 已经迁移到 shared-styles.css，此处无需重复定义。 */
