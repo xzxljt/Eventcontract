@@ -11,6 +11,7 @@
     <link rel="stylesheet" href="/static/css/shared-styles.css">
     <!-- Custom CSS for this page -->
     <link rel="stylesheet" href="/static/css/index-styles.css">
+    <link rel="stylesheet" href="https://font.sec.miui.com/font/css?family=MiSans:400,700:MiSans" />
 </head>
 <body>
     <div id="app">
@@ -50,7 +51,8 @@
                                 <div class="mb-3">
                                     <label for="symbol" class="form-label">交易对</label>
                                     <div class="input-group">
-                                        <select class="form-select" id="symbol" v-model="backtestParams.symbol" required>
+                                        <select class="form-select" id="symbol" v-model="backtestParams.symbol" required
+                                                :class="{'is-invalid': fieldErrors.symbol}">
                                             <option value="" disabled>选择交易对</option>
                                             <template v-for="s in symbols" :key="s">
                                                 <option :value="s">
@@ -65,34 +67,53 @@
                                             <i :class="isFavorite(backtestParams.symbol) ? 'bi bi-star-fill' : 'bi bi-star'"></i>
                                         </button>
                                     </div>
+                                    <div v-if="fieldErrors.symbol" class="invalid-feedback">
+                                        {{ fieldErrors.symbol }}
+                                    </div>
                                 </div>
 
                                 <div class="mb-3">
                                     <label for="interval" class="form-label">K线周期</label>
-                                    <select class="form-select" id="interval" v-model="backtestParams.interval" required>
+                                    <select class="form-select" id="interval" v-model="backtestParams.interval" required
+                                            :class="{'is-invalid': fieldErrors.interval}">
                                         <option value="1m">1分钟</option> <option value="5m">5分钟</option>
                                         <option value="15m">15分钟</option> <option value="30m">30分钟</option>
                                         <option value="1h">1小时</option> <option value="4h">4小时</option> <option value="1d">1天</option>
                                     </select>
+                                    <div v-if="fieldErrors.interval" class="invalid-feedback">
+                                        {{ fieldErrors.interval }}
+                                    </div>
                                 </div>
 
                                 <div class="row">
                                     <div class="col-md-6 mb-3">
                                         <label for="startTime" class="form-label">开始时间</label>
-                                        <input type="text" class="form-control" id="startTime" required>
+                                        <input type="text" class="form-control" id="startTime" required
+                                               :class="{'is-invalid': fieldErrors.startTime}">
+                                    </div>
+                                    <div v-if="fieldErrors.startTime" class="invalid-feedback">
+                                        {{ fieldErrors.startTime }}
                                     </div>
                                     <div class="col-md-6 mb-3">
                                         <label for="endTime" class="form-label">结束时间</label>
-                                        <input type="text" class="form-control" id="endTime" required>
+                                        <input type="text" class="form-control" id="endTime" required
+                                               :class="{'is-invalid': fieldErrors.endTime}">
+                                    </div>
+                                    <div v-if="fieldErrors.endTime" class="invalid-feedback">
+                                        {{ fieldErrors.endTime }}
                                     </div>
                                 </div>
 
                                 <div class="mb-3">
                                     <label for="predictionStrategy" class="form-label">预测策略</label>
-                                    <select class="form-select" id="predictionStrategy" v-model="selectedPredictionStrategy" required>
+                                    <select class="form-select" id="predictionStrategy" v-model="selectedPredictionStrategy" required
+                                            :class="{'is-invalid': fieldErrors.predictionStrategy}">
                                         <option :value="null" disabled>选择预测策略</option>
                                         <option v-for="strategy in predictionStrategies" :key="strategy.id" :value="strategy">{{ strategy.name }}</option>
                                     </select>
+                                    <div v-if="fieldErrors.predictionStrategy" class="invalid-feedback">
+                                        {{ fieldErrors.predictionStrategy }}
+                                    </div>
                                 </div>
                                 
                                 <div v-if="selectedPredictionStrategy && selectedPredictionStrategy.parameters && Object.keys(predictionStrategyParams).length > 0" class="mb-3 border p-2 rounded bg-light">
@@ -103,17 +124,25 @@
                                             v-if="paramDef.type !== 'select' && paramDef.type !== 'boolean'"
                                             :type="paramDef.type === 'int' || paramDef.type === 'float' ? 'number' : 'text'"
                                             class="form-control form-control-sm"
+                                            :class="{'is-invalid': fieldErrors['predictionStrategyParams.' + paramDef.name]}"
                                             :id="'pred_param_' + paramDef.name"
                                             v-model="predictionStrategyParams[paramDef.name]"
                                             :step="paramDef.type === 'float' ? (paramDef.step || 0.01) : (paramDef.type === 'int' ? 1 : null)"
                                             :min="paramDef.min" :max="paramDef.max" :placeholder="paramDef.default">
-                                        <select v-else-if="paramDef.type === 'select'" class="form-select form-select-sm" v-model="predictionStrategyParams[paramDef.name]">
+                                        <select v-else-if="paramDef.type === 'select'" class="form-select form-select-sm"
+                                                :class="{'is-invalid': fieldErrors['predictionStrategyParams.' + paramDef.name]}"
+                                                v-model="predictionStrategyParams[paramDef.name]">
                                             <option v-for="opt in paramDef.options" :key="opt" :value="opt">{{opt}}</option>
                                         </select>
-                                         <select v-else-if="paramDef.type === 'boolean'" class="form-select form-select-sm" v-model="predictionStrategyParams[paramDef.name]">
+                                         <select v-else-if="paramDef.type === 'boolean'" class="form-select form-select-sm"
+                                                 :class="{'is-invalid': fieldErrors['predictionStrategyParams.' + paramDef.name]}"
+                                                 v-model="predictionStrategyParams[paramDef.name]">
                                             <option :value="true">是</option>
                                             <option :value="false">否</option>
                                         </select>
+                                        <div v-if="fieldErrors['predictionStrategyParams.' + paramDef.name]" class="invalid-feedback">
+                                            {{ fieldErrors['predictionStrategyParams.' + paramDef.name] }}
+                                        </div>
                                     </div>
                                      <div v-if="!selectedPredictionStrategy.parameters.filter(p => !p.advanced).length" class="text-muted small fst-italic">
                                         此预测策略无用户可配置参数。
@@ -122,52 +151,84 @@
 
                                 <div class="mb-3">
                                     <label for="eventPeriod" class="form-label">事件合约周期</label>
-                                    <select class="form-select" id="eventPeriod" v-model="backtestParams.eventPeriod" required>
+                                    <select class="form-select" id="eventPeriod" v-model="backtestParams.eventPeriod" required
+                                            :class="{'is-invalid': fieldErrors.eventPeriod}">
                                         <option value="10m">10分钟</option> <option value="30m">30分钟</option>
                                         <option value="1h">1小时</option> <option value="1d">1天</option>
                                     </select>
+                                    <div v-if="fieldErrors.eventPeriod" class="invalid-feedback">
+                                        {{ fieldErrors.eventPeriod }}
+                                    </div>
                                 </div>
 
                                 <div class="mb-3">
                                     <label for="confidenceThreshold" class="form-label">预测置信度阈值 ({{ backtestParams.confidence_threshold }})</label>
-                                    <input type="range" class="form-range" id="confidenceThreshold" v-model.number="backtestParams.confidence_threshold" min="0" max="100">
+                                    <input type="range" class="form-range" id="confidenceThreshold" v-model.number="backtestParams.confidence_threshold" min="0" max="100"
+                                           :class="{'is-invalid': fieldErrors.confidence_threshold}">
+                                </div>
+                                <div v-if="fieldErrors.confidence_threshold" class="invalid-feedback">
+                                    {{ fieldErrors.confidence_threshold }}
                                 </div>
                                 
                                 <hr> <h6 class="text-primary">投资设置</h6>
                                 
                                 <div class="mb-3">
                                     <label for="initialBalance" class="form-label">初始模拟资金 (USDT)</label>
-                                    <input type="number" class="form-control" id="initialBalance" v-model.number="backtestParams.investment.initial_balance" min="1" step="0.01">
+                                    <input type="number" class="form-control" id="initialBalance" v-model.number="backtestParams.investment.initial_balance" min="1" step="0.01"
+                                           :class="{'is-invalid': fieldErrors['investment.initial_balance']}">
+                                </div>
+                                <div v-if="fieldErrors['investment.initial_balance']" class="invalid-feedback">
+                                    {{ fieldErrors['investment.initial_balance'] }}
                                 </div>
                                 <div class="row mb-3">
                                     <div class="col-6">
                                         <label for="profitRate" class="form-label">盈利 (%)</label>
-                                        <input type="number" class="form-control" id="profitRate" v-model.number="backtestParams.investment.profit_rate_pct" min="1" max="500" step="0.1">
+                                        <input type="number" class="form-control" id="profitRate" v-model.number="backtestParams.investment.profit_rate_pct" min="1" max="500" step="0.1"
+                                               :class="{'is-invalid': fieldErrors['investment.profit_rate_pct']}">
+                                    </div>
+                                    <div v-if="fieldErrors['investment.profit_rate_pct']" class="invalid-feedback">
+                                        {{ fieldErrors['investment.profit_rate_pct'] }}
                                     </div>
                                     <div class="col-6">
                                         <label for="lossRate" class="form-label">亏损 (%)</label>
-                                        <input type="number" class="form-control" id="lossRate" v-model.number="backtestParams.investment.loss_rate_pct" min="1" max="100" step="0.1">
+                                        <input type="number" class="form-control" id="lossRate" v-model.number="backtestParams.investment.loss_rate_pct" min="1" max="100" step="0.1"
+                                               :class="{'is-invalid': fieldErrors['investment.loss_rate_pct']}">
+                                    </div>
+                                    <div v-if="fieldErrors['investment.loss_rate_pct']" class="invalid-feedback">
+                                        {{ fieldErrors['investment.loss_rate_pct'] }}
                                     </div>
                                 </div>
                                 <div class="row mb-3">
                                     <div class="col-6">
                                         <label for="minInvestment" class="form-label">最小投资</label>
-                                        <input type="number" class="form-control" id="minInvestment" v-model.number="backtestParams.investment.min_investment_amount" min="1" step="0.01">
+                                        <input type="number" class="form-control" id="minInvestment" v-model.number="backtestParams.investment.min_investment_amount" min="1" step="0.01"
+                                               :class="{'is-invalid': fieldErrors['investment.min_investment_amount']}">
+                                    </div>
+                                    <div v-if="fieldErrors['investment.min_investment_amount']" class="invalid-feedback">
+                                        {{ fieldErrors['investment.min_investment_amount'] }}
                                     </div>
                                     <div class="col-6">
                                         <label for="maxInvestment" class="form-label">最大投资</label>
-                                        <input type="number" class="form-control" id="maxInvestment" v-model.number="backtestParams.investment.max_investment_amount" min="1" step="0.01">
+                                        <input type="number" class="form-control" id="maxInvestment" v-model.number="backtestParams.investment.max_investment_amount" min="1" step="0.01"
+                                               :class="{'is-invalid': fieldErrors['investment.max_investment_amount']}">
+                                    </div>
+                                    <div v-if="fieldErrors['investment.max_investment_amount']" class="invalid-feedback">
+                                        {{ fieldErrors['investment.max_investment_amount'] }}
                                     </div>
                                 </div>
 
                                 <div class="mb-3">
                                     <label for="investmentStrategySelect" class="form-label">投资策略</label>
-                                    <select class="form-select" id="investmentStrategySelect" v-model="selectedInvestmentStrategy" required>
+                                    <select class="form-select" id="investmentStrategySelect" v-model="selectedInvestmentStrategy" required
+                                            :class="{'is-invalid': fieldErrors.investmentStrategy}">
                                         <option :value="null" disabled>选择投资策略</option>
                                         <option v-for="strategy in investmentStrategies" :key="strategy.id" :value="strategy">
                                             {{ strategy.name }} <span v-if="strategy.description && strategy.id !=='martingale_user_defined'" class="text-muted x-small">({{ strategy.description }})</span>
                                         </option>
                                     </select>
+                                    <div v-if="fieldErrors.investmentStrategy" class="invalid-feedback">
+                                        {{ fieldErrors.investmentStrategy }}
+                                    </div>
                                 </div>
                                 
                                 <div v-if="selectedInvestmentStrategy && selectedInvestmentStrategy.parameters && Object.keys(investmentStrategyParams).length > 0" class="mb-3 border p-2 rounded bg-light">
@@ -178,20 +239,27 @@
                                             v-if="paramDef.type !== 'boolean' && paramDef.editor !== 'text_list' && paramDef.type !== 'list_float'"
                                             :type="paramDef.type === 'int' || paramDef.type === 'float' ? 'number' : 'text'"
                                             class="form-control form-control-sm"
+                                            :class="{'is-invalid': fieldErrors['investmentStrategyParams.' + paramDef.name]}"
                                             :id="'inv_param_' + paramDef.name"
                                             v-model="investmentStrategyParams[paramDef.name]"
                                             :step="paramDef.type === 'float' ? (paramDef.step || 0.01) : (paramDef.type === 'int' ? 1 : null)"
                                             :min="paramDef.min" :max="paramDef.max" :placeholder="paramDef.default">
                                         <textarea v-else-if="paramDef.editor === 'text_list'"
                                             class="form-control form-control-sm"
+                                            :class="{'is-invalid': fieldErrors['investmentStrategyParams.' + paramDef.name]}"
                                             :id="'inv_param_' + paramDef.name"
                                             v-model="investmentStrategyParams[paramDef.name]"
                                             rows="1" :placeholder="paramDef.default?.join(',') || '例如: 10,20,40,80'">
                                         </textarea>
-                                        <select v-else-if="paramDef.type === 'boolean'" class="form-select form-select-sm" v-model="investmentStrategyParams[paramDef.name]">
+                                        <select v-else-if="paramDef.type === 'boolean'" class="form-select form-select-sm"
+                                                :class="{'is-invalid': fieldErrors['investmentStrategyParams.' + paramDef.name]}"
+                                                v-model="investmentStrategyParams[paramDef.name]">
                                             <option :value="true">是</option>
                                             <option :value="false">否</option>
                                         </select>
+                                        <div v-if="fieldErrors['investmentStrategyParams.' + paramDef.name]" class="invalid-feedback">
+                                            {{ fieldErrors['investmentStrategyParams.' + paramDef.name] }}
+                                        </div>
                                     </div>
                                     <div v-if="!selectedInvestmentStrategy.parameters.filter(p => !p.advanced && !p.readonly).length" class="text-muted small fst-italic">
                                         此投资策略无用户可配置的特定参数。
@@ -215,7 +283,7 @@
                          <p class="ms-3 mb-0 fs-5">正在运行回测，请稍候...</p>
                     </div>
                     <div v-if="error" class="alert alert-danger"> {{ error }} </div>
-                    <div v-if="validationError" class="alert alert-warning white-space-pre-wrap">{{ validationError }}</div> <!-- 用于显示校验错误 -->
+                    <div v-if="validationError" class="alert alert-danger white-space-pre-wrap">{{ validationError }}</div> <!-- 用于显示校验错误 -->
 
 
                     <div v-if="backtestResults && !loading && !error && !validationError" class="card result-card">
@@ -331,7 +399,7 @@
                                                 <th>盈亏额</th> <th>结果</th> <th>交易后余额</th>
                                             </tr>
                                         </thead>
-                                        <tbody>
+                                        <tbody v-if="backtestResults.predictions && Array.isArray(backtestResults.predictions)">
                                             <tr v-for="(pred, index) in backtestResults.predictions" :key="index" :class="pred.result === true ? 'table-success' : (pred.result === false ? 'table-danger' : '')">
                                                 <td>{{ formatDateTime(pred.signal_time) }}</td>
                                                 <td>

@@ -1,11 +1,40 @@
-frontend/static/css/shared-styles.css
+/* frontend/static/css/shared-styles.css */
 
 /* --- Global Resets & Base --- */
+:root {
+    --primary-color: #3A86FF; /* 主品牌色 - 清新蓝 */
+    --primary-color-dark: #2F6DDB; /* 主品牌色深色 (例如按钮悬停) */
+    --primary-color-light: #EBF2FF; /* 主品牌色浅色 (例如背景或高亮) */
+
+    --success-color: #10B981; /* 成功 - 清新绿 */
+    --error-color: #EF4444;   /* 错误 - 警示红 */
+    --warning-color: #F59E0B; /* 警告 - 明亮橙黄 */
+    --info-color: #3B82F6;    /* 信息 - 类似主色 */
+
+    --body-bg-color: #F7F9FC;       /* 页面背景 - 非常浅的蓝灰色 */
+    --card-bg-color: #FFFFFF;       /* 卡片背景 - 纯白 */
+    --text-primary-color: #262A2E;  /* 主要文本 - 深灰 */
+    --text-secondary-color: #6B7280;/* 次要文本/图标 - 中灰色 */
+    --border-color: #E5E7EB;        /* 边框/分割线 - 浅灰色 */
+    --input-bg-color: #F3F4F6;      /* 输入框背景 */
+    --table-header-bg: #F9FAFB;     /* 表格头部背景 */
+
+    --font-family-sans-serif: 'MiSans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --border-radius-base: 8px;     /* 基础圆角 */
+    --border-radius-lg: 12px;    /* 大圆角 (卡片, 模态框) */
+    --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+    --shadow-base: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+    --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+}
+
 body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    font-family: var(--font-family-sans-serif);
     line-height: 1.6;
-    color: #333;
-    background-color: #f4f7f6; /* Slightly off-white background for the body */
+    color: var(--text-primary-color);
+    background-color: var(--body-bg-color);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    font-weight: 400; /* MiSans 默认字重 */
 }
 
 .container, .container-fluid {
@@ -13,220 +42,376 @@ body {
     padding-right: 15px;
 }
 
+h1, h2, h3, h4, h5, h6 {
+    color: var(--text-primary-color);
+    font-weight: 600; /* 标题使用较粗字重 */
+    margin-top: 0;
+}
+h5 { font-size: 1.1rem; }
+h6 { font-size: 1rem; }
+
+
 /* --- Navigation Bar --- */
-/* 
-  统一导航栏样式将主要通过在 HTML 中使用一致的 Bootstrap 类 (e.g., navbar-dark bg-primary) 来实现。
-  此共享 CSS 文件可以包含对导航栏内部元素的任何自定义调整，如果需要的话。
-  目前，我们将依赖 Bootstrap 提供的类。
-*/
+.navbar {
+    background-color: var(--primary-color); /* 使用主品牌色 */
+    box-shadow: var(--shadow-base);
+    padding-top: 0.75rem;
+    padding-bottom: 0.75rem;
+}
+.navbar-brand {
+    font-weight: 600; /* 品牌文字加粗 */
+    font-size: 1.25rem;
+    color: #ffffff !important;
+}
+.navbar-dark .navbar-nav .nav-link {
+    color: rgba(255, 255, 255, 0.85);
+    font-weight: 500;
+    padding: 0.5rem 1rem;
+    border-radius: var(--border-radius-base);
+    transition: background-color 0.2s ease, color 0.2s ease;
+}
+.navbar-dark .navbar-nav .nav-link:hover,
+.navbar-dark .navbar-nav .nav-link:focus {
+    color: #ffffff;
+    background-color: rgba(255, 255, 255, 0.1);
+}
+.navbar-dark .navbar-nav .nav-link.active {
+    color: #ffffff;
+    font-weight: 600;
+    background-color: rgba(255, 255, 255, 0.15);
+}
+.navbar-toggler {
+    border-color: rgba(255, 255, 255, 0.2);
+}
+.navbar-toggler-icon {
+    background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 30 30'%3e%3cpath stroke='rgba%28255, 255, 255, 0.85%29' stroke-linecap='round' stroke-miterlimit='10' stroke-width='2' d='M4 7h22M4 15h22M4 23h22'/%3e%3c/svg%3e");
+}
 
 /* --- Cards --- */
 .card {
-    margin-bottom: 20px;
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.08); /* Softer shadow */
-    border: none; /* Remove default card border for a cleaner look */
-    border-radius: 0.3rem; /* Slightly more rounded corners */
-    overflow: auto; /* Added from live-test-styles, good for content overflow */
+    margin-bottom: 24px;
+    box-shadow: var(--shadow-base);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-lg);
+    background-color: var(--card-bg-color);
+    overflow: hidden;
 }
-
 .card-header {
-    /* Ensure card headers have consistent padding and background if customized beyond Bootstrap */
-    padding: 0.75rem 1.25rem;
+    padding: 1rem 1.25rem;
+    background-color: #FDFEFF; /* 非常非常浅的蓝调白色 */
+    border-bottom: 1px solid var(--border-color);
+    font-weight: 500;
+    color: var(--text-primary-color);
+    display: flex;
+    align-items: center;
 }
-
-.card-header.bg-primary { /* Example for primary header, can add others */
-    color: white;
+.card-header h2, .card-header h5 {
+    font-size: 1.1rem;
+    font-weight: 600;
+    margin-bottom: 0;
+    flex-grow: 1;
+}
+.card-header i.bi {
+    margin-right: 0.6rem;
+    color: var(--text-secondary-color);
+    font-size: 1.2em;
+}
+.card-body {
+    padding: 1.25rem;
 }
 
 
 /* --- Loading Indicators --- */
-.loading-overlay { /* Standardized loading overlay */
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background-color: rgba(0, 0, 0, 0.65); /* Slightly darker */
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    align-items: center;
-    z-index: 10500; /* High z-index */
-    color: white;
+.loading-overlay {
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    background-color: rgba(30, 30, 30, 0.65);
+    display: flex; flex-direction: column; justify-content: center; align-items: center;
+    z-index: 10500; color: white;
 }
+.loading-overlay .spinner-border { width: 3rem; height: 3rem; }
+.loading-overlay span { margin-top: 15px; font-size: 1.1rem; }
 
-.loading-overlay .spinner-border {
-    width: 3rem;
-    height: 3rem;
-}
-
-.loading-overlay span {
-    margin-top: 15px;
-    font-size: 1.1rem;
-}
-
-/* Fallback or simpler loading, if needed for specific inline cases */
 .loading-inline {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    padding: 20px;
-    color: #007bff; /* Primary color */
+    display: flex; justify-content: center; align-items: center;
+    padding: 20px; color: var(--primary-color);
 }
 
 
 /* --- Text Color Utilities --- */
-/* PnL (Profit and Loss) Text Colors */
-.pnl-positive, .text-profit {
-    color: #28a745 !important; /* Bootstrap success green */
-    font-weight: bold;
-}
+.pnl-positive, .text-profit { color: var(--success-color) !important; font-weight: 500; }
+.pnl-negative, .text-loss { color: var(--error-color) !important; font-weight: 500; }
+.pnl-neutral, .text-neutral { color: var(--text-secondary-color) !important; font-weight: 400; }
 
-.pnl-negative, .text-loss {
-    color: #dc3545 !important; /* Bootstrap danger red */
-    font-weight: bold;
-}
-
-.pnl-neutral, .text-neutral {
-    color: #6c757d !important; /* Bootstrap secondary grey */
-}
-
-/* Win Rate Text Colors */
-.win-rate-high {
-    color: #28a745 !important; /* Green for high win rate */
-}
-
-.win-rate-medium {
-    color: #ffc107 !important; /* Yellow for medium win rate */
-}
-
-.win-rate-low {
-    color: #dc3545 !important; /* Red for low win rate */
-}
+.win-rate-high { color: var(--success-color) !important; }
+.win-rate-medium { color: var(--warning-color) !important; }
+.win-rate-low { color: var(--error-color) !important; }
 
 
 /* --- Badges --- */
-/* Enhanced Bootstrap Badge Styling (from autox-manager-styles.css) */
 .badge {
-    padding: 0.4em 0.7em; /* Slightly larger padding for better readability */
-    font-size: 0.8em;     /* Consistent font size */
-    font-weight: 600;
-    line-height: 1;
-    text-align: center;
-    white-space: nowrap;
-    vertical-align: baseline;
-    border-radius: 0.25rem;
+    padding: 0.4em 0.7em; font-size: 0.8em; font-weight: 500;
+    line-height: 1; text-align: center; white-space: nowrap;
+    vertical-align: baseline; border-radius: var(--border-radius-base);
 }
-
-/* Specific badge background colors (can be extended) */
-.badge.bg-info {
-    background-color: #0dcaf0 !important;
-}
-
-.badge.bg-warning {
-    background-color: #ffc107 !important;
-}
-
-.badge.bg-danger {
-    background-color: #dc3545 !important;
-}
-
-.badge.bg-success {
-    background-color: #198754 !important;
-}
-
-.badge.bg-secondary {
-    background-color: #6c757d !important;
-}
+/* Bootstrap 5.3 uses different bg- classes now. These are fallbacks or specific overrides */
+.badge.bg-primary { background-color: var(--primary-color) !important; color: white; }
+.badge.bg-success { background-color: var(--success-color) !important; color: white; }
+.badge.bg-danger { background-color: var(--error-color) !important; color: white; }
+.badge.bg-warning { background-color: var(--warning-color) !important; color: var(--text-primary-color); }
+.badge.bg-info { background-color: var(--info-color) !important; color: white; }
+.badge.bg-secondary { background-color: var(--text-secondary-color) !important; color: white; }
+.badge.bg-light { background-color: #F0F2F5 !important; color: var(--text-primary-color); border: 1px solid var(--border-color); }
 
 
 /* --- Tables --- */
 .table {
-    margin-bottom: 1rem;
+    border-collapse: separate;
+    border-spacing: 0;
+    width: 100%;
+    font-size: 0.9rem;
+    margin-bottom: 0; /* Usually inside card-body, card provides margin */
 }
-
 .table thead th {
-    vertical-align: bottom;
-    border-bottom: 2px solid #dee2e6;
-    background-color: #f8f9fa; /* Light background for table headers */
-    font-weight: 600;
-}
-
-.table-striped tbody tr:nth-of-type(odd) {
-    background-color: rgba(0, 0, 0, 0.03); /* Softer stripe */
-}
-
-.table-hover tbody tr:hover {
-    background-color: rgba(0, 0, 0, 0.06); /* Softer hover */
-}
-
-.table th, .table td {
-    /* For responsive tables where content might be long */
+    background-color: var(--table-header-bg);
+    border-bottom: 2px solid var(--border-color);
+    border-top: none;
+    color: var(--text-primary-color);
+    font-weight: 500;
+    padding: 0.85rem 1rem;
+    text-align: left;
     white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
 }
+.table tbody td {
+    padding: 0.85rem 1rem;
+    border-top: 1px solid var(--border-color);
+    vertical-align: middle;
+    color: var(--text-primary-color); /* Cell text color */
+}
+.table tbody tr:first-child td { border-top: none; }
+
+.table-striped tbody tr:nth-of-type(odd) { background-color: rgba(247, 249, 252, 0.5); } /* Very subtle stripe */
+.table-hover tbody tr:hover { background-color: #EFF4FB; }
+
+.table td, .table th { border-left: 0; border-right: 0; }
 
 .table-responsive {
-    overflow-x: auto;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-lg);
+    /* overflow: hidden; - Sometimes needed with border-radius */
 }
+/* For tables not in a .table-responsive wrapper, ensure they fit card */
+.card-body .table { margin-left: -1.25rem; margin-right: -1.25rem; width: calc(100% + 2.5rem); border-radius: 0;}
+.card-body .table:first-child { border-top-left-radius: 0; border-top-right-radius: 0; }
+.card-body .table:last-child { border-bottom-left-radius: var(--border-radius-lg); border-bottom-right-radius: var(--border-radius-lg); }
+.card-body .table thead th:first-child { padding-left: 1.25rem;}
+.card-body .table thead th:last-child { padding-right: 1.25rem;}
+.card-body .table tbody td:first-child { padding-left: 1.25rem;}
+.card-body .table tbody td:last-child { padding-right: 1.25rem;}
+
 
 
 /* --- Buttons --- */
-/* Favorite Button (from index.html and live-test.html style tags) */
-.favorite-btn {
+.btn {
+    border-radius: var(--border-radius-base);
+    font-weight: 500; /* MiSans medium */
+    padding: 0.5rem 1.1rem;
+    transition: all 0.2s ease-in-out;
+    border: 1px solid transparent;
+}
+.btn-sm {
+    padding: 0.35rem 0.8rem;
+    font-size: 0.875rem;
+}
+.btn-primary {
+    background-color: var(--primary-color); border-color: var(--primary-color); color: white;
+}
+.btn-primary:hover {
+    background-color: var(--primary-color-dark); border-color: var(--primary-color-dark);
+}
+.btn-success { background-color: var(--success-color); border-color: var(--success-color); color: white;}
+.btn-success:hover { background-color: #0E9F71; border-color: #0E9F71;}
+.btn-danger { background-color: var(--error-color); border-color: var(--error-color); color: white;}
+.btn-danger:hover { background-color: #D63A3A; border-color: #D63A3A;}
+.btn-warning { background-color: var(--warning-color); border-color: var(--warning-color); color: var(--text-primary-color);}
+.btn-warning:hover { background-color: #E48E0A; border-color: #E48E0A;}
+.btn-info { background-color: var(--info-color); border-color: var(--info-color); color: white;}
+.btn-info:hover { background-color: #2E73DE; border-color: #2E73DE;}
+
+.btn-outline-primary { border-color: var(--primary-color); color: var(--primary-color); }
+.btn-outline-primary:hover { background-color: var(--primary-color); color: white; }
+.btn-outline-secondary { border-color: #CED4DA; color: var(--text-secondary-color); }
+.btn-outline-secondary:hover { background-color: #E9ECEF; color: var(--text-primary-color); border-color: #CED4DA; }
+.btn-outline-info { border-color: var(--info-color); color: var(--info-color); }
+.btn-outline-info:hover { background-color: var(--info-color); color: white; }
+.btn-outline-success { border-color: var(--success-color); color: var(--success-color); }
+.btn-outline-success:hover { background-color: var(--success-color); color: white; }
+
+
+.btn:focus, .btn.focus {
+    box-shadow: 0 0 0 0.2rem rgba(var(--primary-color-rgb, 58, 134, 255), 0.3);
+}
+/* Need to define --primary-color-rgb if using above focus, or use fixed color */
+/* For simplicity, let's use a fixed color for now */
+.btn-primary:focus { box-shadow: 0 0 0 0.2rem rgba(58, 134, 255, 0.4); }
+
+
+/* --- Forms --- */
+.form-control, .form-select {
+    border-radius: var(--border-radius-base);
+    background-color: var(--input-bg-color);
+    border: 1px solid var(--border-color);
+    padding: 0.55rem 0.85rem; /* Slightly more padding */
+    transition: border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
+    color: var(--text-primary-color);
+}
+.form-control-sm, .form-select-sm {
+    padding: 0.35rem 0.75rem;
+    font-size: 0.875rem;
+}
+.form-control:focus, .form-select:focus {
+    background-color: var(--card-bg-color);
+    border-color: var(--primary-color); /* 默认 focus 蓝色 */
+    box-shadow: 0 0 0 0.2rem rgba(58, 134, 255, 0.2); /* 默认 focus 蓝色阴影 */
+    outline: 0;
+}
+/* --- 新增：处理 is-invalid 状态 --- */
+.form-control.is-invalid,
+.form-select.is-invalid {
+    border-color: var(--error-color) !important; /* 使用你定义的错误颜色，并用 !important 确保覆盖 */
+    /* 如果需要，也可以添加一个背景色提示，但通常边框就够了 */
+    /* background-image: url("data:image/svg+xml,...");  Bootstrap 默认会添加一个错误图标 */
+}
+.form-control.is-invalid:focus,
+.form-select.is-invalid:focus {
+    border-color: var(--error-color) !important; /* 保持错误颜色边框 */
+    box-shadow: 0 0 0 0.2rem rgba(239, 68, 68, 0.25) !important; /* 使用基于 --error-color (#EF4444) 的红色阴影 */
+}
+.form-label {
+    font-weight: 500;
+    margin-bottom: 0.4rem;
+    font-size: 0.9rem;
+}
+.form-text {
+    font-size: 0.8rem;
+    color: var(--text-secondary-color);
+}
+.form-check-input {
+    border-radius: 4px;
+    border: 1px solid #adb5bd;
+}
+.form-check-input:checked {
+    background-color: var(--primary-color);
+    border-color: var(--primary-color);
+}
+.form-check-input:focus {
+    box-shadow: 0 0 0 0.2rem rgba(58, 134, 255, 0.2);
+    border-color: var(--primary-color);
+}
+.form-range::-webkit-slider-thumb {
+    background-color: var(--primary-color);
+}
+.form-range::-moz-range-thumb {
+    background-color: var(--primary-color);
+}
+.form-range::-ms-thumb {
+    background-color: var(--primary-color);
+}
+
+/* --- Modals & Toasts --- */
+.modal-content {
+    border-radius: var(--border-radius-lg);
     border: none;
-    background: none;
-    padding: 0.2rem 0.5rem; /* Standardized padding */
-    cursor: pointer;
-    vertical-align: middle; /* Align with text if inline */
+    box-shadow: var(--shadow-lg);
+    background-color: rgba(255, 255, 255, 0.9); /* Semi-transparent white for subtle glassmorphism */
+    -webkit-backdrop-filter: blur(8px) saturate(150%);
+    backdrop-filter: blur(8px) saturate(150%);
+}
+.modal-header {
+    border-bottom: 1px solid var(--border-color);
+    padding: 1rem 1.5rem;
+}
+.modal-title { font-weight: 600; color: var(--text-primary-color); }
+.modal-body { padding: 1.5rem; color: var(--text-primary-color); }
+.modal-footer {
+    border-top: 1px solid var(--border-color);
+    padding: 1rem 1.5rem;
+    background-color: rgba(248, 249, 250, 0.7); /* Light footer */
 }
 
-.favorite-btn .bi-star-fill {
-    color: orange;
+.toast {
+    border-radius: var(--border-radius-base);
+    box-shadow: var(--shadow-lg);
+    background-color: rgba(250, 251, 252, 0.92); /* Light, slightly transparent */
+    -webkit-backdrop-filter: blur(6px) saturate(150%);
+    backdrop-filter: blur(6px) saturate(150%);
+    border: 1px solid rgba(0,0,0,0.05);
 }
+.toast-header {
+    border-bottom: 1px solid rgba(0,0,0,0.05);
+    background-color: transparent; /* Header matches toast body */
+}
+.toast-header .me-auto.text-success { color: var(--success-color) !important; }
+.toast-header .me-auto.text-danger { color: var(--error-color) !important; }
+.toast-header .me-auto.text-dark { color: var(--text-primary-color) !important; }
 
-.favorite-btn .bi-star {
-    color: #adb5bd; /* Lighter grey for unfilled star */
-}
 
 /* --- Misc UI Elements --- */
-/* Status Indicator (from live-test.html style tag) */
+.favorite-btn {
+    border: none; background: none; padding: 0.2rem 0.5rem;
+    cursor: pointer; vertical-align: middle;
+    color: var(--text-secondary-color);
+}
+.favorite-btn .bi-star-fill { color: var(--warning-color); }
+.favorite-btn:hover { color: var(--primary-color); }
+
 .status-indicator {
-    font-size: 0.8rem;
-    padding: 0.2rem 0.4rem;
-    border-radius: 0.2rem;
+    font-size: 0.8rem; padding: 0.25rem 0.5rem;
+    border-radius: var(--border-radius-base);
+    font-weight: 500;
 }
+.status-indicator.bg-light.text-success { color: var(--success-color) !important; }
 
-/* Helper for small text, e.g., under form fields */
-.x-small {
-  font-size: 0.75rem;
-}
+.x-small { font-size: 0.8rem; color: var(--text-secondary-color); }
+.white-space-pre-wrap { white-space: pre-wrap; }
 
-/* Prediction Item Borders (from index-styles.css) */
-.prediction-item {
-    border-left: 4px solid #ccc; /* Default border */
-    padding-left: 10px;
-    margin-bottom: 10px;
+/* Signal Card Borders (can be enhanced if needed) */
+.signal-card { /* Common styling for signal cards */
+    transition: border-color 0.3s ease, box-shadow 0.3s ease;
+    word-break: break-word; /* Already in HTML */
 }
-.prediction-item.win {
-    border-left-color: #28a745; /* Success green */
-}
-.prediction-item.loss {
-    border-left-color: #dc3545; /* Danger red */
-}
+.signal-card.pending { border-left: 4px solid var(--warning-color); }
+.signal-card.success { border-left: 4px solid var(--success-color); }
+.signal-card.failed { border-left: 4px solid var(--error-color); }
 
-/* Signal Card Borders (from live-test-styles.css, potentially reusable) */
-.signal-card.pending {
-    border-left: 4px solid #ffc107; /* Warning yellow */
+
+/* Alert specific styling if needed to override Bootstrap */
+.alert {
+    border-radius: var(--border-radius-base);
+    padding: 0.9rem 1.1rem;
+    border-width: 1px;
+    border-left-width: 4px;
 }
-.signal-card.success {
-    border-left: 4px solid #28a745; /* Success green */
+.alert-info {
+    border-left-color: var(--info-color) !important;
+    background-color: #EBF5FF;
+    color: #205EBE;
+    border-color: #BEE2FF;
 }
-.signal-card.failed {
-    border-left: 4px solid #dc3545; /* Danger red */
+.alert-danger {
+    border-left-color: var(--error-color) !important;
+    background-color: #FEF2F2;
+    color: #B91C1C;
+    border-color: #FECACA;
 }
-.signal-card { /* Common styling for signal cards if these classes are used */
-    transition: all 0.3s ease;
-    word-break: break-word;
+.alert-success {
+    border-left-color: var(--success-color) !important;
+    background-color: #F0FDF4;
+    color: #047857;
+    border-color: #BBF7D0;
+}
+.alert-warning {
+    border-left-color: var(--warning-color) !important;
+    background-color: #FFFBEB;
+    color: #B45309;
+    border-color: #FEF3C7;
 }

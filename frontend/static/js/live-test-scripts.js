@@ -28,11 +28,34 @@ const app = createApp({
             investment_strategies: {}
         });
 
-        const liveSignals = ref([]); 
+        const liveSignals = ref([]);
+        const signalDisplayMode = ref('current'); // 'current' 或 'historical'
         const loadingInitialData = ref(false);
         const error = ref(null);
         const serverMessage = ref('');
         let serverMessageTimer = null;
+        const validationErrors = ref([]); // 用于存储后端返回的字段级别错误详情
+// --- Validation Error Helper ---
+        // 根据路径查找并返回特定的验证错误信息
+        const getValidationError = (path) => {
+            if (!Array.isArray(validationErrors.value) || validationErrors.value.length === 0 || !Array.isArray(path) || path.length === 0) {
+                return null;
+            }
+            // 查找 loc 数组与给定 path 数组完全匹配的错误
+            const error = validationErrors.value.find(err => {
+                if (!Array.isArray(err.loc) || err.loc.length !== path.length + 1) { // +1 because err.loc includes 'body' or 'query'
+                    return false;
+                }
+                // 比较路径的每个元素，跳过 err.loc 的第一个元素
+                for (let i = 0; i < path.length; i++) {
+                    if (err.loc[i + 1] !== path[i]) {
+                         return false;
+                    }
+                }
+                return true;
+            });
+            return error ? error.msg : null;
+        };
 
         const socket = ref(null);
         const socketStatus = ref('disconnected');
@@ -49,7 +72,7 @@ const app = createApp({
 
         const monitorSettings = ref({
             symbol: 'all',
-            interval: 'all',
+            interval: '1m', // Default to 1 minute interval
             confidence_threshold: 50,
             event_period: '10m',
             enableSound: false,
@@ -71,14 +94,22 @@ const app = createApp({
         const selectedSignalIds = ref([]); 
         const deletingSignals = ref(false); 
 
-        const signalManagementFilter = ref({ 
+        const signalManagementFilter = ref({
             symbol: 'all',
-            interval: 'all',
-            direction: 'all', 
-            verifiedStatus: 'all', 
+            interval: '1m', // Default filter interval to 1 minute
+            direction: 'all',
+            verifiedStatus: 'all',
             minConfidence: 0,
             maxConfidence: 100,
+            startDate: '', // 新增：开始日期时间
+            endDate: '',   // 新增：结束日期时间
         });
+
+
+        // +++ START: PAGINATION STATE +++
+        const currentPage = ref(1);
+        const itemsPerPage = ref(20); // Default items per page
+        // +++ END: PAGINATION STATE +++
 
         // --- Computed Properties ---
         // 原 latestSignals 已被 displayedManagedSignals 取代主要功能
@@ -87,12 +118,35 @@ const app = createApp({
 
         const displayedManagedSignals = computed(() => {
             if (!Array.isArray(liveSignals.value)) return [];
-            
+
             let filtered = [...liveSignals.value];
+
+            // Filter based on display mode
+            if (signalDisplayMode.value === 'current') {
+                // Only show signals for the current active config
+                if (currentConfigId.value) {
+                    filtered = filtered.filter(s => s.config_id === currentConfigId.value);
+                } else {
+                    // If no current config is active, show nothing in 'current' mode
+                    return [];
+                }
+            } else if (signalDisplayMode.value === 'historical') {
+                // Show all signals that have a config_id (i.e., not test broadcasts without one)
+                // and are verified or pending verification from a past/current config.
+                // We exclude 'test_signal_broadcast_all' unless it has a proper config_id assigned.
+                filtered = filtered.filter(s => s.config_id && s.config_id !== 'test_signal_broadcast_all');
+            } else {
+                 // Default or unknown mode, show nothing
+                 return [];
+            }
 
             // 应用筛选条件
             if (signalManagementFilter.value.symbol !== 'all') {
-                filtered = filtered.filter(s => s.symbol === signalManagementFilter.value.symbol);
+                if (signalManagementFilter.value.symbol === 'favorites') {
+                    filtered = filtered.filter(s => favoriteSymbols.value.includes(s.symbol));
+                } else {
+                    filtered = filtered.filter(s => s.symbol === signalManagementFilter.value.symbol);
+                }
             }
             if (signalManagementFilter.value.interval !== 'all') {
                 filtered = filtered.filter(s => s.interval === signalManagementFilter.value.interval);
@@ -111,8 +165,25 @@ const app = createApp({
                     return !isNaN(conf) && conf >= signalManagementFilter.value.minConfidence && conf <= signalManagementFilter.value.maxConfidence;
                 });
             }
-            // TODO: 如果添加日期筛选器，在这里实现
-            // if (signalManagementFilter.value.startDate && signalManagementFilter.value.endDate) { ... }
+            // 应用日期时间筛选
+            const startDate = signalManagementFilter.value.startDate ? new Date(signalManagementFilter.value.startDate) : null;
+            const endDate = signalManagementFilter.value.endDate ? new Date(signalManagementFilter.value.endDate) : null;
+
+            if (startDate || endDate) {
+                filtered = filtered.filter(s => {
+                    const signalTime = s.signal_time ? new Date(s.signal_time) : null;
+                    if (!signalTime || isNaN(signalTime.getTime())) return false; // 忽略无效时间信号
+
+                    let pass = true;
+                    if (startDate && signalTime < startDate) {
+                        pass = false;
+                    }
+                    if (endDate && signalTime > endDate) {
+                        pass = false;
+                    }
+                    return pass;
+                });
+            }
 
             // 按信号时间倒序排列
             return filtered.sort((a, b) => {
@@ -123,6 +194,22 @@ const app = createApp({
             });
             // .slice(0, 50); // 可选：如果信号过多，可以限制初始显示数量或实现分页
         });
+
+        // +++ START: PAGINATION COMPUTED +++
+        const totalPages = computed(() => {
+            return Math.ceil(displayedManagedSignals.value.length / itemsPerPage.value);
+        });
+
+        const paginatedSignals = computed(() => {
+            const start = (currentPage.value - 1) * itemsPerPage.value;
+            const end = start + itemsPerPage.value;
+            return displayedManagedSignals.value.slice(start, end);
+        });
+        // +++ END: PAGINATION COMPUTED +++
+
+        watch(displayedManagedSignals, (newValue) => {
+            console.log("LiveTest: displayedManagedSignals updated:", newValue);
+        }, { immediate: true }); // Watch immediately and on changes
 
         const areAllDisplayedManagedSignalsSelected = computed({
             get: () => {
@@ -189,11 +276,31 @@ const app = createApp({
             try {
                 const response = await axios.get('/api/symbols');
                 symbols.value = response.data;
-                if (monitorSettings.value.symbol !== 'all' && symbols.value.length > 0) {
-                     if (!symbols.value.includes(monitorSettings.value.symbol)) {
-                        monitorSettings.value.symbol = symbols.value.includes('BTCUSDT') ? 'BTCUSDT' : symbols.value[0];
-                     }
+
+                // After fetching symbols, set default monitor and filter symbols based on favorites
+                if (symbols.value.length > 0) {
+                    const firstFavorite = symbols.value.find(s => isFavorite(s));
+                    if (firstFavorite) {
+                        // Set monitor symbol to the first favorite
+                        monitorSettings.value.symbol = firstFavorite;
+                        // Set filter symbol to 'favorites'
+                        signalManagementFilter.value.symbol = 'favorites';
+                    } else {
+                        // If no favorites, default monitor symbol to 'all' (or the first symbol if 'all' is not an option)
+                        // 'all' is already the default, but explicitly setting it here for clarity
+                        monitorSettings.value.symbol = 'all';
+                        // If no favorites, default filter symbol to 'all'
+                        signalManagementFilter.value.symbol = 'all';
+                    }
+                } else {
+                     // If no symbols are fetched, default both to 'all'
+                     monitorSettings.value.symbol = 'all';
+                     signalManagementFilter.value.symbol = 'all';
                 }
+
+                console.log("LiveTest: fetchSymbols - monitorSettings.value.symbol after setting:", monitorSettings.value.symbol);
+                console.log("LiveTest: fetchSymbols - signalManagementFilter.value.symbol after setting:", signalManagementFilter.value.symbol);
+
             } catch (err) { console.error('获取交易对失败:', err); showServerMessage('获取交易对失败', true); }
         };
         const fetchPredictionStrategies = async () => {
@@ -214,7 +321,28 @@ const app = createApp({
             // ... (这部分逻辑保持不变, 用于填充左侧配置表单) ...
             if (!configDetails) return;
 
-            monitorSettings.value.symbol = configDetails.symbol || 'all';
+            // Only update monitorSettings.value.symbol from configDetails if it's not 'all'
+            // This allows the default set by fetchSymbols (first favorite) to persist if the saved config was 'all'
+            if (configDetails.symbol && configDetails.symbol !== 'all') {
+                 monitorSettings.value.symbol = configDetails.symbol;
+            } else if (!configDetails.symbol) {
+                 // If configDetails.symbol is null/undefined/empty, explicitly set to 'all' if it wasn't already set by favorites
+                 // This handles cases where a config might not have a symbol field
+                 if (monitorSettings.value.symbol === 'all') {
+                     monitorSettings.value.symbol = 'all';
+                 }
+            }
+            // If configDetails.symbol is 'all', we do nothing here, preserving the value set by fetchSymbols
+
+            // Also update signalManagementFilter.value.symbol based on the loaded config symbol
+            if (configDetails.symbol) {
+                 signalManagementFilter.value.symbol = configDetails.symbol;
+            } else {
+                 // If configDetails.symbol is null/undefined/empty, default filter to 'all'
+                 signalManagementFilter.value.symbol = 'all';
+            }
+
+
             monitorSettings.value.interval = configDetails.interval || 'all';
             monitorSettings.value.confidence_threshold = configDetails.confidence_threshold ?? 50;
             monitorSettings.value.event_period = configDetails.event_period || '10m';
@@ -422,7 +550,12 @@ const app = createApp({
                     case "config_specific_balance_update":
                         if (message.data && message.data.config_id === currentConfigId.value) {
                             if (activeTestConfigDetails.value) {
-                                activeTestConfigDetails.value.current_balance = message.data.new_balance;
+                                if (message.data.new_balance !== undefined) {
+                                    activeTestConfigDetails.value.current_balance = message.data.new_balance;
+                                }
+                                if (message.data.current_pnl_amount !== undefined) {
+                                    activeTestConfigDetails.value.current_pnl_amount = message.data.current_pnl_amount;
+                                }
                             }
                             // 可选: 短暂显示余额更新消息
                             // showServerMessage(`当前测试余额更新为: ${message.data.new_balance.toFixed(2)} USDT (本次盈亏: ${message.data.last_pnl_amount.toFixed(2)})`, false, 3000);
@@ -437,8 +570,22 @@ const app = createApp({
                             showServerMessage(message.data.message || `${message.data.deleted_ids.length} 个信号已被其他操作删除。`, false, 4000);
                         }
                         break;
-                    case "error": 
-                        showServerMessage(message.data.message || "收到来自服务器的 WebSocket 错误", true, 6000);
+                    case "error":
+                        // 处理后端返回的结构化错误信息
+                        if (message.data && message.data.details && Array.isArray(message.data.details)) {
+                            validationErrors.value = message.data.details; // 存储详细错误列表
+                            // 清除通用的错误和消息，因为我们将使用字段级别的提示
+                            serverMessage.value = '';
+                            error.value = null;
+                            console.error("LiveTest: Received validation errors:", validationErrors.value);
+                            // 可以选择在这里显示一个通用的“请检查表单中的错误”消息
+                            // showServerMessage("请检查表单中的错误。", true, 5000);
+                        } else {
+                            // 原始的非结构化错误处理
+                            validationErrors.value = []; // 清空字段级别错误
+                            showServerMessage(message.data?.message || "收到来自服务器的 WebSocket 错误", true, 6000);
+                            console.error("LiveTest: Received generic error:", message.data);
+                        }
                         break;
                     default: console.warn("LiveTest: Received unknown message type:", message.type);
                 }
@@ -640,6 +787,10 @@ const app = createApp({
         const sanitizeSignal = (signal) => {
             // ... (这部分逻辑保持不变)
             const sanitized = { ...signal };
+            // Map origin_config_id to config_id for filtering
+            if (sanitized.origin_config_id && !sanitized.config_id) {
+                sanitized.config_id = sanitized.origin_config_id;
+            }
             const numericFields = [
                 'confidence', 'signal_price', 'actual_end_price',
                 'price_change_pct', 'pnl_pct', 'investment_amount',
@@ -668,20 +819,56 @@ const app = createApp({
                 liveSignals.value = []; return;
             }
             // liveSignals 存储原始/完整列表，displayedManagedSignals 会负责过滤和排序
-            liveSignals.value = signalsArray.map(s => sanitizeSignal(s));
+            const sanitizedSignals = signalsArray.map(s => {
+                const sanitized = sanitizeSignal(s);
+                // Ensure potential profit/loss are calculated/present for initial load too
+                 if (sanitized.investment_amount !== null && sanitized.investment_amount !== undefined &&
+                    sanitized.profit_rate_pct !== null && sanitized.profit_rate_pct !== undefined) {
+                    sanitized.potential_profit = parseFloat((sanitized.investment_amount * (sanitized.profit_rate_pct / 100)).toFixed(2));
+                } else {
+                     sanitized.potential_profit = null;
+                }
+
+                if (sanitized.investment_amount !== null && sanitized.investment_amount !== undefined &&
+                    sanitized.loss_rate_pct !== null && sanitized.loss_rate_pct !== undefined) {
+                    sanitized.potential_loss = parseFloat((sanitized.investment_amount * (sanitized.loss_rate_pct / 100)).toFixed(2));
+                } else {
+                    sanitized.potential_loss = null;
+                }
+                return sanitized;
+            });
+
+            liveSignals.value = sanitizedSignals; // Assign the new array
+            liveSignals.value = [...liveSignals.value]; // Force reactivity update for the array
+            console.log("LiveTest: handleInitialSignals - liveSignals after update:", liveSignals.value);
+
             updateAllTimeRemaining();
         };
         
         const handleNewSignal = (signalData) => {
-            // ... (这部分逻辑保持不变)
+            console.log("LiveTest: Raw signal data received:", signalData); // Add this line
             const newSignal = sanitizeSignal(signalData);
-            
-            if (newSignal.investment_amount && newSignal.profit_rate_pct && newSignal.potential_profit === null) {
+            console.log("LiveTest: Sanitized signal data:", newSignal); // Add this line
+
+            console.log("LiveTest: Received new signal:", newSignal); // Add this line
+            console.log("LiveTest: Current config ID:", currentConfigId.value); // Add this line
+
+            // Explicitly calculate and set potential profit/loss if components are available
+            if (newSignal.investment_amount !== null && newSignal.investment_amount !== undefined &&
+                newSignal.profit_rate_pct !== null && newSignal.profit_rate_pct !== undefined) {
                 newSignal.potential_profit = parseFloat((newSignal.investment_amount * (newSignal.profit_rate_pct / 100)).toFixed(2));
+            } else {
+                 newSignal.potential_profit = null; // Ensure it's null if not calculable
             }
-            if (newSignal.investment_amount && newSignal.loss_rate_pct && newSignal.potential_loss === null) {
+
+            if (newSignal.investment_amount !== null && newSignal.investment_amount !== undefined &&
+                newSignal.loss_rate_pct !== null && newSignal.loss_rate_pct !== undefined) {
                 newSignal.potential_loss = parseFloat((newSignal.investment_amount * (newSignal.loss_rate_pct / 100)).toFixed(2));
+            } else {
+                newSignal.potential_loss = null; // Ensure it's null if not calculable
             }
+
+            console.log("LiveTest: Signal object before adding/updating liveSignals:", newSignal); // Add this line
 
             const existingIdx = liveSignals.value.findIndex(s => s.id === newSignal.id);
             if (existingIdx === -1) {
@@ -690,8 +877,15 @@ const app = createApp({
                     liveSignals.value.splice(1000); // 例如，保留最新的1000条，移除旧的1000条
                 }
             } else {
+                // Update existing signal, ensuring reactivity
+                // Using Vue.set or creating a new object might be more robust in some Vue versions,
+                // but spread syntax should work in Vue 3. Let's stick to spread for now.
                 liveSignals.value[existingIdx] = { ...liveSignals.value[existingIdx], ...newSignal };
             }
+
+            // Add this line to force reactivity update for the array
+            liveSignals.value = [...liveSignals.value];
+
             updateAllTimeRemaining();
         };
 
@@ -828,123 +1022,60 @@ const app = createApp({
         const isTimeRemainingRelevant = (signal) => !signal.verified && signal.expected_end_time;
 
 
-        // --- Historical Analysis (remains mostly client-side based on loaded liveSignals) ---
-        const analysisFilter = ref({ 
-            startDate: '', endDate: '', minConfidence: 0, maxConfidence: 100,
-            direction: 'all', symbol: 'all', interval: 'all'
-        });
-        const analysisResults = ref([]);
-        const hasAnalyzed = ref(false);
-        const filteredStats = ref({
-            total_verified: 0, win_rate: 0, long_signals:0, long_win_rate:0, short_signals:0, short_win_rate:0,
-            profit_count: 0, loss_count: 0, total_profit: 0, total_loss: 0, avg_profit:0, avg_loss:0, profit_loss_ratio:0
-        });
-        
-        const setDefaultDateRange = () => {
-            // ... (这部分逻辑保持不变)
-            const now = new Date(); 
-            const sevenDaysAgo = new Date();
-            sevenDaysAgo.setDate(now.getDate() - 7);
-            analysisFilter.value.endDate = utilFormatDateForInput(now);
-            analysisFilter.value.startDate = utilFormatDateForInput(sevenDaysAgo);
-        };
-        const analyzeHistoricalData = () => {
-            // ... (这部分逻辑保持不变)
-            hasAnalyzed.value = true;
-            try {
-                const startDate = analysisFilter.value.startDate ? new Date(analysisFilter.value.startDate) : null;
-                const endDate = analysisFilter.value.endDate ? new Date(analysisFilter.value.endDate) : null;
-                
-                const filtered = liveSignals.value.filter(signal => {
-                    if (!signal.verified) return false; 
-                    if (startDate && endDate) {
-                        const signalDate = new Date(signal.signal_time);
-                        if (isNaN(signalDate.getTime()) || signalDate < startDate || signalDate > endDate) return false;
-                    }
-                    const confidence = parseFloat(signal.confidence);
-                    if (isNaN(confidence) || confidence < analysisFilter.value.minConfidence || confidence > analysisFilter.value.maxConfidence) return false;
-
-                    if (analysisFilter.value.direction !== 'all') {
-                        if (analysisFilter.value.direction === 'long' && signal.signal !== 1) return false;
-                        if (analysisFilter.value.direction === 'short' && signal.signal !== -1) return false;
-                    }
-                    if (analysisFilter.value.symbol !== 'all' && signal.symbol !== analysisFilter.value.symbol) return false;
-                    if (analysisFilter.value.interval !== 'all' && signal.interval !== analysisFilter.value.interval) return false;
-                    return true;
-                });
-                analysisResults.value = filtered.sort((a,b) => new Date(b.signal_time) - new Date(a.signal_time));
-                calculateFilteredStats(filtered);
-            } catch (err) { console.error('分析历史数据失败:', err); showServerMessage("分析数据时出错: " + err.message, true); } 
-        };
-        const calculateFilteredStats = (signals) => {
-            // ... (这部分逻辑保持不变)
-            const verified = signals.filter(s => s.verified);
-            const correctSignals = verified.filter(s => s.result === true);
-            const longSignals = verified.filter(s => s.signal === 1);
-            const longCorrect = longSignals.filter(s => s.result === true);
-            const shortSignals = verified.filter(s => s.signal === -1);
-            const shortCorrect = shortSignals.filter(s => s.result === true);
-            
-            let totalProfitVal = 0, totalLossVal = 0, profitCountVal = 0, lossCountVal = 0;
-            verified.forEach(signal => {
-                const pnl = parseFloat(signal.actual_profit_loss_amount);
-                if (isNaN(pnl)) return;
-                if (signal.result === true) {
-                    profitCountVal++; 
-                    totalProfitVal += Math.abs(pnl);
-                } else if (signal.result === false) {
-                    lossCountVal++; 
-                    totalLossVal += Math.abs(pnl);
-                }
-            });
-            const avgProfit = profitCountVal > 0 ? totalProfitVal / profitCountVal : 0;
-            const avgLoss = lossCountVal > 0 ? totalLossVal / lossCountVal : 0; 
-            
-            filteredStats.value = {
-                total_verified: verified.length,
-                win_rate: verified.length > 0 ? parseFloat((correctSignals.length / verified.length * 100).toFixed(2)) : 0,
-                long_signals: longSignals.length,
-                long_win_rate: longSignals.length > 0 ? parseFloat((longCorrect.length / longSignals.length * 100).toFixed(2)) : 0,
-                short_signals: shortSignals.length,
-                short_win_rate: shortSignals.length > 0 ? parseFloat((shortCorrect.length / shortSignals.length * 100).toFixed(2)) : 0,
-                profit_count: profitCountVal, 
-                loss_count: lossCountVal,
-                total_profit: parseFloat(totalProfitVal.toFixed(2)), 
-                total_loss: parseFloat(totalLossVal.toFixed(2)),
-                avg_profit: parseFloat(avgProfit.toFixed(2)),
-                avg_loss: parseFloat(avgLoss.toFixed(2)),
-                profit_loss_ratio: avgLoss > 0 ? parseFloat((avgProfit / avgLoss).toFixed(2)) : (avgProfit > 0 ? Infinity : 0)
-            };
-        };
 
         // --- Lifecycle Hooks ---
         onMounted(async () => {
+            console.log("LiveTest: onMounted - start");
             loadingInitialData.value = true;
             loadFavorites();
-            setDefaultDateRange(); // For analysis filter
-            
+            console.log("LiveTest: onMounted - favoriteSymbols after load:", favoriteSymbols.value);
+
+            // The logic for setting default symbols based on favorites is now inside fetchSymbols()
+            // If favorites exist, default the signal filter to favorites here as well,
+            // in case fetchSymbols was skipped or failed, though fetchSymbols is awaited.
+            // This is a fallback/redundancy. The primary logic is in fetchSymbols.
+            if (favoriteSymbols.value.length > 0) {
+                 signalManagementFilter.value.symbol = 'favorites';
+            }
+            console.log("LiveTest: onMounted - signalManagementFilter.value.symbol after loadFavorites:", signalManagementFilter.value.symbol);
+
             const storedConfigId = localStorage.getItem('liveTestConfigId');
-            if (storedConfigId) currentConfigId.value = storedConfigId;
-
-            await fetchAllSavedParameters();
-            await Promise.all([
-                fetchSymbols(),
-                fetchPredictionStrategies(),
-                fetchInvestmentStrategies()
-            ]);
-
-            if (predictionStrategies.value.length > 0 && !selectedPredictionStrategy.value) {
-                const defaultPred = predictionStrategies.value.find(s => s.id === 'simple_rsi') || predictionStrategies.value[0];
-                selectedPredictionStrategy.value = defaultPred;
+            console.log("LiveTest: onMounted - storedConfigId:", storedConfigId);
+            if (storedConfigId) {
+                currentConfigId.value = storedConfigId;
+                console.log("LiveTest: onMounted - currentConfigId set from localStorage:", currentConfigId.value);
+            } else {
+                 console.log("LiveTest: onMounted - no storedConfigId found.");
             }
-            if (investmentStrategies.value.length > 0 && !selectedInvestmentStrategy.value) {
-                const defaultInv = investmentStrategies.value.find(s => s.id === 'fixed') || investmentStrategies.value[0];
-                selectedInvestmentStrategy.value = defaultInv;
+
+            try {
+                await fetchAllSavedParameters();
+                await Promise.all([
+                    fetchSymbols(),
+                    fetchPredictionStrategies(),
+                    fetchInvestmentStrategies()
+                ]);
+
+                if (predictionStrategies.value.length > 0 && !selectedPredictionStrategy.value) {
+                    const defaultPred = predictionStrategies.value.find(s => s.id === 'simple_rsi') || predictionStrategies.value[0];
+                    selectedPredictionStrategy.value = defaultPred;
+                }
+                if (investmentStrategies.value.length > 0 && !selectedInvestmentStrategy.value) {
+                    const defaultInv = investmentStrategies.value.find(s => s.id === 'fixed') || investmentStrategies.value[0];
+                    selectedInvestmentStrategy.value = defaultInv;
+                }
+            } catch (err) {
+                console.error("LiveTest: Error during initial data fetch:", err);
+                showServerMessage("加载初始数据失败。请检查后端服务是否运行。", true, 8000);
+            } finally {
+                loadingInitialData.value = false;
+                console.log("LiveTest: onMounted - loadingInitialData set to false.");
             }
             
-            loadingInitialData.value = false;
-            // connectWebSocket(); // 用户可以手动点击连接按钮
+            console.log("LiveTest: onMounted - connecting WebSocket.");
+            connectWebSocket(); // 用户可以手动点击连接按钮
             countdownInterval = setInterval(updateAllTimeRemaining, 1000);
+            console.log("LiveTest: onMounted - end.");
         });
 
         onUnmounted(() => {
@@ -963,16 +1094,24 @@ const app = createApp({
             applyingConfig, stoppingTest,
 
             selectedSignalIds,
+            validationErrors, // Add validationErrors to the returned object
             deletingSignals,
             signalManagementFilter,
 
             // +++ START: ADDED TO RETURN +++
-            activeTestConfigDetails, 
+            activeTestConfigDetails,
+            signalDisplayMode, // Add the new state variable
             // +++ END: ADDED TO RETURN +++
 
             // Computed
-            displayedManagedSignals, 
-            areAllDisplayedManagedSignalsSelected, 
+            displayedManagedSignals,
+            // +++ START: PAGINATION RETURN +++
+            currentPage,
+            itemsPerPage,
+            totalPages,
+            paginatedSignals,
+            // +++ END: PAGINATION RETURN +++
+            areAllDisplayedManagedSignalsSelected,
 
             // Methods
             toggleFavorite, isFavorite,
@@ -980,11 +1119,12 @@ const app = createApp({
             sendRuntimeConfig, stopCurrentTest, saveStrategyParameters,
             getStrategyName,
             getTimeRemaining, isTimeRemainingRelevant,
-            
+
             toggleSelectAllDisplayedManagedSignals,
             deleteSelectedSignals,
-            
-            analysisFilter, analysisResults, hasAnalyzed, filteredStats, analyzeHistoricalData,
+
+            // Validation Error Method
+            getValidationError,
         };
     }
 });

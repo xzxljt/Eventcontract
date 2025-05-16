@@ -23,6 +23,7 @@ const app = createApp({
         const investmentStrategies = ref([]);
         const selectedInvestmentStrategy = ref(null);
         const investmentStrategyParams = ref({});
+        const fieldErrors = ref({}); // <--- 新增：用于存储字段级别的错误 { fieldName: errorMessage }
 
         const allSavedParams = ref({
             prediction_strategies: {},
@@ -44,8 +45,8 @@ const app = createApp({
 
         const backtestParams = ref({
             symbol: '',
-            interval: '15m',
-            start_time: '', 
+            interval: '1m', // Default to 1 minute interval
+            start_time: '',
             end_time: '',
             // startTime 和 endTime (camelCase) 仅用于 flatpickr 初始化时的 defaultDate，
             // 实际提交给后端的 payload 使用 snake_case (start_time, end_time)
@@ -146,15 +147,13 @@ const app = createApp({
                 symbols.value = response.data;
                 sortSymbols(); // 获取后排序，将收藏的排前面
                 if (symbols.value.length > 0) {
-                    // 优先选择已收藏的或BTCUSDT，否则选第一个
-                    const favBtc = symbols.value.find(s => s === 'BTCUSDT' && isFavorite(s));
-                    const btc = symbols.value.find(s => s === 'BTCUSDT');
-                    const firstFav = favoriteSymbols.value.length > 0 ? symbols.value.find(s => isFavorite(s)) : null;
-                    
-                    if (favBtc) backtestParams.value.symbol = favBtc;
-                    else if (btc) backtestParams.value.symbol = btc;
-                    else if (firstFav) backtestParams.value.symbol = firstFav;
-                    else backtestParams.value.symbol = symbols.value[0];
+                    // Default to the first favorite symbol if any exist, otherwise default to the first symbol
+                    const firstFavorite = symbols.value.find(s => isFavorite(s));
+                    if (firstFavorite) {
+                        backtestParams.value.symbol = firstFavorite;
+                    } else {
+                        backtestParams.value.symbol = symbols.value[0];
+                    }
                 }
             } catch (err) { console.error('获取交易对失败:', err); error.value = '获取交易对失败'; }
         };
@@ -273,7 +272,7 @@ const app = createApp({
         };
 
         const runBacktest = async () => {
-            loading.value = true; error.value = null; validationError.value = null; backtestResults.value = null;
+            loading.value = true; error.value = null; validationError.value = null; fieldErrors.value = {}; backtestResults.value = null; // 清空 fieldErrors
             calendarView.value.dailyPnlData = {}; calendarView.value.weeks = [];
 
             try {
@@ -349,23 +348,68 @@ const app = createApp({
                     }
                     generateCalendar();
                 }
-            } catch (err) {
-                console.error('Backtest failed:', err);
-                if (err.response && err.response.data && Array.isArray(err.response.data.detail)) {
-                     const errorDetails = err.response.data.detail.map(d => {
-                        let fieldPath = d.loc.join('.');
-                        if (fieldPath.startsWith("body.")) fieldPath = fieldPath.substring(5);
-                        return `${fieldPath}: ${d.msg}`;
-                     }).join("\n");
-                     validationError.value = `回测参数校验失败:\n${errorDetails}`; // 使用新的 ref
-                     error.value = null; // 清除通用错误
-                } else {
-                    error.value = err.response?.data?.detail || '回测失败，请检查参数和API连接。';
-                    validationError.value = null; // 清除校验错误
+                } catch (err) {
+                    console.error('Backtest failed:', err);
+                    if (err.response && err.response.data && Array.isArray(err.response.data.detail)) {
+                        // --- 修改开始 ---
+                        const newFieldErrors = {};
+                        let detailedErrorMessages = [];
+
+                        err.response.data.detail.forEach(d => {
+                            const loc = d.loc; // Pydantic error location array, e.g., ['body', 'symbol'] or ['body', 'prediction_strategy_params', 'rsi_period']
+                            let fieldKey = '';
+                            let userFriendlyPath = loc.slice(1).join(' -> '); // e.g., symbol or prediction_strategy_params -> rsi_period
+
+                            // 1. 顶层参数 (symbol, interval, startTime, endTime, predictionStrategy, eventPeriod, confidenceThreshold)
+                            if (loc.length === 2 && typeof loc[1] === 'string') { // e.g. ['body', 'symbol']
+                                fieldKey = loc[1]; // 'symbol', 'interval', 'start_time', 'end_time', 'prediction_strategy_id', 'event_period', 'confidence_threshold'
+                                // 映射到HTML中使用的ID (如果不同)
+                                if (fieldKey === 'start_time') fieldKey = 'startTime';
+                                else if (fieldKey === 'end_time') fieldKey = 'endTime';
+                                else if (fieldKey === 'prediction_strategy_id') fieldKey = 'predictionStrategy'; // select ID
+                                else if (fieldKey === 'event_period') fieldKey = 'eventPeriod'; // select ID
+                                else if (fieldKey === 'confidence_threshold') fieldKey = 'confidenceThreshold'; // range input ID
+                            }
+                            // 2. 预测策略参数 (e.g. ['body', 'prediction_strategy_params', 'rsi_period'])
+                            else if (loc.length === 3 && loc[1] === 'prediction_strategy_params' && typeof loc[2] === 'string') {
+                                fieldKey = `pred_param_${loc[2]}`; // e.g. pred_param_rsi_period
+                            }
+                            // 3. 投资设置 (e.g. ['body', 'investment', 'initial_balance'])
+                            else if (loc.length === 3 && loc[1] === 'investment' && typeof loc[2] === 'string') {
+                                // Map investment sub-fields to their input IDs
+                                const investmentFieldMap = {
+                                    'initial_balance': 'initialBalance',
+                                    'profit_rate_pct': 'profitRate',
+                                    'loss_rate_pct': 'lossRate',
+                                    'min_investment_amount': 'minInvestment',
+                                    'max_investment_amount': 'maxInvestment',
+                                    'investment_strategy_id': 'investmentStrategySelect' // select ID
+                                };
+                                fieldKey = investmentFieldMap[loc[2]] || loc[2]; // Fallback to loc[2] if not in map
+                            }
+                            // 4. 投资策略特定参数 (e.g. ['body', 'investment', 'investment_strategy_specific_params', 'amount'])
+                            else if (loc.length === 4 && loc[1] === 'investment' && loc[2] === 'investment_strategy_specific_params' && typeof loc[3] === 'string') {
+                                fieldKey = `inv_param_${loc[3]}`; // e.g. inv_param_amount
+                            }
+
+                            if (fieldKey) {
+                                newFieldErrors[fieldKey] = d.msg;
+                            }
+                            detailedErrorMessages.push(`字段 "${userFriendlyPath}": ${d.msg}`);
+                        });
+
+                        fieldErrors.value = newFieldErrors;
+                        validationError.value = `回测参数校验失败:\n${detailedErrorMessages.join("\n")}`;
+                        error.value = null; // 清除通用错误
+                        // --- 修改结束 ---
+                    } else {
+                        error.value = err.response?.data?.detail || '回测失败，请检查参数和API连接。';
+                        validationError.value = null; // 清除校验错误
+                        fieldErrors.value = {}; // 清除字段错误
+                    }
+                } finally {
+                    loading.value = false;
                 }
-            } finally {
-                loading.value = false;
-            }
         };
         
         const saveStrategyParameters = async () => {
@@ -573,6 +617,7 @@ const app = createApp({
             backtestParams, 
             backtestResults, loading, error, validationError, // 暴露 validationError
             liveStats, socketStatus, // WebSocket 相关
+            backtestResults, loading, error, validationError, fieldErrors, // <--- 添加 fieldError
 
             // Methods
             toggleFavorite, isFavorite, // Favorite methods

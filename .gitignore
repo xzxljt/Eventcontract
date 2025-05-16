@@ -31,3 +31,4 @@ data_cache/
 test.py
 
 .kline_cache/
+live_signals.json

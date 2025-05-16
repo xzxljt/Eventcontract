@@ -6,7 +6,7 @@ from fastapi import FastAPI, HTTPException, Query, Depends, WebSocket, WebSocket
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta, timezone
 import uvicorn
@@ -507,10 +507,11 @@ async def background_signal_verifier():
                                      current_config_bal = sim_bal_from_settings if sim_bal_from_settings is not None else 1000.0 # Fallback
                                      print(f"警告: Config ID {config_id_of_signal} 在验证时缺少 current_balance, 已从 simulatedBalance 或默认值回退。")
                                 
-                                running_live_test_configs[config_id_of_signal]['current_balance'] = current_config_bal + actual_pnl_amt
+                                # 将原始投资额和实际盈亏一起加回余额
+                                running_live_test_configs[config_id_of_signal]['current_balance'] = current_config_bal + (signal_copy_to_verify.get('investment_amount', 0) + actual_pnl_amt)
                                 new_config_balance_val = running_live_test_configs[config_id_of_signal]['current_balance']
                         
-                        if new_config_balance_val is not None: 
+                        if new_config_balance_val is not None:
                             updated_config_balance_payload = {
                                 "type": "config_specific_balance_update",
                                 "data": {
@@ -754,11 +755,43 @@ async def handle_kline_data(kline_data: dict):
                     'investment_amount': round(inv_amount, 2),
                     'profit_rate_pct': profit_pct, 'loss_rate_pct': loss_pct,
                     'verified': False, 'origin_config_id': live_test_config_data['_config_id'],
-                    'autox_triggered_info': [] 
+                    'autox_triggered_info': []
                 }
-                
+
+                # --- MODIFICATION: Deduct investment amount immediately ---
+                config_id_for_balance_update = live_test_config_data.get('_config_id')
+                investment_amount_deducted = new_live_signal.get('investment_amount', 0)
+
+                if config_id_for_balance_update and investment_amount_deducted > 0:
+                    new_config_balance_after_deduction = None
+                    with running_live_test_configs_lock:
+                        if config_id_for_balance_update in running_live_test_configs:
+                            current_config_bal = running_live_test_configs[config_id_for_balance_update].get('current_balance')
+                            if current_config_bal is not None:
+                                running_live_test_configs[config_id_for_balance_update]['current_balance'] = current_config_bal - investment_amount_deducted
+                                new_config_balance_after_deduction = running_live_test_configs[config_id_for_balance_update]['current_balance']
+                                print(f"Config ID {config_id_for_balance_update}: 信号触发，扣除投资额 {investment_amount_deducted:.2f}。新余额: {new_config_balance_after_deduction:.2f}")
+                            else:
+                                print(f"警告: Config ID {config_id_for_balance_update} 在信号触发时缺少 current_balance。无法扣除投资额。")
+
+                    if new_config_balance_after_deduction is not None:
+                        # Broadcast the balance update to the specific client
+                        updated_config_balance_payload = {
+                            "type": "config_specific_balance_update",
+                            "data": {
+                                "config_id": config_id_for_balance_update,
+                                "new_balance": new_config_balance_after_deduction,
+                                "last_pnl_amount": -investment_amount_deducted # 信号触发时，盈亏是负的投资额
+                            }
+                        }
+                        await manager.broadcast_json(
+                            updated_config_balance_payload,
+                            filter_func=lambda c: websocket_to_config_id_map.get(c) == config_id_for_balance_update
+                        )
+                # --- END MODIFICATION ---
+
                 should_trigger_autox = live_test_config_data.get('_should_autox_trigger', False)
-                AUTOX_GLOBAL_ENABLED = True 
+                AUTOX_GLOBAL_ENABLED = True
 
                 if should_trigger_autox and AUTOX_GLOBAL_ENABLED:
                     clients_to_send_command_to = [] 
@@ -951,9 +984,22 @@ async def websocket_endpoint(websocket: WebSocket):
                     # Pydantic 模型验证 investment_settings
                     validated_investment_settings = InvestmentStrategySettings(**config_payload_data["investment_settings"]).model_dump(mode='json')
                     config_payload_data["investment_settings"] = validated_investment_settings # 使用验证后的数据
+                except ValidationError as e_val:
+                    # Extract detailed errors from Pydantic ValidationError
+                    error_details = e_val.errors()
+                    await websocket.send_json({
+                        "type": "error",
+                        "data": {
+                            "message": "配置数据验证失败", # 通用错误消息
+                            "details": error_details # 详细错误列表
+                        }
+                    })
+                    continue # 继续处理下一个消息
                 except Exception as e_val:
-                     await websocket.send_json({"type": "error", "data": {"message": f"配置数据验证失败: {str(e_val)}"}})
-                     continue
+                     # Handle other exceptions during config processing
+                     print(f"处理 set_runtime_config 时发生未知错误: {e_val}\n{traceback.format_exc()}")
+                     await websocket.send_json({"type": "error", "data": {"message": f"应用配置时发生未知错误: {str(e_val)}"}})
+                     continue # 继续处理下一个消息
 
                 existing_config_id = websocket_to_config_id_map.pop(websocket, None)
                 if existing_config_id: 
