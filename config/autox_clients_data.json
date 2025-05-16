@@ -1,12 +1,12 @@
 {
     "92ae89b2-77b3-476b-b3e5-a7b5b41a86e0": {
         "client_id": "92ae89b2-77b3-476b-b3e5-a7b5b41a86e0",
-        "status": "idle",
+        "status": "offline",
         "supported_symbols": [
             "ETHUSDT"
         ],
-        "last_seen": "2025-05-15T19:06:46.637661+00:00",
-        "connected_at": "2025-05-15T19:06:46.637661+00:00",
-        "notes": "r1cky"
+        "last_seen": "2025-05-16T10:05:29.887797+00:00",
+        "connected_at": "2025-05-15T19:06:18.862780Z",
+        "notes": null
     }
 }

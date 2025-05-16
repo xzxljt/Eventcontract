@@ -28,3 +28,4 @@ build/
 kline_cache/
 *.kline
 data_cache/
+test.py

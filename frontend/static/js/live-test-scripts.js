@@ -13,34 +13,34 @@ const app = createApp({
 
         // --- State Variables ---
         const symbols = ref([]);
-        const favoriteSymbols = ref([]); // 待提取到 useFavoriteSymbols
+        const favoriteSymbols = ref([]);
 
         const predictionStrategies = ref([]);
-        const selectedPredictionStrategy = ref(null); // 整个策略对象
-        const predictionStrategyParams = ref({}); // 策略的参数键值对
+        const selectedPredictionStrategy = ref(null);
+        const predictionStrategyParams = ref({});
 
         const investmentStrategies = ref([]);
-        const selectedInvestmentStrategy = ref(null); // 整个策略对象
-        const investmentStrategyParams = ref({}); // 策略的特定参数键值对
+        const selectedInvestmentStrategy = ref(null);
+        const investmentStrategyParams = ref({});
 
-        const allSavedParams = ref({ // 从后端加载的所有已保存策略参数
+        const allSavedParams = ref({
             prediction_strategies: {},
             investment_strategies: {}
         });
 
-        const liveSignals = ref([]); // 所有接收到的信号
-        const loadingInitialData = ref(false); // 控制初始加载动画
-        const error = ref(null); // 通用错误消息
-        const serverMessage = ref(''); // 通用服务器消息提示
+        const liveSignals = ref([]); // 所有接收到的信号 (原始数据源)
+        const loadingInitialData = ref(false);
+        const error = ref(null);
+        const serverMessage = ref('');
         let serverMessageTimer = null;
 
         // WebSocket related
         const socket = ref(null);
-        const socketStatus = ref('disconnected'); // 'disconnected', 'connecting', 'connected', 'error'
-        const currentConfigId = ref(null); // 当前活动的后端配置ID
+        const socketStatus = ref('disconnected');
+        const currentConfigId = ref(null);
 
         // Button loading states
-        const applyingConfig = ref(false); 
+        const applyingConfig = ref(false);
         const stoppingTest = ref(false);
 
         // Live Stats
@@ -52,52 +52,107 @@ const app = createApp({
 
         // Frontend Monitor Settings (UI Bound)
         const monitorSettings = ref({
-            symbol: 'all', // 'all' 或特定交易对
-            interval: 'all', // 'all' 或特定K线周期
-            // prediction_strategy_id 由 selectedPredictionStrategy 动态设置
+            symbol: 'all',
+            interval: 'all',
             confidence_threshold: 50,
             event_period: '10m',
             enableSound: false,
-            investment: { // 这些是全局的投资设定，会被策略参数覆盖或补充
-                amount: 20.0, // 默认基础投资额，用于'fixed'等策略
-                // strategy_id 由 selectedInvestmentStrategy 动态设置
+            investment: {
+                amount: 20.0,
                 minAmount: 5.0,
                 maxAmount: 250.0,
-                percentageOfBalance: 10.0, // 用于'percentage_of_balance'策略
+                percentageOfBalance: 10.0,
                 profitRate: 80.0,
                 lossRate: 100.0,
-                simulatedBalance: 1000.0, // 用于'percentage_of_balance'策略
+                simulatedBalance: 1000.0,
             }
         });
 
-        // --- Computed Properties ---
-        const latestSignals = computed(() => {
-            if (!Array.isArray(liveSignals.value)) return [];
-            // 保持原样，按时间倒序取前5条
-            return [...liveSignals.value]
-                .sort((a, b) => {
-                    const timeA = a.signal_time ? new Date(a.signal_time).getTime() : 0;
-                    const timeB = b.signal_time ? new Date(b.signal_time).getTime() : 0;
-                    if (isNaN(timeA) || isNaN(timeB)) return 0; // 处理无效日期
-                    return timeB - timeA;
-                })
-                .slice(0, 5); // 显示最近的5条信号
+        // --- 新增: 信号管理相关状态 ---
+        const selectedSignalIds = ref([]); // 用于管理选中的信号ID
+        const deletingSignals = ref(false); // 删除按钮的加载状态
+
+        const signalManagementFilter = ref({ // 用于信号管理的筛选器
+            symbol: 'all',
+            interval: 'all',
+            direction: 'all', // 'all', 'long', 'short'
+            verifiedStatus: 'all', // 'all', 'verified', 'unverified'
+            minConfidence: 0,
+            maxConfidence: 100,
+            // startDate: '', // 可选的日期筛选，如果需要可以取消注释
+            // endDate: '',   // 可选的日期筛选
         });
 
-        const sortedSymbols = computed(() => { // 用于监控交易对下拉列表
+        // --- Computed Properties ---
+        // 原 latestSignals 已被 displayedManagedSignals 取代主要功能
+        // 如果仍有其他地方需要仅显示最新几条，可以保留或调整
+        // const latestSignals = computed(() => { ... }); 
+
+        const displayedManagedSignals = computed(() => {
+            if (!Array.isArray(liveSignals.value)) return [];
+            
+            let filtered = [...liveSignals.value];
+
+            // 应用筛选条件
+            if (signalManagementFilter.value.symbol !== 'all') {
+                filtered = filtered.filter(s => s.symbol === signalManagementFilter.value.symbol);
+            }
+            if (signalManagementFilter.value.interval !== 'all') {
+                filtered = filtered.filter(s => s.interval === signalManagementFilter.value.interval);
+            }
+            if (signalManagementFilter.value.direction !== 'all') {
+                const dir = signalManagementFilter.value.direction === 'long' ? 1 : -1;
+                filtered = filtered.filter(s => s.signal === dir);
+            }
+            if (signalManagementFilter.value.verifiedStatus !== 'all') {
+                const isVerified = signalManagementFilter.value.verifiedStatus === 'verified';
+                filtered = filtered.filter(s => (s.verified || false) === isVerified); // 确保 s.verified 存在
+            }
+            if (signalManagementFilter.value.minConfidence > 0 || signalManagementFilter.value.maxConfidence < 100) {
+                filtered = filtered.filter(s => {
+                    const conf = parseFloat(s.confidence);
+                    return !isNaN(conf) && conf >= signalManagementFilter.value.minConfidence && conf <= signalManagementFilter.value.maxConfidence;
+                });
+            }
+            // TODO: 如果添加日期筛选器，在这里实现
+            // if (signalManagementFilter.value.startDate && signalManagementFilter.value.endDate) { ... }
+
+            // 按信号时间倒序排列
+            return filtered.sort((a, b) => {
+                const timeA = a.signal_time ? new Date(a.signal_time).getTime() : 0;
+                const timeB = b.signal_time ? new Date(b.signal_time).getTime() : 0;
+                if (isNaN(timeA) || isNaN(timeB)) return 0; // 处理无效日期
+                return timeB - timeA;
+            });
+            // .slice(0, 50); // 可选：如果信号过多，可以限制初始显示数量或实现分页
+        });
+
+        const areAllDisplayedManagedSignalsSelected = computed({
+            get: () => {
+                const displayedIds = displayedManagedSignals.value.map(s => s.id);
+                if (displayedIds.length === 0) return false;
+                return displayedIds.every(id => selectedSignalIds.value.includes(id));
+            },
+            set: (value) => {
+                // 这个 set 会被 v-model 调用，value 是 checkbox 的新状态 (true/false)
+                toggleSelectAllDisplayedManagedSignals(value);
+            }
+        });
+
+        const sortedSymbols = computed(() => {
             return [...symbols.value].sort((a, b) => {
                 const aIsFav = isFavorite(a);
                 const bIsFav = isFavorite(b);
                 if (aIsFav && !bIsFav) return -1;
                 if (!aIsFav && bIsFav) return 1;
-                return a.localeCompare(b); // 非收藏的按字母排序
+                return a.localeCompare(b);
             });
         });
 
         // --- Server Message Handling ---
         const showServerMessage = (message, isError = false, duration = 5000) => {
             serverMessage.value = message;
-            if (isError) error.value = message; // 同时更新 error ref 如果是错误
+            if (isError) error.value = message;
             else error.value = null;
             
             if (serverMessageTimer) clearTimeout(serverMessageTimer);
@@ -107,7 +162,7 @@ const app = createApp({
             }, duration);
         };
 
-        // --- Favorite Symbols Logic (待提取到 useFavoriteSymbols) ---
+        // --- Favorite Symbols Logic ---
         const loadFavorites = () => {
             const stored = localStorage.getItem('favoriteSymbols');
             if (stored) favoriteSymbols.value = JSON.parse(stored);
@@ -120,10 +175,9 @@ const app = createApp({
             if (index === -1) favoriteSymbols.value.push(symbol);
             else favoriteSymbols.value.splice(index, 1);
             saveFavorites();
-            // sortSymbols() 会在 sortedSymbols computed 属性中自动处理
         };
 
-        // --- Initialization and Data Fetching (部分待提取到 apiService) ---
+        // --- Initialization and Data Fetching ---
         const fetchAllSavedParameters = async () => {
             try {
                 const response = await axios.get('/api/load_all_strategy_parameters');
@@ -138,7 +192,6 @@ const app = createApp({
             try {
                 const response = await axios.get('/api/symbols');
                 symbols.value = response.data;
-                // 默认选择 BTCUSDT 或第一个，如果 'all' 不是当前选项
                 if (monitorSettings.value.symbol !== 'all' && symbols.value.length > 0) {
                      if (!symbols.value.includes(monitorSettings.value.symbol)) {
                         monitorSettings.value.symbol = symbols.value.includes('BTCUSDT') ? 'BTCUSDT' : symbols.value[0];
@@ -161,22 +214,19 @@ const app = createApp({
         
         // --- UI Population from Server Config ---
         const populateUiFromConfigDetails = (configDetails) => {
+            // ... (这部分逻辑保持不变, 用于填充左侧配置表单) ...
             if (!configDetails) return;
 
             monitorSettings.value.symbol = configDetails.symbol || 'all';
             monitorSettings.value.interval = configDetails.interval || 'all';
-            monitorSettings.value.confidence_threshold = configDetails.confidence_threshold ?? 50; // 使用 ?? 保留 0
+            monitorSettings.value.confidence_threshold = configDetails.confidence_threshold ?? 50;
             monitorSettings.value.event_period = configDetails.event_period || '10m';
 
-            // 设置预测策略
             const predStrategy = predictionStrategies.value.find(s => s.id === configDetails.prediction_strategy_id);
             if (predStrategy) {
-                selectedPredictionStrategy.value = predStrategy; // 这会触发 watch 来填充参数 (默认+全局保存)
-                // 然后用 configDetails 中的参数覆盖
+                selectedPredictionStrategy.value = predStrategy;
                 if (configDetails.prediction_strategy_params) {
                     const paramsFromServer = { ...configDetails.prediction_strategy_params };
-                    // 合并：(默认+全局保存) -> 服务器活动配置参数 (服务器活动配置覆盖前者)
-                    // 确保只覆盖策略定义中存在的非高级参数
                     const currentDefaultsAndSaved = { ...predictionStrategyParams.value };
                     const finalParams = { ...currentDefaultsAndSaved };
                     if (predStrategy.parameters) {
@@ -193,13 +243,11 @@ const app = createApp({
                     predictionStrategyParams.value = finalParams;
                 }
             } else {
-                selectedPredictionStrategy.value = null; // 清空选择和参数
+                selectedPredictionStrategy.value = null;
             }
             
-            // 设置投资策略及参数
             if (configDetails.investment_settings) {
                 const invSettingsFromServer = configDetails.investment_settings;
-                // 更新全局投资设置
                 monitorSettings.value.investment.amount = invSettingsFromServer.amount ?? monitorSettings.value.investment.amount;
                 monitorSettings.value.investment.minAmount = invSettingsFromServer.minAmount ?? monitorSettings.value.investment.minAmount;
                 monitorSettings.value.investment.maxAmount = invSettingsFromServer.maxAmount ?? monitorSettings.value.investment.maxAmount;
@@ -210,25 +258,21 @@ const app = createApp({
 
                 const invStrategy = investmentStrategies.value.find(s => s.id === invSettingsFromServer.strategy_id);
                 if (invStrategy) {
-                    selectedInvestmentStrategy.value = invStrategy; // 触发 watch (默认+全局保存)
+                    selectedInvestmentStrategy.value = invStrategy;
                     if (invSettingsFromServer.investment_strategy_specific_params) {
                         let specificParamsFromServer = { ...invSettingsFromServer.investment_strategy_specific_params };
                         if (invStrategy.id === 'martingale_user_defined' && Array.isArray(specificParamsFromServer.sequence)) {
-                            specificParamsFromServer.sequence = specificParamsFromServer.sequence.join(','); // 转为字符串供UI
+                            specificParamsFromServer.sequence = specificParamsFromServer.sequence.join(',');
                         }
-                        // 合并：(默认+全局保存) -> 服务器活动配置特定参数
                         const currentDefaultsAndSavedSpecific = { ...investmentStrategyParams.value };
                         const finalSpecificParams = { ...currentDefaultsAndSavedSpecific };
 
                         if (invStrategy.parameters) {
                              invStrategy.parameters.forEach(pDef => {
                                 if (!pDef.advanced && !pDef.readonly &&
-                                    pDef.name !== 'minAmount' && pDef.name !== 'maxAmount' && pDef.name !== 'amount' && // 这些是全局的
+                                    pDef.name !== 'minAmount' && pDef.name !== 'maxAmount' && pDef.name !== 'amount' &&
                                     specificParamsFromServer.hasOwnProperty(pDef.name)) {
-                                    
-                                    let val = specificParamsFromServer[pDef.name];
-                                    // 类型转换可以根据pDef.type添加，但martingale的sequence特殊处理已完成
-                                    finalSpecificParams[pDef.name] = val;
+                                    finalSpecificParams[pDef.name] = specificParamsFromServer[pDef.name];
                                 }
                             });
                         }
@@ -241,13 +285,10 @@ const app = createApp({
             showServerMessage("已使用服务器上的活动配置更新当前设置。", false, 3000);
         };
 
-
-        // --- Watchers for Strategy Selection and Parameter Population (待提取到 useStrategyManagement) ---
+        // --- Watchers for Strategy Selection and Parameter Population ---
         watch(selectedPredictionStrategy, (newStrategy, oldStrategy) => {
-            // 仅当策略实际改变时才重置参数，避免 populateUiFromConfigDetails 设置后被 watch 覆盖
             if (newStrategy?.id !== oldStrategy?.id) {
                 if (newStrategy && newStrategy.id) {
-                    // monitorSettings.value.prediction_strategy_id = newStrategy.id; // 不需要，config中会包含
                     const savedGlobalParams = allSavedParams.value.prediction_strategies?.[newStrategy.id] || {};
                     const defaultParams = {};
                     if (newStrategy.parameters) {
@@ -259,7 +300,6 @@ const app = createApp({
                     }
                     predictionStrategyParams.value = { ...defaultParams, ...savedGlobalParams };
                 } else {
-                    // monitorSettings.value.prediction_strategy_id = '';
                     predictionStrategyParams.value = {};
                 }
             }
@@ -268,13 +308,12 @@ const app = createApp({
         watch(selectedInvestmentStrategy, (newStrategy, oldStrategy) => {
             if (newStrategy?.id !== oldStrategy?.id) {
                 if (newStrategy && newStrategy.id) {
-                    // monitorSettings.value.investment.strategy_id = newStrategy.id; // 不需要
                     const savedGlobalParams = allSavedParams.value.investment_strategies?.[newStrategy.id] || {};
                     const defaultParams = {};
                     if (newStrategy.parameters) {
                         newStrategy.parameters.forEach(param => {
                             if (!param.advanced && !param.readonly &&
-                                param.name !== 'minAmount' && param.name !== 'maxAmount' && param.name !== 'amount') { // 这些是全局投资设置
+                                param.name !== 'minAmount' && param.name !== 'maxAmount' && param.name !== 'amount') {
                                 if (param.editor === 'text_list' && Array.isArray(param.default)) {
                                     defaultParams[param.name] = param.default.join(',');
                                 } else if (param.type === 'boolean') {
@@ -290,13 +329,10 @@ const app = createApp({
                         mergedParams.sequence = mergedParams.sequence.join(',');
                     }
                     investmentStrategyParams.value = mergedParams;
-
-                    // 如果选的是固定金额策略，尝试从其参数或全局保存值或默认值更新UI上的全局amount
                     if (newStrategy.id === 'fixed') {
                          monitorSettings.value.investment.amount = mergedParams?.amount || savedGlobalParams?.amount || defaultParams?.amount || monitorSettings.value.investment.amount;
                     }
                 } else {
-                    // monitorSettings.value.investment.strategy_id = '';
                     investmentStrategyParams.value = {};
                 }
             }
@@ -304,10 +340,8 @@ const app = createApp({
 
         // --- WebSocket Logic ---
         const connectWebSocket = () => {
-            // ... (与之前版本类似，但 message handler 中调用 populateUiFromConfigDetails)
             if (socket.value && (socket.value.readyState === WebSocket.OPEN || socket.value.readyState === WebSocket.CONNECTING)) {
-                showServerMessage("WebSocket 已经连接或正在连接中。", false, 2000);
-                return;
+                showServerMessage("WebSocket 已经连接或正在连接中。", false, 2000); return;
             }
             error.value = null; serverMessage.value = '';
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -321,20 +355,19 @@ const app = createApp({
                 socketStatus.value = 'connected';
                 showServerMessage("WebSocket 连接成功。", false, 3000);
                 const localConfigId = localStorage.getItem('liveTestConfigId');
-                if (localConfigId) { // 优先使用 localStorage 中的 ID
-                    currentConfigId.value = localConfigId; // 更新 ref
+                if (localConfigId) {
+                    currentConfigId.value = localConfigId;
                     socket.value.send(JSON.stringify({ type: 'restore_session', data: { config_id: currentConfigId.value } }));
-                } else if (currentConfigId.value) { // 如果 localStorage 没有，但 ref 中有（例如页面刚加载，从旧的localStorage恢复的）
+                } else if (currentConfigId.value) {
                      socket.value.send(JSON.stringify({ type: 'restore_session', data: { config_id: currentConfigId.value } }));
                 }
-                // 如果都没有，则不尝试恢复会话
             };
 
             socket.value.onmessage = (event) => {
                 try {
                     const message = JSON.parse(event.data);
                     console.log("LiveTest: Received WebSocket message:", message);
-                    applyingConfig.value = false; stoppingTest.value = false; // 通用清除按钮加载状态
+                    applyingConfig.value = false; stoppingTest.value = false;
 
                     switch (message.type) {
                         case "initial_signals": handleInitialSignals(message.data); break;
@@ -350,9 +383,9 @@ const app = createApp({
                         case "config_set_confirmation":
                             if (message.data.success) {
                                 currentConfigId.value = message.data.config_id;
-                                localStorage.setItem('liveTestConfigId', currentConfigId.value); // 持久化
+                                localStorage.setItem('liveTestConfigId', currentConfigId.value);
                                 showServerMessage(message.data.message || '配置已成功应用！', false, 5000);
-                                if(message.data.applied_config) { // 服务器返回了实际应用的配置
+                                if(message.data.applied_config) {
                                     populateUiFromConfigDetails(message.data.applied_config);
                                 }
                             } else {
@@ -361,14 +394,14 @@ const app = createApp({
                             break;
                         case "session_restored":
                             currentConfigId.value = message.data.config_id; 
-                            localStorage.setItem('liveTestConfigId', currentConfigId.value); // 确保ID同步和持久化
-                            populateUiFromConfigDetails(message.data.config_details); // 用服务器的配置更新UI
+                            localStorage.setItem('liveTestConfigId', currentConfigId.value);
+                            populateUiFromConfigDetails(message.data.config_details);
                             showServerMessage(`会话已恢复 (ID: ${currentConfigId.value.substring(0,8)}...)`, false, 4000);
                             break;
                         case "session_not_found":
                             showServerMessage(`未能恢复会话 (ID: ${message.data.config_id ? message.data.config_id.substring(0,8) : 'N/A'}...)，请重新应用配置。`, true, 6000);
-                            currentConfigId.value = null; // 清除ID
-                            localStorage.removeItem('liveTestConfigId'); // 从localStorage清除
+                            currentConfigId.value = null;
+                            localStorage.removeItem('liveTestConfigId');
                             break;
                         case "test_stopped_confirmation":
                             if (message.data.success) {
@@ -377,6 +410,14 @@ const app = createApp({
                                 localStorage.removeItem('liveTestConfigId');
                             } else {
                                 showServerMessage(message.data.message || '停止测试失败。', true, 5000);
+                            }
+                            break;
+                        case "signals_deleted_notification": // 新增: 处理信号删除通知
+                            if (message.data && Array.isArray(message.data.deleted_ids)) {
+                                liveSignals.value = liveSignals.value.filter(s => !message.data.deleted_ids.includes(s.id));
+                                selectedSignalIds.value = selectedSignalIds.value.filter(id => !message.data.deleted_ids.includes(id));
+                                showServerMessage(message.data.message || `${message.data.deleted_ids.length} 个信号已被其他操作删除。`, false, 4000);
+                                // stats 会通过单独的 "stats_update" 消息更新，如果后端发送了的话
                             }
                             break;
                         case "error": 
@@ -388,7 +429,7 @@ const app = createApp({
                     console.error("LiveTest: Failed to parse message or handle it:", e, event.data);
                     showServerMessage("处理服务器消息失败: " + e.message, true);
                 } finally {
-                     applyingConfig.value = false; stoppingTest.value = false; // 确保按钮状态恢复
+                     applyingConfig.value = false; stoppingTest.value = false;
                 }
             };
 
@@ -401,8 +442,6 @@ const app = createApp({
                 } else {
                      showServerMessage("WebSocket 连接已关闭。", false, 3000);
                 }
-                 // 可选：尝试自动重连，但要注意避免无限循环
-                // setTimeout(() => { if (!socket.value) connectWebSocket(); }, 5000);
             };
             socket.value.onerror = (errEvent) => {
                 console.error("LiveTest: WebSocket error: ", errEvent);
@@ -414,6 +453,7 @@ const app = createApp({
         };
 
         const sendRuntimeConfig = () => {
+            // ... (这部分逻辑保持不变)
             if (!socket.value || socket.value.readyState !== WebSocket.OPEN) {
                 showServerMessage("WebSocket 未连接。请先连接服务。", true); return;
             }
@@ -425,8 +465,6 @@ const app = createApp({
             }
 
             applyingConfig.value = true; error.value = null; serverMessage.value = '';
-
-            // 准备 prediction_strategy_params，确保类型正确
             let finalPredictionParams = {};
             if (selectedPredictionStrategy.value.parameters) {
                 selectedPredictionStrategy.value.parameters.forEach(paramDef => {
@@ -440,7 +478,6 @@ const app = createApp({
                 });
             }
             
-            // 准备 investment_strategy_specific_params
             let finalInvestmentSpecificParams = { ...investmentStrategyParams.value };
             if (selectedInvestmentStrategy.value.id === 'martingale_user_defined' && finalInvestmentSpecificParams.sequence) {
                 if (typeof finalInvestmentSpecificParams.sequence === 'string') {
@@ -459,7 +496,7 @@ const app = createApp({
                         finalInvestmentSpecificParams.sequence = defaultSeqDef?.default && Array.isArray(defaultSeqDef.default) ? defaultSeqDef.default : [10,20,40];
                         showServerMessage("解析马丁格尔序列错误，已使用默认值发送。", true, 3000);
                     }
-                } // 如果已经是数组，则直接使用
+                }
             }
             
             const investmentSettingsPayload = {
@@ -470,7 +507,6 @@ const app = createApp({
                 profitRate: parseFloat(monitorSettings.value.investment.profitRate),
                 lossRate: parseFloat(monitorSettings.value.investment.lossRate),
             };
-            // 根据策略类型条件性地添加amount或percentageOfBalance/simulatedBalance
             if (selectedInvestmentStrategy.value.id === 'percentage_of_balance') {
                 investmentSettingsPayload.percentageOfBalance = parseFloat(monitorSettings.value.investment.percentageOfBalance);
                 investmentSettingsPayload.simulatedBalance = parseFloat(monitorSettings.value.investment.simulatedBalance);
@@ -494,15 +530,14 @@ const app = createApp({
         };
 
         const stopCurrentTest = () => {
+            // ... (这部分逻辑保持不变)
             if (!socket.value || socket.value.readyState !== WebSocket.OPEN) {
                 showServerMessage("WebSocket 未连接。", true); return;
             }
-            if (!currentConfigId.value) { // 只有当有已知的 currentConfigId 时才尝试停止
+            if (!currentConfigId.value) {
                 showServerMessage("没有活动的测试配置可停止。请先应用一个配置。", true); return;
             }
             stoppingTest.value = true; error.value = null; serverMessage.value = '';
-            // 后端会使用 websocket_to_config_id_map (或类似机制) 找到对应的 config_id 来停止
-            // 如果 currentConfigId.value 是由服务器确认的，则可以发送它以确保停止正确的任务
             socket.value.send(JSON.stringify({ type: 'stop_current_test', data: { config_id_to_stop: currentConfigId.value } }));
         };
 
@@ -513,7 +548,7 @@ const app = createApp({
         };
 
         const saveStrategyParameters = async () => {
-            // ... (与 index-scripts.js 中的 saveStrategyParameters 逻辑非常相似，确保类型转换)
+            // ... (这部分逻辑保持不变)
             let savedCount = 0;
             let errorMessages = [];
             let hasAttemptedSave = false;
@@ -552,12 +587,12 @@ const app = createApp({
                 let paramsToSave = { ...investmentStrategyParams.value };
                 if (selectedInvestmentStrategy.value.id === 'martingale_user_defined' && paramsToSave.sequence) {
                     if (typeof paramsToSave.sequence === 'string') {
-                         try { // 转为数组再保存
+                         try {
                             const parsedSequence = paramsToSave.sequence.split(',').map(s => parseFloat(s.trim())).filter(n => !isNaN(n) && n > 0);
                             if (parsedSequence.length > 0) paramsToSave.sequence = parsedSequence;
                             else delete paramsToSave.sequence; 
                         } catch (e) { delete paramsToSave.sequence; }
-                    } // 如果已是数组，则直接使用
+                    }
                 }
                 const payload = {
                     strategy_type: 'investment',
@@ -567,7 +602,7 @@ const app = createApp({
                 try {
                     await axios.post('/api/save_strategy_parameter_set', payload);
                     if (!allSavedParams.value.investment_strategies) allSavedParams.value.investment_strategies = {};
-                    allSavedParams.value.investment_strategies[payload.strategy_id] = { ...payload.params }; // 保存转换后的参数
+                    allSavedParams.value.investment_strategies[payload.strategy_id] = { ...payload.params };
                     savedCount++;
                 } catch (err) {
                     errorMessages.push(`投资策略 "${selectedInvestmentStrategy.value.name}": ${err.response?.data?.detail || err.message}`);
@@ -586,42 +621,44 @@ const app = createApp({
 
         // --- Signal Handling ---
         const sanitizeSignal = (signal) => {
+            // ... (这部分逻辑保持不变)
             const sanitized = { ...signal };
             const numericFields = [
                 'confidence', 'signal_price', 'actual_end_price', 
                 'price_change_pct', 'pnl_pct', 'investment_amount', 
                 'actual_profit_loss_amount', 'profit_rate_pct', 'loss_rate_pct',
-                'potential_profit', 'potential_loss' // 添加这两个计算字段
+                'potential_profit', 'potential_loss'
             ];
             numericFields.forEach(field => {
                 if (field in sanitized && sanitized[field] !== null && sanitized[field] !== undefined) {
                     const num = parseFloat(sanitized[field]);
-                    sanitized[field] = isNaN(num) ? null : num; // 如果不能转为数字，则设为null
+                    sanitized[field] = isNaN(num) ? null : num;
                 } else if (field in sanitized && (sanitized[field] === null || sanitized[field] === undefined)) {
-                    sanitized[field] = null; // 确保是 null 而不是 undefined
+                    sanitized[field] = null;
                 }
             });
             sanitized.verified = typeof sanitized.verified === 'boolean' ? sanitized.verified : false;
             if (sanitized.result !== null && sanitized.result !== undefined) {
                 sanitized.result = (sanitized.result === true || String(sanitized.result).toLowerCase() === 'true' || sanitized.result === 1);
             } else {
-                sanitized.result = null; // 明确设为 null
+                sanitized.result = null;
             }
             return sanitized;
         };
-
-        const handleInitialSignals = (signalsArray) => {
+        
+        const handleInitialSignals = (signalsArray) => { // 修改: 不再预排序和切片
             if (!Array.isArray(signalsArray)) {
                 liveSignals.value = []; return;
             }
-            liveSignals.value = signalsArray.map(s => sanitizeSignal(s)).sort((a, b) => new Date(b.signal_time).getTime() - new Date(a.signal_time).getTime());
+            // liveSignals 存储原始/完整列表，displayedManagedSignals 会负责过滤和排序
+            liveSignals.value = signalsArray.map(s => sanitizeSignal(s));
             updateAllTimeRemaining();
         };
         
         const handleNewSignal = (signalData) => {
+            // ... (这部分逻辑保持不变)
             const newSignal = sanitizeSignal(signalData);
             
-            // 根据投资额和盈亏率计算潜在盈亏 (如果数据中没有提供)
             if (newSignal.investment_amount && newSignal.profit_rate_pct && newSignal.potential_profit === null) {
                 newSignal.potential_profit = parseFloat((newSignal.investment_amount * (newSignal.profit_rate_pct / 100)).toFixed(2));
             }
@@ -631,32 +668,92 @@ const app = createApp({
 
             const existingIdx = liveSignals.value.findIndex(s => s.id === newSignal.id);
             if (existingIdx === -1) {
-                liveSignals.value.unshift(newSignal); // 加到最前面
-                 if (liveSignals.value.length > 100) { // 限制列表长度
-                    liveSignals.value.pop();
+                liveSignals.value.unshift(newSignal);
+                 if (liveSignals.value.length > 2000) { // 限制列表总长度 (按需调整)
+                    liveSignals.value.splice(1000); // 例如，保留最新的1000条，移除旧的1000条
                 }
-            } else { // 更新已存在的信号
+            } else {
                 liveSignals.value[existingIdx] = { ...liveSignals.value[existingIdx], ...newSignal };
             }
             updateAllTimeRemaining();
         };
 
         const handleVerifiedSignal = (signalData) => {
+            // ... (这部分逻辑保持不变)
             const verifiedSignal = sanitizeSignal(signalData);
             verifiedSignal.verified = true; 
             const index = liveSignals.value.findIndex(s => s.id === verifiedSignal.id);
             if (index !== -1) {
                 liveSignals.value[index] = { ...liveSignals.value[index], ...verifiedSignal };
-            } else { // 如果因为某种原因初始信号没收到，验证信号来了也添加进去
+            } else {
                 liveSignals.value.unshift(verifiedSignal);
-                 if (liveSignals.value.length > 100) { liveSignals.value.pop(); }
+                 if (liveSignals.value.length > 2000) { liveSignals.value.splice(1000); }
             }
             updateAllTimeRemaining();
+        };
+
+        // --- 新增: 信号管理方法 ---
+        const toggleSelectAllDisplayedManagedSignals = (forceValue = undefined) => {
+            const displayedIds = displayedManagedSignals.value.map(s => s.id);
+            // 如果 forceValue 是布尔值 (来自 v-model set)，则使用它
+            // 否则 (来自 @change 事件或直接调用无参数)，则切换当前状态
+            const shouldSelectAll = (typeof forceValue === 'boolean') ? forceValue : !areAllDisplayedManagedSignalsSelected.value;
+
+            if (shouldSelectAll) {
+                displayedIds.forEach(id => {
+                    if (!selectedSignalIds.value.includes(id)) {
+                        selectedSignalIds.value.push(id);
+                    }
+                });
+            } else {
+                selectedSignalIds.value = selectedSignalIds.value.filter(id => !displayedIds.includes(id));
+            }
+        };
+
+        const deleteSelectedSignals = async () => {
+            if (selectedSignalIds.value.length === 0) {
+                showServerMessage("没有选中任何信号。", true);
+                return;
+            }
+            if (!confirm(`确定要删除选中的 ${selectedSignalIds.value.length} 个信号吗？此操作不可恢复。`)) {
+                return;
+            }
+
+            deletingSignals.value = true;
+            try {
+                const response = await axios.post('/api/live-signals/delete-batch', {
+                    signal_ids: selectedSignalIds.value // 发送ID数组
+                });
+
+                if (response.data.status === 'success' || response.data.status === 'warning') {
+                    const deletedActuallyCount = response.data.deleted_count || 0;
+                    if (deletedActuallyCount > 0) {
+                        // 从本地 liveSignals 中移除 (如果后端没有通过 WebSocket 通知所有客户端)
+                        // 从本地 liveSignals 中移除
+                        const remainingSignals = liveSignals.value.filter(signal => !selectedSignalIds.value.includes(signal.id));
+                        liveSignals.value = remainingSignals; // 强制更新引用以触发 Vue 响应性
+                        // 注意: 后端现在会通过 'signals_deleted_notification' 来通知，所以这里可以不主动移除
+                        // 但为了即时性，可以保留，或者依赖WebSocket消息。
+                        // 如果后端广播了 'signals_deleted_notification', 客户端的 WebSocket 处理器会处理。
+                    }
+                    selectedSignalIds.value = []; // 清空选择
+                    showServerMessage(response.data.message || `${deletedActuallyCount} 个信号已处理。`, false, 5000);
+                    // stats 会通过WebSocket的 "stats_update" 消息自动更新
+                } else {
+                    showServerMessage(response.data.message || "删除信号失败。", true);
+                }
+            } catch (err) {
+                console.error("删除信号错误:", err);
+                showServerMessage(err.response?.data?.detail || err.message || "删除信号时发生网络错误。", true);
+            } finally {
+                deletingSignals.value = false;
+            }
         };
 
         // --- UI Helpers ---
         const audioContext = ref(null);
         const playSound = () => {
+             // ... (这部分逻辑保持不变)
             if (!monitorSettings.value.enableSound || (!window.AudioContext && !window.webkitAudioContext)) return;
             if (!audioContext.value) audioContext.value = new (window.AudioContext || window.webkitAudioContext)();
             try {
@@ -673,16 +770,18 @@ const app = createApp({
         };
 
         const getStrategyName = (strategyId, type = 'prediction') => {
+            // ... (这部分逻辑保持不变)
             const list = type === 'prediction' ? predictionStrategies.value : investmentStrategies.value;
             const strategy = list.find(s => s.id === strategyId);
             return strategy ? strategy.name : (strategyId || "未知");
         };
 
         // --- Countdown Timer for Signals ---
-        const timeRemainingRefs = ref({}); // { signalId: "mm分ss秒" }
+        const timeRemainingRefs = ref({});
         let countdownInterval = null;
 
         const updateAllTimeRemaining = () => {
+            // ... (这部分逻辑保持不变)
             liveSignals.value.forEach(signal => {
                 if (!signal.verified && signal.expected_end_time) {
                     try {
@@ -725,13 +824,15 @@ const app = createApp({
         });
         
         const setDefaultDateRange = () => {
+            // ... (这部分逻辑保持不变)
             const now = new Date(); 
             const sevenDaysAgo = new Date();
             sevenDaysAgo.setDate(now.getDate() - 7);
-            analysisFilter.value.endDate = utilFormatDateForInput(now); // 使用 utils.js 中的函数
+            analysisFilter.value.endDate = utilFormatDateForInput(now);
             analysisFilter.value.startDate = utilFormatDateForInput(sevenDaysAgo);
         };
         const analyzeHistoricalData = () => {
+            // ... (这部分逻辑保持不变)
             hasAnalyzed.value = true;
             try {
                 const startDate = analysisFilter.value.startDate ? new Date(analysisFilter.value.startDate) : null;
@@ -759,7 +860,8 @@ const app = createApp({
             } catch (err) { console.error('分析历史数据失败:', err); showServerMessage("分析数据时出错: " + err.message, true); } 
         };
         const calculateFilteredStats = (signals) => {
-            const verified = signals.filter(s => s.verified); // 确保只统计已验证的
+            // ... (这部分逻辑保持不变)
+            const verified = signals.filter(s => s.verified);
             const correctSignals = verified.filter(s => s.result === true);
             const longSignals = verified.filter(s => s.signal === 1);
             const longCorrect = longSignals.filter(s => s.result === true);
@@ -770,16 +872,15 @@ const app = createApp({
             verified.forEach(signal => {
                 const pnl = parseFloat(signal.actual_profit_loss_amount);
                 if (isNaN(pnl)) return;
-                if (signal.result === true) { // 盈利
+                if (signal.result === true) {
                     profitCountVal++; 
-                    totalProfitVal += Math.abs(pnl); // 确保盈利额是正数
-                } else if (signal.result === false) { // 亏损
+                    totalProfitVal += Math.abs(pnl);
+                } else if (signal.result === false) {
                     lossCountVal++; 
-                    totalLossVal += Math.abs(pnl); // 确保亏损额是正数（代表亏损的绝对值）
+                    totalLossVal += Math.abs(pnl);
                 }
             });
             const avgProfit = profitCountVal > 0 ? totalProfitVal / profitCountVal : 0;
-            // avgLoss 计算的是平均亏损的绝对值
             const avgLoss = lossCountVal > 0 ? totalLossVal / lossCountVal : 0; 
             
             filteredStats.value = {
@@ -792,10 +893,9 @@ const app = createApp({
                 profit_count: profitCountVal, 
                 loss_count: lossCountVal,
                 total_profit: parseFloat(totalProfitVal.toFixed(2)), 
-                total_loss: parseFloat(totalLossVal.toFixed(2)), // 这是亏损的总额（绝对值）
-                avg_profit: parseFloat(avgProfit.toFixed(2)), // 平均盈利额
-                avg_loss: parseFloat(avgLoss.toFixed(2)),   // 平均亏损额（绝对值）
-                // 盈亏比 = 平均盈利额 / 平均亏损额（绝对值）
+                total_loss: parseFloat(totalLossVal.toFixed(2)),
+                avg_profit: parseFloat(avgProfit.toFixed(2)),
+                avg_loss: parseFloat(avgLoss.toFixed(2)),
                 profit_loss_ratio: avgLoss > 0 ? parseFloat((avgProfit / avgLoss).toFixed(2)) : (avgProfit > 0 ? Infinity : 0)
             };
         };
@@ -804,19 +904,18 @@ const app = createApp({
         onMounted(async () => {
             loadingInitialData.value = true;
             loadFavorites();
-            setDefaultDateRange();
+            setDefaultDateRange(); // For analysis filter
             
             const storedConfigId = localStorage.getItem('liveTestConfigId');
             if (storedConfigId) currentConfigId.value = storedConfigId;
 
-            await fetchAllSavedParameters(); // 先加载保存的参数
-            await Promise.all([ // 并行获取其他数据
+            await fetchAllSavedParameters();
+            await Promise.all([
                 fetchSymbols(),
                 fetchPredictionStrategies(),
                 fetchInvestmentStrategies()
             ]);
 
-            // 设置默认选中的策略（在所有策略数据加载完毕后）
             if (predictionStrategies.value.length > 0 && !selectedPredictionStrategy.value) {
                 const defaultPred = predictionStrategies.value.find(s => s.id === 'simple_rsi') || predictionStrategies.value[0];
                 selectedPredictionStrategy.value = defaultPred;
@@ -827,7 +926,7 @@ const app = createApp({
             }
             
             loadingInitialData.value = false;
-            // connectWebSocket(); // 用户可以手动点击连接按钮，或在这里自动连接
+            // connectWebSocket(); // 用户可以手动点击连接按钮
             countdownInterval = setInterval(updateAllTimeRemaining, 1000);
         });
 
@@ -842,10 +941,19 @@ const app = createApp({
             symbols, favoriteSymbols, sortedSymbols,
             predictionStrategies, selectedPredictionStrategy, predictionStrategyParams,
             investmentStrategies, selectedInvestmentStrategy, investmentStrategyParams,
-            // allSavedParams, // 主要内部使用
-            liveSignals, latestSignals, loadingInitialData, error, serverMessage,
+            liveSignals, loadingInitialData, error, serverMessage,
             socketStatus, stats, monitorSettings, currentConfigId,
             applyingConfig, stoppingTest,
+
+            // 新增: 信号管理相关
+            selectedSignalIds,
+            deletingSignals,
+            signalManagementFilter,
+
+            // Computed
+            // latestSignals, // 可以移除，如果不再使用
+            displayedManagedSignals, // 新增
+            areAllDisplayedManagedSignalsSelected, // 新增
 
             // Methods
             toggleFavorite, isFavorite,
@@ -854,22 +962,23 @@ const app = createApp({
             getStrategyName,
             getTimeRemaining, isTimeRemainingRelevant,
             
+            // 新增: 信号管理方法
+            toggleSelectAllDisplayedManagedSignals,
+            deleteSelectedSignals,
+            
             // Analysis
             analysisFilter, analysisResults, hasAnalyzed, filteredStats, analyzeHistoricalData,
-
-            // Utils for template (will be registered to globalProperties)
-            // formatDateTime, getWinRateClass, getPnlClass, getSignalStatusClass (已通过 globalProperties 注册)
         };
     }
 });
 
-// 注册全局属性
+// 注册全局属性 (保持不变)
 const utilsToRegister = { formatDateTime, getWinRateClass, getPnlClass, getSignalStatusClass };
 for (const key in utilsToRegister) {
     if (typeof utilsToRegister[key] === 'function') {
         app.config.globalProperties[key] = utilsToRegister[key];
     } else {
-        app.config.globalProperties[key] = (val) => val || (key.includes('Class') ? '' : '-'); // 提供回退
+        app.config.globalProperties[key] = (val) => val || (key.includes('Class') ? '' : '-');
         console.error(`utils.js: ${key} function is not defined globally.`);
     }
 }

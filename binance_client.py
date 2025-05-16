@@ -37,6 +37,9 @@ class BinanceClient:
     BASE_URL = "https://api.binance.com" # 现货 API 基础URL
     CACHE_DIR = ".kline_cache" # K线数据缓存目录
     FAPI_BASE_URL = "https://fapi.binance.com" # U本位合约 API 基础URL
+    
+    # K线数据节流日志间隔 (秒)
+    _kline_log_interval_sec = 30 # 默认为30秒
 
     # K线时间间隔对应的毫秒数
     INTERVAL_MS = {
@@ -63,6 +66,10 @@ class BinanceClient:
         # 用于管理WebSocket连接
         self.ws_connections: Dict[str, Any] = {} # 存储活动的WebSocket连接对象
         self.ws_threads: Dict[str, Any] = {} # 存储运行WebSocket的线程对象
+        # 用于标记是否是主动停止的WebSocket连接，避免意外断线重连
+        self._intentional_stops: Dict[str, bool] = {} # 键为 ws_key
+        # 用于记录上次打印K线日志的时间
+        self._last_kline_log_time: Dict[str, float] = {} # 键为 ws_key, 值为时间戳 (秒)
         
         # WebSocket 重连配置和状态
         self._max_reconnect_attempts = 10 # 最大重连尝试次数
@@ -452,9 +459,20 @@ class BinanceClient:
         def on_message(ws_app, message_str):
             try:
                 data = json.loads(message_str)
-                logger.debug(f"收到来自 {symbol} {interval} 的WebSocket消息 (事件类型: {data.get('e')})") # 记录收到的消息类型，避免记录大量数据
+                # logger.debug(f"收到来自 {symbol} {interval} 的WebSocket消息 (事件类型: {data.get('e')})") # 记录收到的消息类型，避免记录大量数据
+                
+                ws_key_local = f"{symbol.lower()}_{interval}" # 使用本地变量获取ws_key
+                current_time = time.time() # 获取当前时间戳 (秒)
+                last_log_time = self._last_kline_log_time.get(ws_key_local, 0)
+
+                # 节流日志：每隔一定时间打印一次K线数据
                 if 'e' in data and data['e'] == 'kline': # 确认是K线事件
                     kline_payload = data['k']
+                    
+                    if current_time - last_log_time >= self._kline_log_interval_sec:
+                        logger.info(f"收到来自 {symbol} {interval} 的K线数据: {kline_payload}")
+                        self._last_kline_log_time[ws_key_local] = current_time # 更新上次日志时间
+
                     # 格式化K线数据以便回调函数使用
                     processed_kline = {
                         'event_type': data['e'],
@@ -506,8 +524,11 @@ class BinanceClient:
         # WebSocket成功打开回调
         def on_open(ws_app):
             logger.info(f"交易对 {symbol} 周期 {interval} 的K线WebSocket连接成功打开。URL: {ws_app.url}")
-            # 连接成功后，重置重连尝试次数
             ws_key_local = f"{symbol.lower()}_{interval}"
+            # 连接成功后，清除主动停止标志（如果存在）并重置重连尝试次数
+            if ws_key_local in self._intentional_stops:
+                 del self._intentional_stops[ws_key_local]
+                 logger.debug(f"交易对 {symbol} 周期 {interval} 的WebSocket主动停止标志已清除。")
             self._reconnect_attempts[ws_key_local] = 0
             logger.debug(f"交易对 {symbol} 周期 {interval} 的WebSocket重连尝试次数已重置。")
 
@@ -531,6 +552,18 @@ class BinanceClient:
     def _reconnect_websocket(self, symbol: str, interval: str, callback: callable):
         """尝试重新连接WebSocket"""
         ws_key = f"{symbol.lower()}_{interval}"
+
+        # 检查是否是主动停止的连接
+        if self._intentional_stops.get(ws_key):
+            logger.info(f"交易对 {symbol} 周期 {interval} 的WebSocket是主动停止，不进行重连。")
+            # 清理相关记录
+            if ws_key in self._intentional_stops: del self._intentional_stops[ws_key]
+            if ws_key in self.ws_connections: del self.ws_connections[ws_key]
+            if ws_key in self.ws_threads: del self.ws_threads[ws_key]
+            if ws_key in self._reconnect_attempts: del self._reconnect_attempts[ws_key] # 清理重连尝试次数记录
+            if ws_key in self._last_kline_log_time: del self._last_kline_log_time[ws_key] # 清理日志时间记录
+            return # 不进行重连
+
         attempt = self._reconnect_attempts.get(ws_key, 0) + 1
         self._reconnect_attempts[ws_key] = attempt
 
@@ -539,6 +572,8 @@ class BinanceClient:
             # 清理连接和线程记录
             if ws_key in self.ws_connections: del self.ws_connections[ws_key]
             if ws_key in self.ws_threads: del self.ws_threads[ws_key]
+            if ws_key in self._reconnect_attempts: del self._reconnect_attempts[ws_key] # 清理重连尝试次数记录
+            if ws_key in self._last_kline_log_time: del self._last_kline_log_time[ws_key] # 清理日志时间记录
             return
 
         # 指数退避延迟
@@ -581,6 +616,8 @@ class BinanceClient:
         ws_key = f"{symbol.lower()}_{interval}"
         if ws_key in self.ws_connections:
             logger.info(f"正在停止交易对 {symbol} 周期 {interval} 的K线WebSocket...")
+            # 标记为主动停止
+            self._intentional_stops[ws_key] = True
             ws = self.ws_connections[ws_key]
             ws.close() # 关闭WebSocket连接，这将触发on_close回调进行清理
             # on_close回调中会删除 self.ws_connections 和 self.ws_threads 中的对应项
