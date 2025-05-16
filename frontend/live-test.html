@@ -261,6 +261,16 @@
                                     <div class="col-md-4 col-6 mb-2"><div class="card bg-light p-1 h-100"><small class="d-block">总参考PnL(%)</small><h6 class="mb-0" :class="getPnlClass(stats.total_pnl_pct)">{{ stats.total_pnl_pct?.toFixed(2) }}%</h6></div></div>
                                     <div class="col-md-4 col-6 mb-2"><div class="card bg-light p-1 h-100"><small class="d-block">平均参考PnL(%)</small><h6 class="mb-0" :class="getPnlClass(stats.average_pnl_pct)">{{ stats.average_pnl_pct?.toFixed(2) }}%</h6></div></div>
                                     <div class="col-md-4 col-12 mb-2"><div class="card bg-info bg-opacity-10 p-1 h-100"><small class="d-block">总盈亏金额(USDT)</small><h6 class="mb-0" :class="getPnlClass(stats.total_profit_amount)">{{ stats.total_profit_amount?.toFixed(2) || '0.00' }}</h6></div></div>
+                                    <div class="col-md-4 col-12 mb-2"><div class="card bg-light p-1 h-100"><small class="d-block">账户余额(USDT)</small><h6 class="mb-0">{{ stats.current_balance?.toFixed(2) || '0.00' }}</h6></div></div>
+                                    <!-- +++ START: ADDED HTML +++ -->
+                                    <div v-if="currentConfigId && activeTestConfigDetails && activeTestConfigDetails.current_balance !== undefined" 
+                                         class="col-md-4 col-12 mb-2"> <!-- 调整 col-md-X 以适应布局 -->
+                                        <div class="card bg-success bg-opacity-10 p-1 h-100"> <!-- 使用不同背景强调 -->
+                                            <small class="d-block">当前测试会话余额(USDT)</small>
+                                            <h6 class="mb-0 text-success">{{ activeTestConfigDetails.current_balance.toFixed(2) }}</h6>
+                                        </div>
+                                    </div>
+                                    <!-- +++ END: ADDED HTML +++ -->
                                 </div>
                             </div>
 

@@ -1,95 +1,33 @@
 [
     {
-        "id": "ETHUSDT_1m_simple_rsi_1747394159_685",
+        "id": "ETHUSDT_1m_simple_rsi_1747399620_870",
         "symbol": "ETHUSDT",
         "interval": "1m",
         "prediction_strategy_id": "simple_rsi",
         "prediction_strategy_params": {
-            "rsi_period": 10,
-            "rsi_overbought": 60,
-            "rsi_oversold": 40
+            "rsi_period": 7,
+            "rsi_overbought": 30,
+            "rsi_oversold": 80
         },
-        "signal_time": "2025-05-16T19:15:59.161182+08:00",
+        "signal_time": "2025-05-16T20:47:00.798167+08:00",
         "signal": -1,
-        "confidence": 54.0,
-        "signal_price": 2629.91,
+        "confidence": 56.0,
+        "signal_price": 2598.37,
         "event_period": "10m",
-        "expected_end_time": "2025-05-16T19:25:59.161182+08:00",
-        "investment_amount": 20,
+        "expected_end_time": "2025-05-16T20:57:00.798167+08:00",
+        "investment_amount": 6,
         "profit_rate_pct": 80.0,
         "loss_rate_pct": 100.0,
         "verified": true,
-        "origin_config_id": "7b7f0765720a4e4ab10d3220b572085a",
+        "origin_config_id": "1d831a6c0639401e936f130c826d2256",
         "autox_triggered_info": {
-            "client_id": "92ae89b2-77b3-476b-b3e5-a7b5b41a86e0",
-            "sent_at": "2025-05-16T19:15:59.161682+08:00",
-            "status": "command_sent"
+            "status": "no_available_client_for_broadcast"
         },
-        "actual_end_price": 2628.92,
-        "price_change_pct": -0.0376,
+        "actual_end_price": 2598.04,
+        "price_change_pct": -0.0127,
         "result": true,
-        "pnl_pct": 0.0376,
-        "actual_profit_loss_amount": 16.0,
-        "verify_time": "2025-05-16T19:26:23.919003+08:00"
-    },
-    {
-        "id": "ETHUSDT_1m_simple_rsi_1747394339_528",
-        "symbol": "ETHUSDT",
-        "interval": "1m",
-        "prediction_strategy_id": "simple_rsi",
-        "prediction_strategy_params": {
-            "rsi_period": 10,
-            "rsi_overbought": 60,
-            "rsi_oversold": 40
-        },
-        "signal_time": "2025-05-16T19:18:59.068324+08:00",
-        "signal": -1,
-        "confidence": 72.0,
-        "signal_price": 2634.37,
-        "event_period": "10m",
-        "expected_end_time": "2025-05-16T19:28:59.068324+08:00",
-        "investment_amount": 20,
-        "profit_rate_pct": 80.0,
-        "loss_rate_pct": 100.0,
-        "verified": true,
-        "origin_config_id": "7b7f0765720a4e4ab10d3220b572085a",
-        "autox_triggered_info": {
-            "client_id": "92ae89b2-77b3-476b-b3e5-a7b5b41a86e0",
-            "sent_at": "2025-05-16T19:18:59.068824+08:00",
-            "status": "command_sent"
-        },
-        "actual_end_price": 2626.03,
-        "price_change_pct": -0.3166,
-        "result": true,
-        "pnl_pct": 0.3166,
-        "actual_profit_loss_amount": 16.0,
-        "verify_time": "2025-05-16T19:29:25.632225+08:00"
-    },
-    {
-        "id": "ETHUSDT_1m_simple_rsi_1747395000_701",
-        "symbol": "ETHUSDT",
-        "interval": "1m",
-        "prediction_strategy_id": "simple_rsi",
-        "prediction_strategy_params": {
-            "rsi_period": 10,
-            "rsi_overbought": 60,
-            "rsi_oversold": 40
-        },
-        "signal_time": "2025-05-16T19:30:00.515445+08:00",
-        "signal": 1,
-        "confidence": 51.0,
-        "signal_price": 2623.94,
-        "event_period": "10m",
-        "expected_end_time": "2025-05-16T19:40:00.515445+08:00",
-        "investment_amount": 20,
-        "profit_rate_pct": 80.0,
-        "loss_rate_pct": 100.0,
-        "verified": false,
-        "origin_config_id": "7b7f0765720a4e4ab10d3220b572085a",
-        "autox_triggered_info": {
-            "client_id": "92ae89b2-77b3-476b-b3e5-a7b5b41a86e0",
-            "sent_at": "2025-05-16T19:30:00.515939+08:00",
-            "status": "command_sent"
-        }
+        "pnl_pct": 0.0127,
+        "actual_profit_loss_amount": 4.8,
+        "verify_time": "2025-05-16T20:57:28.083629+08:00"
     }
 ]

@@ -28,29 +28,25 @@ const app = createApp({
             investment_strategies: {}
         });
 
-        const liveSignals = ref([]); // 所有接收到的信号 (原始数据源)
+        const liveSignals = ref([]); 
         const loadingInitialData = ref(false);
         const error = ref(null);
         const serverMessage = ref('');
         let serverMessageTimer = null;
 
-        // WebSocket related
         const socket = ref(null);
         const socketStatus = ref('disconnected');
         const currentConfigId = ref(null);
 
-        // Button loading states
         const applyingConfig = ref(false);
         const stoppingTest = ref(false);
 
-        // Live Stats
         const stats = ref({
             total_signals: 0, total_verified: 0, total_correct: 0,
             win_rate: 0, total_pnl_pct: 0, average_pnl_pct: 0,
             total_profit_amount: 0
         });
 
-        // Frontend Monitor Settings (UI Bound)
         const monitorSettings = ref({
             symbol: 'all',
             interval: 'all',
@@ -64,23 +60,24 @@ const app = createApp({
                 percentageOfBalance: 10.0,
                 profitRate: 80.0,
                 lossRate: 100.0,
-                simulatedBalance: 1000.0,
+                simulatedBalance: 1000.0, // 这个是用户在UI上设置的初始模拟本金
             }
         });
+        
+        // +++ START: ADDED/MODIFIED STATE +++
+        const activeTestConfigDetails = ref(null); // 用于存储当前活动配置的完整细节，包括余额
+        // +++ END: ADDED/MODIFIED STATE +++
 
-        // --- 新增: 信号管理相关状态 ---
-        const selectedSignalIds = ref([]); // 用于管理选中的信号ID
-        const deletingSignals = ref(false); // 删除按钮的加载状态
+        const selectedSignalIds = ref([]); 
+        const deletingSignals = ref(false); 
 
-        const signalManagementFilter = ref({ // 用于信号管理的筛选器
+        const signalManagementFilter = ref({ 
             symbol: 'all',
             interval: 'all',
-            direction: 'all', // 'all', 'long', 'short'
-            verifiedStatus: 'all', // 'all', 'verified', 'unverified'
+            direction: 'all', 
+            verifiedStatus: 'all', 
             minConfidence: 0,
             maxConfidence: 100,
-            // startDate: '', // 可选的日期筛选，如果需要可以取消注释
-            // endDate: '',   // 可选的日期筛选
         });
 
         // --- Computed Properties ---
@@ -363,75 +360,95 @@ const app = createApp({
                 }
             };
 
-            socket.value.onmessage = (event) => {
-                try {
-                    const message = JSON.parse(event.data);
-                    console.log("LiveTest: Received WebSocket message:", message);
-                    applyingConfig.value = false; stoppingTest.value = false;
+        socket.value.onmessage = (event) => {
+            try {
+                const message = JSON.parse(event.data);
+                console.log("LiveTest: Received WebSocket message:", message);
+                applyingConfig.value = false; stoppingTest.value = false;
 
-                    switch (message.type) {
-                        case "initial_signals": handleInitialSignals(message.data); break;
-                        case "initial_stats": 
-                        case "stats_update": 
-                            stats.value = { ...stats.value, ...message.data }; 
-                            break;
-                        case "new_signal":
-                            handleNewSignal(message.data);
-                            if (monitorSettings.value.enableSound) playSound();
-                            break;
-                        case "verified_signal": handleVerifiedSignal(message.data); break;
-                        case "config_set_confirmation":
-                            if (message.data.success) {
-                                currentConfigId.value = message.data.config_id;
-                                localStorage.setItem('liveTestConfigId', currentConfigId.value);
-                                showServerMessage(message.data.message || '配置已成功应用！', false, 5000);
-                                if(message.data.applied_config) {
-                                    populateUiFromConfigDetails(message.data.applied_config);
-                                }
-                            } else {
-                                showServerMessage(message.data.message || '配置应用失败。', true, 5000);
-                            }
-                            break;
-                        case "session_restored":
-                            currentConfigId.value = message.data.config_id; 
+                switch (message.type) {
+                    case "initial_signals": handleInitialSignals(message.data); break;
+                    case "initial_stats": 
+                    case "stats_update": 
+                        stats.value = { ...stats.value, ...message.data }; 
+                        break;
+                    case "new_signal":
+                        handleNewSignal(message.data);
+                        if (monitorSettings.value.enableSound) playSound();
+                        break;
+                    case "verified_signal": handleVerifiedSignal(message.data); break;
+                    
+                    // +++ START: MODIFIED CASES +++
+                    case "config_set_confirmation":
+                        if (message.data.success) {
+                            currentConfigId.value = message.data.config_id;
                             localStorage.setItem('liveTestConfigId', currentConfigId.value);
-                            populateUiFromConfigDetails(message.data.config_details);
-                            showServerMessage(`会话已恢复 (ID: ${currentConfigId.value.substring(0,8)}...)`, false, 4000);
-                            break;
-                        case "session_not_found":
-                            showServerMessage(`未能恢复会话 (ID: ${message.data.config_id ? message.data.config_id.substring(0,8) : 'N/A'}...)，请重新应用配置。`, true, 6000);
+                            showServerMessage(message.data.message || '配置已成功应用！', false, 5000);
+                            if(message.data.applied_config) {
+                                populateUiFromConfigDetails(message.data.applied_config);
+                                activeTestConfigDetails.value = message.data.applied_config; // 更新活动配置细节
+                            }
+                        } else {
+                            showServerMessage(message.data.message || '配置应用失败。', true, 5000);
+                            activeTestConfigDetails.value = null; // 清理
+                        }
+                        break;
+                    case "session_restored":
+                        currentConfigId.value = message.data.config_id; 
+                        localStorage.setItem('liveTestConfigId', currentConfigId.value);
+                        populateUiFromConfigDetails(message.data.config_details);
+                        activeTestConfigDetails.value = message.data.config_details; // 更新活动配置细节
+                        showServerMessage(`会话已恢复 (ID: ${currentConfigId.value.substring(0,8)}...)`, false, 4000);
+                        break;
+                    case "session_not_found":
+                        showServerMessage(`未能恢复会话 (ID: ${message.data.config_id ? message.data.config_id.substring(0,8) : 'N/A'}...)，请重新应用配置。`, true, 6000);
+                        currentConfigId.value = null;
+                        localStorage.removeItem('liveTestConfigId');
+                        activeTestConfigDetails.value = null; // 清理
+                        break;
+                    case "test_stopped_confirmation":
+                        if (message.data.success) {
+                            showServerMessage(`测试 (ID: ${message.data.stopped_config_id ? message.data.stopped_config_id.substring(0,8) : 'N/A'}...) 已成功停止。`, false, 5000);
                             currentConfigId.value = null;
                             localStorage.removeItem('liveTestConfigId');
-                            break;
-                        case "test_stopped_confirmation":
-                            if (message.data.success) {
-                                showServerMessage(`测试 (ID: ${message.data.stopped_config_id ? message.data.stopped_config_id.substring(0,8) : 'N/A'}...) 已成功停止。`, false, 5000);
-                                currentConfigId.value = null;
-                                localStorage.removeItem('liveTestConfigId');
-                            } else {
-                                showServerMessage(message.data.message || '停止测试失败。', true, 5000);
+                            activeTestConfigDetails.value = null; // 清理活动配置细节
+                        } else {
+                            showServerMessage(message.data.message || '停止测试失败。', true, 5000);
+                        }
+                        break;
+                    // +++ END: MODIFIED CASES +++
+                    
+                    // +++ START: NEW CASE HANDLER +++
+                    case "config_specific_balance_update":
+                        if (message.data && message.data.config_id === currentConfigId.value) {
+                            if (activeTestConfigDetails.value) {
+                                activeTestConfigDetails.value.current_balance = message.data.new_balance;
                             }
-                            break;
-                        case "signals_deleted_notification": // 新增: 处理信号删除通知
-                            if (message.data && Array.isArray(message.data.deleted_ids)) {
-                                liveSignals.value = liveSignals.value.filter(s => !message.data.deleted_ids.includes(s.id));
-                                selectedSignalIds.value = selectedSignalIds.value.filter(id => !message.data.deleted_ids.includes(id));
-                                showServerMessage(message.data.message || `${message.data.deleted_ids.length} 个信号已被其他操作删除。`, false, 4000);
-                                // stats 会通过单独的 "stats_update" 消息更新，如果后端发送了的话
-                            }
-                            break;
-                        case "error": 
-                            showServerMessage(message.data.message || "收到来自服务器的 WebSocket 错误", true, 6000);
-                            break;
-                        default: console.warn("LiveTest: Received unknown message type:", message.type);
-                    }
-                } catch (e) {
-                    console.error("LiveTest: Failed to parse message or handle it:", e, event.data);
-                    showServerMessage("处理服务器消息失败: " + e.message, true);
-                } finally {
-                     applyingConfig.value = false; stoppingTest.value = false;
+                            // 可选: 短暂显示余额更新消息
+                            // showServerMessage(`当前测试余额更新为: ${message.data.new_balance.toFixed(2)} USDT (本次盈亏: ${message.data.last_pnl_amount.toFixed(2)})`, false, 3000);
+                        }
+                        break;
+                    // +++ END: NEW CASE HANDLER +++
+
+                    case "signals_deleted_notification": 
+                        if (message.data && Array.isArray(message.data.deleted_ids)) {
+                            liveSignals.value = liveSignals.value.filter(s => !message.data.deleted_ids.includes(s.id));
+                            selectedSignalIds.value = selectedSignalIds.value.filter(id => !message.data.deleted_ids.includes(id));
+                            showServerMessage(message.data.message || `${message.data.deleted_ids.length} 个信号已被其他操作删除。`, false, 4000);
+                        }
+                        break;
+                    case "error": 
+                        showServerMessage(message.data.message || "收到来自服务器的 WebSocket 错误", true, 6000);
+                        break;
+                    default: console.warn("LiveTest: Received unknown message type:", message.type);
                 }
-            };
+            } catch (e) {
+                console.error("LiveTest: Failed to parse message or handle it:", e, event.data);
+                showServerMessage("处理服务器消息失败: " + e.message, true);
+            } finally {
+                 applyingConfig.value = false; stoppingTest.value = false;
+            }
+        };
 
             socket.value.onclose = (event) => {
                 socketStatus.value = 'disconnected';
@@ -624,10 +641,10 @@ const app = createApp({
             // ... (这部分逻辑保持不变)
             const sanitized = { ...signal };
             const numericFields = [
-                'confidence', 'signal_price', 'actual_end_price', 
-                'price_change_pct', 'pnl_pct', 'investment_amount', 
+                'confidence', 'signal_price', 'actual_end_price',
+                'price_change_pct', 'pnl_pct', 'investment_amount',
                 'actual_profit_loss_amount', 'profit_rate_pct', 'loss_rate_pct',
-                'potential_profit', 'potential_loss'
+                'potential_profit', 'potential_loss', 'balance_after_trade'
             ];
             numericFields.forEach(field => {
                 if (field in sanitized && sanitized[field] !== null && sanitized[field] !== undefined) {
@@ -945,15 +962,17 @@ const app = createApp({
             socketStatus, stats, monitorSettings, currentConfigId,
             applyingConfig, stoppingTest,
 
-            // 新增: 信号管理相关
             selectedSignalIds,
             deletingSignals,
             signalManagementFilter,
 
+            // +++ START: ADDED TO RETURN +++
+            activeTestConfigDetails, 
+            // +++ END: ADDED TO RETURN +++
+
             // Computed
-            // latestSignals, // 可以移除，如果不再使用
-            displayedManagedSignals, // 新增
-            areAllDisplayedManagedSignalsSelected, // 新增
+            displayedManagedSignals, 
+            areAllDisplayedManagedSignalsSelected, 
 
             // Methods
             toggleFavorite, isFavorite,
@@ -962,11 +981,9 @@ const app = createApp({
             getStrategyName,
             getTimeRemaining, isTimeRemainingRelevant,
             
-            // 新增: 信号管理方法
             toggleSelectAllDisplayedManagedSignals,
             deleteSelectedSignals,
             
-            // Analysis
             analysisFilter, analysisResults, hasAnalyzed, filteredStats, analyzeHistoricalData,
         };
     }
