@@ -35,13 +35,6 @@ const app = createApp({
         const error = ref(null); // 用于显示一般错误或回测API的文本错误
         const validationError = ref(null); // 用于显示Pydantic校验错误详情
 
-        const socket = ref(null); // WebSocket for live stats
-        const socketStatus = ref('disconnected');
-        const liveStats = ref({
-            total_signals: 0, total_verified: 0, total_correct: 0,
-            win_rate: 0, total_pnl_pct: 0, average_pnl_pct: 0,
-            total_profit_amount: 0
-        });
 
         const backtestParams = ref({
             symbol: '',
@@ -580,7 +573,7 @@ const app = createApp({
             loadFavorites();
             initDatePickers(); 
             ensureGlobalInvestmentSettings(); // 确保投资设置有初始值
-            // connectWebSocket(); // 连接 WebSocket 获取实时统计
+            // connectWebSocket(); // 连接 WebSocket 获取实时统计 // Removed live stats websocket connection // Removed live stats websocket connection // Removed live stats websocket connection
 
             loading.value = true; // 开始加载初始数据
             await fetchAllSavedParameters(); 
@@ -602,10 +595,7 @@ const app = createApp({
         });
 
         onUnmounted(() => {
-            if (socket.value) {
-                socket.value.close();
-                socket.value = null;
-            }
+            // Removed live stats websocket cleanup
         });
 
         return {
@@ -616,7 +606,6 @@ const app = createApp({
             allSavedParams, // 虽然主要在内部使用，但如果模板中需要可以暴露
             backtestParams, 
             backtestResults, loading, error, validationError, // 暴露 validationError
-            liveStats, socketStatus, // WebSocket 相关
             backtestResults, loading, error, validationError, fieldErrors, // <--- 添加 fieldError
 
             // Methods

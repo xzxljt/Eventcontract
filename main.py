@@ -159,6 +159,11 @@ running_live_test_configs: Dict[str, Dict[str, Any]] = {}
 running_live_test_configs_lock = threading.Lock()
 websocket_to_config_id_map: Dict[WebSocket, str] = {}
 
+# 新增: 全局唯一活动配置ID
+active_live_test_config_id: Optional[str] = None
+active_live_test_config_lock = threading.Lock()
+ACTIVE_TEST_CONFIG_FILE = "config/active_test_config.json" # 活动测试配置文件路径
+
 # 新增: 全局运行账户余额
 global_running_balance: float = 1000.0
 global_running_balance_lock = threading.Lock()
@@ -245,6 +250,60 @@ def _blocking_load_json_from_file(file_path: str, default_value: Any = None) -> 
         return {}
 
 # --- 修改后的持久化函数 ---
+async def load_active_test_config():
+    """从文件异步加载活动测试配置。"""
+    global active_live_test_config_id, running_live_test_configs
+    
+    loaded_data = await asyncio.to_thread(
+        _blocking_load_json_from_file, 
+        ACTIVE_TEST_CONFIG_FILE, 
+        default_value={"active_config_id": None, "config_data": None, "last_updated": None}
+    )
+    
+    if not isinstance(loaded_data, dict):
+        print(f"警告: {ACTIVE_TEST_CONFIG_FILE} 包含无效数据格式，将使用默认空配置。")
+        return
+    
+    active_config_id = loaded_data.get("active_config_id")
+    config_data = loaded_data.get("config_data")
+    
+    if active_config_id and config_data:
+        with active_live_test_config_lock:
+            active_live_test_config_id = active_config_id
+        
+        with running_live_test_configs_lock:
+            running_live_test_configs[active_config_id] = config_data
+        
+        print(f"已从 {ACTIVE_TEST_CONFIG_FILE} 加载活动测试配置 (ID: {active_config_id})")
+    else:
+        print(f"{ACTIVE_TEST_CONFIG_FILE} 中没有活动测试配置或配置不完整。")
+
+async def save_active_test_config():
+    """异步保存当前活动测试配置到文件。"""
+    global active_live_test_config_id, running_live_test_configs
+    
+    config_to_save = {
+        "active_config_id": None,
+        "config_data": None,
+        "last_updated": format_for_display(now_utc())
+    }
+    
+    with active_live_test_config_lock:
+        config_id = active_live_test_config_id
+    
+    if config_id:
+        with running_live_test_configs_lock:
+            if config_id in running_live_test_configs:
+                config_data = running_live_test_configs[config_id].copy()
+                config_to_save["active_config_id"] = config_id
+                config_to_save["config_data"] = config_data
+    
+    try:
+        await asyncio.to_thread(_blocking_save_json_to_file, ACTIVE_TEST_CONFIG_FILE, config_to_save)
+        print(f"活动测试配置已保存到 {ACTIVE_TEST_CONFIG_FILE}")
+    except Exception as e:
+        print(f"保存活动测试配置失败: {e}\n{traceback.format_exc()}")
+
 async def load_autox_clients_from_file():
     """从文件异步加载 AutoX 客户端数据到 persistent_autox_clients_data。"""
     global persistent_autox_clients_data
@@ -923,8 +982,10 @@ async def shutdown_event(): # 基本不变
 # --- WebSocket 端点 for Web UI (/ws/live-test) (逻辑微调，确保使用锁和副本) ---
 @app.websocket("/ws/live-test")
 async def websocket_endpoint(websocket: WebSocket):
+    global active_live_test_config_id
     await manager.connect(websocket)
     try:
+        # 发送初始信号数据
         initial_signals_to_send = []
         with live_signals_lock: 
             sorted_signals = sorted(
@@ -935,6 +996,7 @@ async def websocket_endpoint(websocket: WebSocket):
             initial_signals_to_send = sorted_signals[:50]
         await websocket.send_json({"type": "initial_signals", "data": initial_signals_to_send})
 
+        # 发送初始统计数据
         stats_payload_init_data = []
         with live_signals_lock: 
             stats_payload_init_data = [s.copy() for s in live_signals]
@@ -954,6 +1016,30 @@ async def websocket_endpoint(websocket: WebSocket):
              "current_balance": round(global_running_balance, 2) # 初始也发送全局余额
         }
         await websocket.send_json({"type": "initial_stats", "data": stats_payload_init})
+        
+        # 检查是否有活动的测试配置，如果有，立即发送给新连接的客户端
+        current_active_config_id = None
+        current_active_config = None
+        with active_live_test_config_lock:
+            current_active_config_id = active_live_test_config_id
+        
+        if current_active_config_id:
+            with running_live_test_configs_lock:
+                if current_active_config_id in running_live_test_configs:
+                    current_active_config = running_live_test_configs[current_active_config_id].copy()
+        
+        if current_active_config:
+            # 将当前WebSocket关联到活动配置ID
+            websocket_to_config_id_map[websocket] = current_active_config_id
+            # 发送活动配置信息给新连接的客户端
+            await websocket.send_json({
+                "type": "active_config_notification",
+                "data": {
+                    "config_id": current_active_config_id,
+                    "config": current_active_config,
+                    "message": "当前有活动的测试配置"
+                }
+            })
         
         while True: 
             data = await websocket.receive_json()
@@ -1011,13 +1097,47 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 existing_config_id = websocket_to_config_id_map.pop(websocket, None)
                 if existing_config_id: 
-                    old_config_content = None
-                    with running_live_test_configs_lock: 
-                        old_config_content = running_live_test_configs.pop(existing_config_id, None)
-                    if old_config_content: 
-                        await stop_kline_websocket_if_not_needed(old_config_content['symbol'], old_config_content['interval'])
+                    # 如果当前WebSocket已经关联到一个配置ID，先移除这个关联
+                    # 但不删除配置，因为可能其他设备还在使用
+                    pass
                 
-                new_config_id = uuid.uuid4().hex
+                # 检查是否已有活动的测试配置
+                current_active_config_id = None
+                with active_live_test_config_lock:
+                    current_active_config_id = active_live_test_config_id
+                
+                if current_active_config_id:
+                    # 已有活动配置，使用现有配置ID
+                    new_config_id = current_active_config_id
+                    
+                    # 获取现有配置数据
+                    existing_config = None
+                    with running_live_test_configs_lock:
+                        if current_active_config_id in running_live_test_configs:
+                            existing_config = running_live_test_configs[current_active_config_id]
+                    
+                    if existing_config:
+                        # 发送会话恢复通知
+                        await websocket.send_json({
+                            "type": "session_recovered",
+                            "data": {
+                                "config_id": new_config_id,
+                                "message": "已恢复现有测试会话",
+                                "config": existing_config
+                            }
+                        })
+                        
+                        # 将当前WebSocket关联到现有配置ID
+                        websocket_to_config_id_map[websocket] = new_config_id
+                        return
+                else:
+                    # 没有活动配置，创建新配置ID
+                    new_config_id = uuid.uuid4().hex
+                    
+                    # 设置为全局活动配置ID
+                    with active_live_test_config_lock:
+                        active_live_test_config_id = new_config_id
+                
                 new_symbol = config_payload_data['symbol']; new_interval = config_payload_data['interval']
                 
                 # current_balance 使用 investment_settings 中的 simulatedBalance 初始化
@@ -1034,7 +1154,8 @@ async def websocket_endpoint(websocket: WebSocket):
                     "investment_settings": config_payload_data["investment_settings"], 
                     "autox_enabled": config_payload_data.get("autox_enabled", True),
                     "current_balance": initial_current_balance, # 初始化会话余额
-                    "total_profit_loss_amount": 0.0 # 新增：初始化总盈亏额
+                    "total_profit_loss_amount": 0.0, # 新增：初始化总盈亏额
+                    "created_at": format_for_display(now_utc()) # 记录创建时间
                 }
 
                 try:
@@ -1045,6 +1166,9 @@ async def websocket_endpoint(websocket: WebSocket):
                         running_live_test_configs[new_config_id] = full_config_to_store
                     
                     websocket_to_config_id_map[websocket] = new_config_id
+                    
+                    # 保存活动配置到文件
+                    await save_active_test_config()
                     # 发送给客户端的 full_config_to_store 将包含 current_balance
                     await websocket.send_json({"type": "config_set_confirmation", "data": {"success": True, "message": "运行时配置已应用。", "config_id": new_config_id, "applied_config": full_config_to_store}})
                 except Exception as e_start_stream: 
@@ -1068,12 +1192,28 @@ async def websocket_endpoint(websocket: WebSocket):
             
             await asyncio.sleep(0.1) 
 
-    except WebSocketDisconnect: print(f"客户端 {websocket.client} 断开连接。")
+    except WebSocketDisconnect: 
+        print(f"客户端 {getattr(websocket, 'client', 'N/A')} 断开连接。")
+        # 移除WebSocket到配置ID的映射，但保留配置数据以支持会话恢复
+        config_id = websocket_to_config_id_map.pop(websocket, None)
+        
+        # 检查是否还有其他WebSocket连接到同一配置
+        if config_id:
+            other_connections_to_same_config = False
+            for ws, cfg_id in websocket_to_config_id_map.items():
+                if cfg_id == config_id:
+                    other_connections_to_same_config = True
+                    break
+            
+            # 如果没有其他连接使用此配置，记录日志但不删除配置，保留以支持会话恢复
+            if not other_connections_to_same_config:
+                print(f"配置 {config_id} 的最后一个WebSocket连接已断开，但配置将保留以支持会话恢复。")
     except Exception as e: print(f"WebSocket端点错误 ({getattr(websocket, 'client', 'N/A')}): {e}\n{traceback.format_exc()}")
     finally:
         manager.disconnect(websocket)
-        config_id_to_clean = websocket_to_config_id_map.pop(websocket, None)
-        # UI断开时不自动停止测试，除非用户显式停止
+        # 只移除WebSocket映射，但不清理配置，以支持会话恢复
+        # 配置将保留在running_live_test_configs中，直到用户显式停止测试
+        # 或者通过API/UI操作清理
 
 # --- WebSocket 端点 for AutoX Clients (/ws/autox_control) (确保保存操作是异步的) ---
 @app.websocket("/ws/autox_control")
@@ -1895,6 +2035,25 @@ async def generate_enhanced_test_signal(
     }
 
 if __name__ == "__main__":
+    # 创建启动任务列表
+    startup_tasks = [
+        # 核心后台任务
+        process_kline_queue(),
+        background_signal_verifier(),
+        
+        # 加载持久化数据
+        load_strategy_parameters_from_file(),
+        load_live_signals_async(),
+        load_autox_clients_from_file(),
+        load_active_test_config() # 加载活动测试配置，实现会话恢复
+    ]
+    
+    # 使用asyncio.gather启动所有任务
+    loop = asyncio.get_event_loop()
+    for task in startup_tasks:
+        loop.create_task(task)
+    
+    # 启动服务器
     uvicorn.run(app, host="0.0.0.0", port=8000)
 
 # --- END OF FILE main.py ---

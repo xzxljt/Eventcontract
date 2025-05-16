@@ -605,6 +605,25 @@ const app = createApp({
                         break;
                     // +++ END: MODIFIED CASES +++
                     
+                    // 处理活动配置通知 - 新增处理
+                    case "active_config_notification":
+                        console.log("LiveTest: Received active_config_notification message:", message.data);
+                        if (message.data && message.data.config_id && message.data.config) {
+                            // 只有当前没有活动配置时才应用收到的配置
+                            if (!currentConfigId.value) {
+                                currentConfigId.value = message.data.config_id;
+                                localStorage.setItem('liveTestConfigId', currentConfigId.value);
+                                populateUiFromConfigDetails(message.data.config);
+                                // 更新活动配置细节
+                                activeTestConfigDetails.value = message.data.config;
+                                console.log("LiveTest: activeTestConfigDetails after active_config_notification:", activeTestConfigDetails.value);
+                                showServerMessage(message.data.message || '已连接到活动测试配置', false, 4000);
+                            } else {
+                                console.log("LiveTest: 已有活动配置，忽略活动配置通知");
+                            }
+                        }
+                        break;
+                    
                     // +++ START: NEW CASE HANDLER +++
                     case "config_specific_balance_update":
                         console.log("LiveTest: Received config_specific_balance_update message:", message.data);

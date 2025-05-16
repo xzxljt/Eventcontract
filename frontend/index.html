@@ -32,15 +32,6 @@
             </div>
         </nav>
 
-        <div class="container mt-3 live-stats-bar" v-if="liveStats && socketStatus === 'connected'">
-            <div class="alert alert-info d-flex justify-content-around align-items-center p-2">
-                <small><strong>实时系统 (来自 /live):</strong></small>
-                <small>总信号: {{ liveStats.total_signals }}</small>
-                <small>已验证: {{ liveStats.total_verified }}</small>
-                <small>胜率: <span :class="getWinRateClass(liveStats.win_rate)">{{ liveStats.win_rate?.toFixed(2) }}%</span></small>
-                <small>总P&L(金额): <span :class="getPnlClass(liveStats.total_profit_amount)">{{ liveStats.total_profit_amount?.toFixed(2) || '0.00' }} USDT</span></small>
-            </div>
-        </div>
 
         <div class="container mt-4">
             <div class="row">
