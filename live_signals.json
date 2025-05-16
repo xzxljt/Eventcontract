@@ -545,11 +545,17 @@
         "investment_amount": 5.0,
         "profit_rate_pct": 80.0,
         "loss_rate_pct": 100.0,
-        "verified": false,
+        "verified": true,
         "origin_config_id": "ebeca62278954991b0bbc788649e25f3",
         "autox_triggered_info": {
             "status": "no_available_client_for_broadcast"
-        }
+        },
+        "actual_end_price": 2573.21,
+        "price_change_pct": 0.2177,
+        "result": true,
+        "pnl_pct": 0.2177,
+        "actual_profit_loss_amount": 4.0,
+        "verify_time": "2025-05-17T05:49:57.167078+08:00"
     },
     {
         "id": "ETHUSDT_1m_simple_rsi_1747431660_291",
@@ -570,11 +576,17 @@
         "investment_amount": 5.0,
         "profit_rate_pct": 80.0,
         "loss_rate_pct": 100.0,
-        "verified": false,
+        "verified": true,
         "origin_config_id": "ebeca62278954991b0bbc788649e25f3",
         "autox_triggered_info": {
             "status": "no_available_client_for_broadcast"
-        }
+        },
+        "actual_end_price": 2569.89,
+        "price_change_pct": 0.0631,
+        "result": true,
+        "pnl_pct": 0.0631,
+        "actual_profit_loss_amount": 4.0,
+        "verify_time": "2025-05-17T05:51:57.679920+08:00"
     },
     {
         "id": "ETHUSDT_1m_simple_rsi_1747431780_660",
@@ -595,11 +607,17 @@
         "investment_amount": 5.0,
         "profit_rate_pct": 80.0,
         "loss_rate_pct": 100.0,
-        "verified": false,
+        "verified": true,
         "origin_config_id": "ebeca62278954991b0bbc788649e25f3",
         "autox_triggered_info": {
             "status": "no_available_client_for_broadcast"
-        }
+        },
+        "actual_end_price": 2565.0,
+        "price_change_pct": -0.2974,
+        "result": false,
+        "pnl_pct": -0.2974,
+        "actual_profit_loss_amount": -5.0,
+        "verify_time": "2025-05-17T05:53:58.181724+08:00"
     },
     {
         "id": "ETHUSDT_1m_simple_rsi_1747431900_576",
@@ -620,11 +638,17 @@
         "investment_amount": 5.0,
         "profit_rate_pct": 80.0,
         "loss_rate_pct": 100.0,
-        "verified": false,
+        "verified": true,
         "origin_config_id": "ebeca62278954991b0bbc788649e25f3",
         "autox_triggered_info": {
             "status": "no_available_client_for_broadcast"
-        }
+        },
+        "actual_end_price": 2563.74,
+        "price_change_pct": -0.4249,
+        "result": false,
+        "pnl_pct": -0.4249,
+        "actual_profit_loss_amount": -5.0,
+        "verify_time": "2025-05-17T05:55:58.689993+08:00"
     },
     {
         "id": "ETHUSDT_1m_simple_rsi_1747432080_258",
@@ -645,10 +669,16 @@
         "investment_amount": 5.0,
         "profit_rate_pct": 80.0,
         "loss_rate_pct": 100.0,
-        "verified": false,
+        "verified": true,
         "origin_config_id": "ebeca62278954991b0bbc788649e25f3",
         "autox_triggered_info": {
             "status": "no_available_client_for_broadcast"
-        }
+        },
+        "actual_end_price": 2565.65,
+        "price_change_pct": -0.2236,
+        "result": false,
+        "pnl_pct": -0.2236,
+        "actual_profit_loss_amount": -5.0,
+        "verify_time": "2025-05-17T05:58:58.885947+08:00"
     }
 ]

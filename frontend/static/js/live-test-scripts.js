@@ -187,12 +187,14 @@ const app = createApp({
             }
 
             // 按信号时间倒序排列
-            return filtered.sort((a, b) => {
+            const sortedFiltered = filtered.sort((a, b) => {
                 const timeA = a.signal_time ? new Date(a.signal_time).getTime() : 0;
                 const timeB = b.signal_time ? new Date(b.signal_time).getTime() : 0;
                 if (isNaN(timeA) || isNaN(timeB)) return 0; // 处理无效日期
                 return timeB - timeA;
             });
+            console.log("LiveTest: displayedManagedSignals computed property returning", sortedFiltered.length, "signals."); // Added log
+            return sortedFiltered;
             // .slice(0, 50); // 可选：如果信号过多，可以限制初始显示数量或实现分页
         });
 
@@ -239,6 +241,20 @@ const app = createApp({
                 average_pnl_pct: averageFilteredPnlPct // Add average PnL (%)
             };
         });
+
+        // --- Computed Property for Filtered Total Profit/Loss Amount ---
+        const filteredTotalProfitLossAmount = computed(() => {
+            const filteredSignals = displayedManagedSignals.value;
+            let totalProfitLoss = 0;
+            filteredSignals.forEach(signal => {
+                // Only include signals that are verified and have a valid actual_profit_loss_amount
+                if (signal.verified && signal.actual_profit_loss_amount !== null && signal.actual_profit_loss_amount !== undefined && !isNaN(signal.actual_profit_loss_amount)) {
+                    totalProfitLoss += parseFloat(signal.actual_profit_loss_amount);
+                }
+            });
+            return totalProfitLoss;
+        });
+
 
         watch(displayedManagedSignals, (newValue) => {
             console.log("LiveTest: displayedManagedSignals updated:", newValue);
@@ -1162,6 +1178,7 @@ const app = createApp({
             // Computed
             displayedManagedSignals,
             filteredWinRateStats, // Add the new computed property here
+            filteredTotalProfitLossAmount, // Expose the new computed property
             // +++ START: PAGINATION RETURN +++
             currentPage,
             itemsPerPage,
