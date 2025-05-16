@@ -88,7 +88,8 @@ const app = createApp({
         });
         
         // +++ START: ADDED/MODIFIED STATE +++
-        const activeTestConfigDetails = ref(null); // 用于存储当前活动配置的完整细节，包括余额
+        // 用于存储当前活动配置的完整细节，包括余额和盈亏
+        const activeTestConfigDetails = ref(null);
         // +++ END: ADDED/MODIFIED STATE +++
 
         const selectedSignalIds = ref([]); 
@@ -206,6 +207,38 @@ const app = createApp({
             return displayedManagedSignals.value.slice(start, end);
         });
         // +++ END: PAGINATION COMPUTED +++
+
+        // --- Computed Properties for Filtered Signals Stats ---
+        const filteredWinRateStats = computed(() => {
+            const filteredSignals = displayedManagedSignals.value;
+            const totalFiltered = filteredSignals.length;
+            const verifiedFiltered = filteredSignals.filter(s => s.verified).length;
+            const correctFiltered = filteredSignals.filter(s => s.verified && s.result).length;
+
+            const winRateFiltered = verifiedFiltered > 0 ? (correctFiltered / verifiedFiltered) * 100 : 0;
+
+            // Calculate Total and Average Reference PnL (%) for filtered signals
+            let totalFilteredPnlPct = 0;
+            let pnlCount = 0;
+            filteredSignals.forEach(signal => {
+                // Only include signals that have a valid numeric pnl_pct
+                if (signal.pnl_pct !== null && signal.pnl_pct !== undefined && !isNaN(signal.pnl_pct)) {
+                    totalFilteredPnlPct += parseFloat(signal.pnl_pct);
+                    pnlCount++;
+                }
+            });
+
+            const averageFilteredPnlPct = pnlCount > 0 ? totalFilteredPnlPct / pnlCount : 0;
+
+            return {
+                total_signals: totalFiltered,
+                total_verified: verifiedFiltered,
+                total_correct: correctFiltered,
+                win_rate: winRateFiltered,
+                total_pnl_pct: totalFilteredPnlPct, // Add total PnL (%)
+                average_pnl_pct: averageFilteredPnlPct // Add average PnL (%)
+            };
+        });
 
         watch(displayedManagedSignals, (newValue) => {
             console.log("LiveTest: displayedManagedSignals updated:", newValue);
@@ -463,6 +496,7 @@ const app = createApp({
             }
         });
 
+
         // --- WebSocket Logic ---
         const connectWebSocket = () => {
             if (socket.value && (socket.value.readyState === WebSocket.OPEN || socket.value.readyState === WebSocket.CONNECTING)) {
@@ -513,8 +547,13 @@ const app = createApp({
                             localStorage.setItem('liveTestConfigId', currentConfigId.value);
                             showServerMessage(message.data.message || '配置已成功应用！', false, 5000);
                             if(message.data.applied_config) {
+                                console.log("LiveTest: Received applied_config:", message.data.applied_config);
                                 populateUiFromConfigDetails(message.data.applied_config);
-                                activeTestConfigDetails.value = message.data.applied_config; // 更新活动配置细节
+                                // 更新活动配置细节
+                                activeTestConfigDetails.value = message.data.applied_config;
+                                console.log("LiveTest: activeTestConfigDetails after config_set_confirmation:", activeTestConfigDetails.value);
+                            } else {
+                                console.log("LiveTest: config_set_confirmation received, but no applied_config in message.data");
                             }
                         } else {
                             showServerMessage(message.data.message || '配置应用失败。', true, 5000);
@@ -522,10 +561,13 @@ const app = createApp({
                         }
                         break;
                     case "session_restored":
-                        currentConfigId.value = message.data.config_id; 
+                        console.log("LiveTest: Received session_restored message:", message.data);
+                        currentConfigId.value = message.data.config_id;
                         localStorage.setItem('liveTestConfigId', currentConfigId.value);
                         populateUiFromConfigDetails(message.data.config_details);
-                        activeTestConfigDetails.value = message.data.config_details; // 更新活动配置细节
+                        // 更新活动配置细节
+                        activeTestConfigDetails.value = message.data.config_details;
+                        console.log("LiveTest: activeTestConfigDetails after session_restored:", activeTestConfigDetails.value);
                         showServerMessage(`会话已恢复 (ID: ${currentConfigId.value.substring(0,8)}...)`, false, 4000);
                         break;
                     case "session_not_found":
@@ -539,7 +581,8 @@ const app = createApp({
                             showServerMessage(`测试 (ID: ${message.data.stopped_config_id ? message.data.stopped_config_id.substring(0,8) : 'N/A'}...) 已成功停止。`, false, 5000);
                             currentConfigId.value = null;
                             localStorage.removeItem('liveTestConfigId');
-                            activeTestConfigDetails.value = null; // 清理活动配置细节
+                            // 清理活动配置细节
+                            activeTestConfigDetails.value = null;
                         } else {
                             showServerMessage(message.data.message || '停止测试失败。', true, 5000);
                         }
@@ -548,17 +591,30 @@ const app = createApp({
                     
                     // +++ START: NEW CASE HANDLER +++
                     case "config_specific_balance_update":
+                        console.log("LiveTest: Received config_specific_balance_update message:", message.data);
+                        console.log("LiveTest: Current config ID:", currentConfigId.value);
                         if (message.data && message.data.config_id === currentConfigId.value) {
+                            console.log("LiveTest: Config ID matches. Updating balance and PnL.");
                             if (activeTestConfigDetails.value) {
+                                console.log("LiveTest: activeTestConfigDetails exists.");
                                 if (message.data.new_balance !== undefined) {
                                     activeTestConfigDetails.value.current_balance = message.data.new_balance;
+                                    console.log("LiveTest: Updated current_balance to:", activeTestConfigDetails.value.current_balance);
                                 }
-                                if (message.data.current_pnl_amount !== undefined) {
-                                    activeTestConfigDetails.value.current_pnl_amount = message.data.current_pnl_amount;
+                                if (message.data.total_profit_loss_amount !== undefined) {
+                                    activeTestConfigDetails.value.total_profit_loss_amount = message.data.total_profit_loss_amount; // Corrected field name
+                                    console.log("LiveTest: Updated total_profit_loss_amount to:", activeTestConfigDetails.value.total_profit_loss_amount);
+                                } else {
+                                     console.log("LiveTest: message.data.total_profit_loss_amount is undefined.");
                                 }
+                                console.log("LiveTest: activeTestConfigDetails after balance update:", activeTestConfigDetails.value); // Added log
+                            } else {
+                                console.log("LiveTest: activeTestConfigDetails is null.");
                             }
                             // 可选: 短暂显示余额更新消息
                             // showServerMessage(`当前测试余额更新为: ${message.data.new_balance.toFixed(2)} USDT (本次盈亏: ${message.data.last_pnl_amount.toFixed(2)})`, false, 3000);
+                        } else {
+                             console.log("LiveTest: Config ID does NOT match or message.data is invalid.");
                         }
                         break;
                     // +++ END: NEW CASE HANDLER +++
@@ -1105,6 +1161,7 @@ const app = createApp({
 
             // Computed
             displayedManagedSignals,
+            filteredWinRateStats, // Add the new computed property here
             // +++ START: PAGINATION RETURN +++
             currentPage,
             itemsPerPage,

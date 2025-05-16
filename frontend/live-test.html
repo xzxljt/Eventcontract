@@ -313,18 +313,18 @@
                         </div>
                         <div class="card-body">
                             <div class="mb-4">
-                                <h6 class="text-primary">全局信号统计 (实时)</h6>
+                                <h6 class="text-primary">信号统计 (基于筛选条件)</h6>
                                 <div class="row mt-2 text-center small">
-                                    <div class="col-md-3 col-6 mb-2"><div class="card bg-light p-1 h-100"><small class="d-block">总信号</small><h6 class="mb-0">{{ stats.total_signals }}</h6></div></div>
-                                    <div class="col-md-3 col-6 mb-2"><div class="card bg-light p-1 h-100"><small class="d-block">已验证</small><h6 class="mb-0">{{ stats.total_verified }}</h6></div></div>
-                                    <div class="col-md-3 col-6 mb-2"><div class="card bg-light p-1 h-100"><small class="d-block">正确数</small><h6 class="mb-0">{{ stats.total_correct }}</h6></div></div>
-                                    <div class="col-md-3 col-6 mb-2"><div class="card bg-light p-1 h-100"><small class="d-block">胜率</small><h6 class="mb-0" :class="getWinRateClass(stats.win_rate)">{{ stats.win_rate?.toFixed(2) }}%</h6></div></div>
-                                    <div class="col-md-4 col-6 mb-2"><div class="card bg-light p-1 h-100"><small class="d-block">总参考PnL(%)</small><h6 class="mb-0" :class="getPnlClass(stats.total_pnl_pct)">{{ stats.total_pnl_pct?.toFixed(2) }}%</h6></div></div>
-                                    <div class="col-md-4 col-6 mb-2"><div class="card bg-light p-1 h-100"><small class="d-block">平均参考PnL(%)</small><h6 class="mb-0" :class="getPnlClass(stats.average_pnl_pct)">{{ stats.average_pnl_pct?.toFixed(2) }}%</h6></div></div>
+                                    <div class="col-md-3 col-6 mb-2"><div class="card bg-light p-1 h-100"><small class="d-block">总信号</small><h6 class="mb-0">{{ filteredWinRateStats.total_signals }}</h6></div></div>
+                                    <div class="col-md-3 col-6 mb-2"><div class="card bg-light p-1 h-100"><small class="d-block">已验证</small><h6 class="mb-0">{{ filteredWinRateStats.total_verified }}</h6></div></div>
+                                    <div class="col-md-3 col-6 mb-2"><div class="card bg-light p-1 h-100"><small class="d-block">正确数</small><h6 class="mb-0">{{ filteredWinRateStats.total_correct }}</h6></div></div>
+                                    <div class="col-md-3 col-6 mb-2"><div class="card bg-light p-1 h-100"><small class="d-block">胜率</small><h6 class="mb-0" :class="getWinRateClass(filteredWinRateStats.win_rate)">{{ filteredWinRateStats.win_rate?.toFixed(2) }}%</h6></div></div>
+                                    <div class="col-md-4 col-6 mb-2"><div class="card bg-light p-1 h-100"><small class="d-block">总参考PnL(%)</small><h6 class="mb-0" :class="getPnlClass(filteredWinRateStats.total_pnl_pct)">{{ filteredWinRateStats.total_pnl_pct?.toFixed(2) }}%</h6></div></div>
+                                    <div class="col-md-4 col-6 mb-2"><div class="card bg-light p-1 h-100"><small class="d-block">平均参考PnL(%)</small><h6 class="mb-0" :class="getPnlClass(filteredWinRateStats.average_pnl_pct)">{{ filteredWinRateStats.average_pnl_pct?.toFixed(2) }}%</h6></div></div>
                                     <div v-if="currentConfigId && activeTestConfigDetails" class="col-md-4 col-12 mb-2"> <!-- 调整 col-md-X 以适应布局 -->
-                                        <div class="card p-1 h-100" :class="activeTestConfigDetails.current_pnl_amount >= 0 ? 'bg-success bg-opacity-10' : 'bg-danger bg-opacity-10'"> <!-- 使用不同背景强调 -->
+                                        <div class="card p-1 h-100" :class="activeTestConfigDetails.total_profit_loss_amount >= 0 ? 'bg-success bg-opacity-10' : 'bg-danger bg-opacity-10'"> <!-- 使用不同背景强调 -->
                                             <small class="d-block">当前测试盈亏金额(USDT)</small>
-                                            <h6 class="mb-0" :class="getPnlClass(activeTestConfigDetails.current_pnl_amount)">{{ activeTestConfigDetails.current_pnl_amount?.toFixed(2) || '0.00' }}</h6>
+                                            <h6 class="mb-0" :class="getPnlClass(activeTestConfigDetails.total_profit_loss_amount)">{{ activeTestConfigDetails.total_profit_loss_amount?.toFixed(2) || '0.00' }}</h6>
                                         </div>
                                     </div>
                                     <div v-if="currentConfigId && activeTestConfigDetails" class="col-md-4 col-12 mb-2"> <!-- 调整 col-md-X 以适应布局 -->
@@ -340,24 +340,17 @@
                             <div class="mt-4">
                                 <div class="d-flex justify-content-between align-items-center mb-2">
                                     <h6 class="text-success mb-0">信号管理</h6>
-                                    <div class="form-check form-check-inline">
-                                        <input class="form-check-input" type="radio" name="signalDisplayMode" id="displayCurrentSignals" value="current" v-model="signalDisplayMode">
-                                        <label class="form-check-label small" for="displayCurrentSignals">当前配置信号</label>
-                                    </div>
-                                    <div class="form-check form-check-inline">
-                                        <input class="form-check-input" type="radio" name="signalDisplayMode" id="displayHistoricalSignals" value="historical" v-model="signalDisplayMode">
-                                        <label class="form-check-label small" for="displayHistoricalSignals">历史信号</label>
-                                    </div>
-                                    <div>
-                                        <button class="btn btn-danger btn-sm" @click="deleteSelectedSignals"
-                                                :disabled="selectedSignalIds.length === 0 || deletingSignals">
-                                            <span v-if="deletingSignals" class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
-                                            删除选中 ({{ selectedSignalIds.length }})
-                                        </button>
+                                    <div class="d-flex align-items-center">
+                                        <div>
+                                            <button class="btn btn-danger btn-sm" @click="deleteSelectedSignals"
+                                                    :disabled="selectedSignalIds.length === 0 || deletingSignals">
+                                                <span v-if="deletingSignals" class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
+                                                删除选中 ({{ selectedSignalIds.length }})
+                                            </button>
+                                        </div>
                                     </div>
                                 </div>
 
-                                <!-- 信号筛选 -->
                                <!-- 信号筛选 -->
                                <div class="row gx-2 gy-1 mb-2 small align-items-end">
                                    <div class="col-md-3 col-6">
@@ -386,15 +379,27 @@
                                        </select>
                                    </div>
                                </div>
-                               <!-- 置信度范围 -->
+                               <!-- 置信度范围和信号显示模式按钮 -->
                                <div class="row gx-2 gy-1 mb-2 small align-items-end">
-                                   <div class="col-md-6 col-12">
-                                      <label class="form-label x-small">置信度 ({{ signalManagementFilter.minConfidence }} - {{ signalManagementFilter.maxConfidence }})</label>
-                                      <div class="d-flex">
-                                          <input type="number" class="form-control form-control-sm me-1" v-model.number="signalManagementFilter.minConfidence" min="0" max="100" placeholder="最小">
-                                          <input type="number" class="form-control form-control-sm" v-model.number="signalManagementFilter.maxConfidence" min="0" max="100" placeholder="最大">
-                                      </div>
-                                  </div>
+                                   <div class="col-md-12 col-12 d-flex align-items-end">
+                                       <div class="btn-group me-3" role="group" aria-label="信号显示模式">
+                                           <button type="button" class="btn btn-sm"
+                                                   :class="{'btn-primary': signalDisplayMode === 'current', 'btn-outline-secondary': signalDisplayMode !== 'current'}"
+                                                   @click="signalDisplayMode = 'current'">
+                                               当前配置信号
+                                           </button>
+                                           <button type="button" class="btn btn-sm"
+                                                   :class="{'btn-primary': signalDisplayMode === 'historical', 'btn-outline-secondary': signalDisplayMode !== 'historical'}"
+                                                   @click="signalDisplayMode = 'historical'">
+                                               历史信号
+                                           </button>
+                                       </div>
+                                       <div class="flex-grow-1">
+                                          <label class="form-label x-small">最低置信度 ({{ signalManagementFilter.minConfidence }})</label>
+                                          <input type="range" class="form-range form-range-sm" min="0" max="100" step="1"
+                                                 v-model.number="signalManagementFilter.minConfidence">
+                                       </div>
+                                   </div>
                                </div>
                                <!-- 开始时间, 结束时间 -->
                                <div class="row gx-2 gy-1 mb-2 small align-items-end">

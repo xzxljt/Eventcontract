@@ -1,5 +1,6 @@
 # --- START OF FILE main.py ---
 
+# 导入必要的库
 import os
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Query, Depends, WebSocket, WebSocketDisconnect
@@ -27,23 +28,25 @@ from backtester import Backtester
 from timezone_utils import to_china_timezone, to_utc, now_china, now_utc, format_for_display, parse_frontend_datetime, CHINA_TIMEZONE
 from binance_client import BinanceClient
 
-# --- 全局变量 ---
+# --- 全局变量和配置 ---
+# 存储策略参数的配置字典
 strategy_parameters_config: Dict[str, Any] = {
     "prediction_strategies": {},
     "investment_strategies": {}
 }
-STRATEGY_PARAMS_FILE = "config/strategy_parameters.json"
-AUTOX_CLIENTS_FILE = "config/autox_clients_data.json" # AutoX 客户端数据文件
+STRATEGY_PARAMS_FILE = "config/strategy_parameters.json" # 策略参数配置文件路径
+AUTOX_CLIENTS_FILE = "config/autox_clients_data.json" # AutoX 客户端数据文件路径
 
-# 新增：用于存储从文件加载的持久化AutoX客户端数据
-# 这个字典将以 client_id 为键
+# 用于存储从文件加载的持久化AutoX客户端数据
+# 这个字典将以 client_id 为键，存储客户端的注册信息和最新状态
 persistent_autox_clients_data: Dict[str, Dict[str, Any]] = {}
 
 
+# 初始化 FastAPI 应用
 app = FastAPI(
-    title="币安事件合约交易信号机器人",
-    description="基于技术指标的币安事件合约交易信号生成和回测系统",
-    version="1.4.2" # 版本更新: 异步IO修复
+    title="币安事件合约交易信号机器人", # 应用标题
+    description="基于技术指标的币安事件合约交易信号生成和回测系统", # 应用描述
+    version="1.4.2" # 应用版本
 )
 
 # --- WebSocket 连接管理器 (保持不变) ---
@@ -496,28 +499,33 @@ async def background_signal_verifier():
                     # --- MODIFICATION FOR CONFIG-SPECIFIC BALANCE UPDATE ---
                     config_id_of_signal = signal_copy_to_verify.get('origin_config_id')
                     if config_id_of_signal and actual_pnl_amt is not None:
-                        new_config_balance_val = None
+                        updated_config_data = None
                         with running_live_test_configs_lock: # 保护对 running_live_test_configs 的写操作
                             if config_id_of_signal in running_live_test_configs:
-                                # 获取当前余额，如果不存在则从 investment_settings.simulatedBalance 初始化，再没有就用一个基准值（如1000或0）
-                                current_config_bal = running_live_test_configs[config_id_of_signal].get('current_balance')
-                                if current_config_bal is None: 
-                                     # 理论上 set_runtime_config 时已确保 current_balance 存在
-                                     sim_bal_from_settings = running_live_test_configs[config_id_of_signal].get('investment_settings', {}).get('simulatedBalance')
+                                config_entry = running_live_test_configs[config_id_of_signal]
+                                
+                                # 更新当前余额 (每次交易后的余额)
+                                current_config_bal = config_entry.get('current_balance')
+                                if current_config_bal is None:
+                                     sim_bal_from_settings = config_entry.get('investment_settings', {}).get('simulatedBalance')
                                      current_config_bal = sim_bal_from_settings if sim_bal_from_settings is not None else 1000.0 # Fallback
                                      print(f"警告: Config ID {config_id_of_signal} 在验证时缺少 current_balance, 已从 simulatedBalance 或默认值回退。")
+                                config_entry['current_balance'] = current_config_bal + (signal_copy_to_verify.get('investment_amount', 0) + actual_pnl_amt)
                                 
-                                # 将原始投资额和实际盈亏一起加回余额
-                                running_live_test_configs[config_id_of_signal]['current_balance'] = current_config_bal + (signal_copy_to_verify.get('investment_amount', 0) + actual_pnl_amt)
-                                new_config_balance_val = running_live_test_configs[config_id_of_signal]['current_balance']
+                                # 累加总盈亏额
+                                current_total_pnl = config_entry.get('total_profit_loss_amount', 0.0) # 如果不存在，初始化为0
+                                config_entry['total_profit_loss_amount'] = current_total_pnl + actual_pnl_amt
+                                
+                                updated_config_data = config_entry.copy() # 复制更新后的数据用于广播
                         
-                        if new_config_balance_val is not None:
+                        if updated_config_data:
                             updated_config_balance_payload = {
                                 "type": "config_specific_balance_update",
                                 "data": {
                                     "config_id": config_id_of_signal,
-                                    "new_balance": new_config_balance_val,
-                                    "last_pnl_amount": actual_pnl_amt 
+                                    "new_balance": round(updated_config_data.get('current_balance', 0.0), 2), # 发送更新后的余额
+                                    "last_pnl_amount": round(actual_pnl_amt, 2), # 发送单次交易盈亏
+                                    "total_profit_loss_amount": round(updated_config_data.get('total_profit_loss_amount', 0.0), 2) # 新增：发送累加总盈亏
                                 }
                             }
                             await manager.broadcast_json(
@@ -638,7 +646,7 @@ async def handle_kline_data(kline_data: dict):
                 binance_client.get_historical_klines,
                 live_test_config_data['symbol'],
                 live_test_config_data['interval'],
-                None, None, 200 
+                None, None, 100 
             )
             
             if df_klines.empty:
@@ -1025,7 +1033,8 @@ async def websocket_endpoint(websocket: WebSocket):
                     "event_period": config_payload_data["event_period"],
                     "investment_settings": config_payload_data["investment_settings"], 
                     "autox_enabled": config_payload_data.get("autox_enabled", True),
-                    "current_balance": initial_current_balance # 初始化会话余额
+                    "current_balance": initial_current_balance, # 初始化会话余额
+                    "total_profit_loss_amount": 0.0 # 新增：初始化总盈亏额
                 }
 
                 try:
