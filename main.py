@@ -542,8 +542,8 @@ async def _send_autox_command(client_ws: WebSocket, command: Dict[str, Any]): # 
         print(f"向AutoX客户端发送指令失败: {e}")
 
 
-async def handle_kline_data(kline_data: dict): # 重大修改处
-    global live_signals, strategy_parameters_config, running_live_test_configs, active_autox_clients
+async def handle_kline_data(kline_data: dict):
+    global live_signals, strategy_parameters_config, running_live_test_configs, active_autox_clients, binance_client
     try:
         kline_symbol = kline_data.get('symbol')
         kline_interval = kline_data.get('interval')
@@ -552,11 +552,12 @@ async def handle_kline_data(kline_data: dict): # 重大修改处
             return
 
         active_test_configs_for_this_kline = []
-        with running_live_test_configs_lock: # 保护对 running_live_test_configs 的读取
+        with running_live_test_configs_lock:
             for config_id, config_content in running_live_test_configs.items():
                 if config_content.get('symbol') == kline_symbol and \
                    config_content.get('interval') == kline_interval:
-                    config_content_copy = config_content.copy() # 浅拷贝即可，因为下面主要读取
+                    config_content_copy = config_content.copy()
+                    # _should_autox_trigger 通常由前端配置或默认为 True
                     config_content_copy['_should_autox_trigger'] = config_content.get('autox_enabled', True)
                     active_test_configs_for_this_kline.append({**config_content_copy, '_config_id': config_id})
 
@@ -565,36 +566,27 @@ async def handle_kline_data(kline_data: dict): # 重大修改处
 
         for live_test_config_data in active_test_configs_for_this_kline:
             pred_strat_id = live_test_config_data['prediction_strategy_id']
-            pred_params_from_config = live_test_config_data.get('prediction_strategy_params') # 注意这里可能是None
+            pred_params_from_config = live_test_config_data.get('prediction_strategy_params')
             
-            # 获取策略参数的逻辑 (与原版类似，但确保线程安全地访问 strategy_parameters_config)
             final_pred_params = None
             if pred_params_from_config is not None:
                 final_pred_params = pred_params_from_config
             else:
-                # strategy_parameters_config 是全局的，读取时理论上也应考虑并发
-                # 但它通常在启动时加载，运行时主要被读取，如果频繁修改则需要锁
-                # 这里假设它不被 handle_kline_data 这个热路径频繁修改
                 final_pred_params = strategy_parameters_config.get("prediction_strategies", {}).get(pred_strat_id, {})
             
-            if not final_pred_params: # 如果还是没有，尝试从策略定义获取默认值
+            if not final_pred_params:
                 pred_def = next((s for s in get_available_strategies() if s['id'] == pred_strat_id), None)
                 if pred_def and 'parameters' in pred_def:
                     final_pred_params = {p['name']: p['default'] for p in pred_def['parameters']}
             
-            if final_pred_params is None: final_pred_params = {} # 确保 pred_params 不是 None
+            if final_pred_params is None: final_pred_params = {}
 
-            # --- 修改：将 get_historical_klines 移至线程池 ---
-            # 传递必要的参数给 to_thread
             df_klines = await asyncio.to_thread(
                 binance_client.get_historical_klines,
                 live_test_config_data['symbol'],
                 live_test_config_data['interval'],
-                None, # start_time
-                None, # end_time
-                200   # limit
+                None, None, 200 # 获取最近200条K线用于信号生成
             )
-            # --- 结束修改 ---
             
             if df_klines.empty:
                 print(f"Config ID {live_test_config_data['_config_id']}: 获取历史K线数据为空，跳过。")
@@ -605,13 +597,10 @@ async def handle_kline_data(kline_data: dict): # 重大修改处
                 print(f"Config ID {live_test_config_data['_config_id']}: 未找到预测策略 {pred_strat_id}，跳过。")
                 continue
             
-            # 策略的 generate_signals 通常是CPU密集型，如果非常耗时，也应考虑移到线程池
-            # 但一般技术指标计算在200条数据上应该很快
-            signal_df = pred_strat_info['class'](params=final_pred_params).generate_signals(df_klines.copy()) # 传递DataFrame副本
+            signal_df = pred_strat_info['class'](params=final_pred_params).generate_signals(df_klines.copy())
             
             if signal_df.empty or 'signal' not in signal_df.columns or 'confidence' not in signal_df.columns:
-                # print(f"Config ID {live_test_config_data['_config_id']}: 生成的信号DataFrame不符合预期，跳过。")
-                continue
+                continue # 没有信号或信号格式不符
             
             latest_sig_data = signal_df.iloc[-1]
             sig_val = int(latest_sig_data.get('signal', 0))
@@ -619,21 +608,24 @@ async def handle_kline_data(kline_data: dict): # 重大修改处
             current_confidence_threshold = live_test_config_data.get('confidence_threshold', 0)
 
             if sig_val != 0 and conf_val >= current_confidence_threshold:
-                event_period_minutes = {'10m': 10, '30m': 30, '1h': 60, '1d': 1440}.get(live_test_config_data.get("event_period", "10m"), 10)
-                sig_time_dt = datetime.fromtimestamp(kline_data.get('kline_start_time', time.time() * 1000) / 1000, tz=timezone.utc)
-                exp_end_time_dt = sig_time_dt + timedelta(minutes=event_period_minutes)
-                sig_price = float(latest_sig_data['close']) # 确保 signal_df 有 'close' 列
+                event_period_minutes = {'10m': 10, '30m': 30, '1h': 60, '1d': 1440}.get(
+                    live_test_config_data.get("event_period", "10m"), 10
+                )
                 
+                # 使用当前UTC时间作为信号时间和事件周期计算的基准
+                sig_time_dt = now_utc() 
+                exp_end_time_dt = sig_time_dt + timedelta(minutes=event_period_minutes)
+                sig_price = float(latest_sig_data['close']) # K线收盘价作为信号价格
+                
+                # 计算投资金额逻辑 (与原版一致)
                 inv_amount = 20.0; profit_pct = 80.0; loss_pct = 100.0
                 inv_settings_from_config = live_test_config_data.get("investment_settings")
-
                 if inv_settings_from_config:
                     try:
                         live_inv_model = InvestmentStrategySettings(**inv_settings_from_config)
                         profit_pct = live_inv_model.profitRate; loss_pct = live_inv_model.lossRate
                         inv_strat_id_cfg = live_inv_model.strategy_id
                         
-                        # 投资策略参数组合逻辑 (与原版一致)
                         inv_specific_params_cfg = inv_settings_from_config.get('investment_strategy_specific_params', {})
                         final_inv_calc_params_from_global = strategy_parameters_config.get("investment_strategies", {}).get(inv_strat_id_cfg, {})
                         inv_strat_def_cfg = next((s for s in get_available_investment_strategies() if s['id'] == inv_strat_id_cfg), None)
@@ -644,7 +636,7 @@ async def handle_kline_data(kline_data: dict): # 重大修改处
                         final_inv_calc_params = {
                             **default_inv_params_from_def, 
                             **final_inv_calc_params_from_global, 
-                            **(inv_specific_params_cfg or {}) # 确保 inv_specific_params_cfg 不是 None
+                            **(inv_specific_params_cfg or {})
                         }
                         
                         if inv_strat_id_cfg == 'fixed' and 'amount' not in final_inv_calc_params:
@@ -657,80 +649,116 @@ async def handle_kline_data(kline_data: dict): # 重大修改处
                                 current_balance_for_calc = live_inv_model.simulatedBalance
                             inv_amount = inv_instance.calculate_investment( 
                                 current_balance=current_balance_for_calc, 
-                                previous_trade_result=None, # 实时场景通常没有前一笔交易结果
+                                previous_trade_result=None, # 实时场景通常不直接依赖上一笔
                                 base_investment_from_settings=live_inv_model.amount 
                             )
                             inv_amount = max(live_inv_model.minAmount, min(live_inv_model.maxAmount, inv_amount))
-                        else: # 未找到投资策略定义，使用基础金额
+                        else: 
                             inv_amount = max(live_inv_model.minAmount, min(live_inv_model.maxAmount, live_inv_model.amount))
-                    except Exception as e: 
-                        print(f"实时信号投资金额计算错误 (Config ID: {live_test_config_data['_config_id']}): {e}\n{traceback.format_exc()}")
-                        inv_amount = live_test_config_data.get("investment_settings", {}).get("amount", 20.0) # 回退到默认
+                    except Exception as e_inv_calc: 
+                        print(f"实时信号投资金额计算错误 (Config ID: {live_test_config_data['_config_id']}): {e_inv_calc}\n{traceback.format_exc()}")
+                        inv_amount = live_test_config_data.get("investment_settings", {}).get("amount", 20.0) # Fallback
 
                 signal_id_str = f"{live_test_config_data['symbol']}_{live_test_config_data['interval']}_{pred_strat_id}_{int(sig_time_dt.timestamp())}_{random.randint(100,999)}"
+                
                 new_live_signal = {
                     'id': signal_id_str,
                     'symbol': live_test_config_data['symbol'], 'interval': live_test_config_data['interval'], 
                     'prediction_strategy_id': pred_strat_id, 
-                    'prediction_strategy_params': final_pred_params, # 使用已确定的 final_pred_params
-                    'signal_time': format_for_display(sig_time_dt), 'signal': sig_val, 'confidence': round(conf_val, 2), 
+                    'prediction_strategy_params': final_pred_params, 
+                    'signal_time': format_for_display(sig_time_dt),
+                    'signal': sig_val, 'confidence': round(conf_val, 2), 
                     'signal_price': sig_price, 'event_period': live_test_config_data.get("event_period", "10m"),
                     'expected_end_time': format_for_display(exp_end_time_dt),
                     'investment_amount': round(inv_amount, 2),
                     'profit_rate_pct': profit_pct, 'loss_rate_pct': loss_pct,
                     'verified': False, 'origin_config_id': live_test_config_data['_config_id'],
-                    'autox_triggered_info': None
+                    'autox_triggered_info': [] # MODIFIED: Initialize as a list
                 }
                 
                 should_trigger_autox = live_test_config_data.get('_should_autox_trigger', False)
-                AUTOX_GLOBAL_ENABLED = True # 假设全局开启
+                AUTOX_GLOBAL_ENABLED = True # Assuming global AutoX is enabled
 
                 if should_trigger_autox and AUTOX_GLOBAL_ENABLED:
-                    target_autox_client_ws = None
-                    target_client_id = None # 用于日志
-                    with autox_clients_lock: # 保护对 active_autox_clients 的访问
+                    clients_to_send_command_to = [] # Stores {"ws": ws_object, "command": command_dict, "client_id": client_id_str}
+
+                    with autox_clients_lock: 
+                        # Iterate over all active clients, DO NOT BREAK
                         for ws_client, client_info_dict in active_autox_clients.items():
                             if client_info_dict.get('status') == 'idle' and \
                                new_live_signal['symbol'] in client_info_dict.get('supported_symbols', []):
-                                target_autox_client_ws = ws_client
-                                client_info_dict['status'] = 'processing_trade' # 更新状态
+                                
+                                # Mark this client as processing_trade IN THE ACTIVE CLIENTS DICT
+                                client_info_dict['status'] = 'processing_trade' 
                                 client_info_dict['last_signal_id'] = new_live_signal['id']
                                 target_client_id = client_info_dict.get('client_id')
-                                break
+                                
+                                # Prepare the command payload (same for all triggered clients for this signal)
+                                trade_command_payload = {
+                                    "signal_id": new_live_signal['id'],
+                                    "symbol": new_live_signal['symbol'],
+                                    "direction": "up" if new_live_signal['signal'] == 1 else "down",
+                                    "amount": str(new_live_signal['investment_amount']), 
+                                    "timestamp": new_live_signal['signal_time']
+                                }
+                                command_to_send = {"type": "execute_trade", "payload": trade_command_payload}
+                                
+                                clients_to_send_command_to.append({
+                                    "ws": ws_client,
+                                    "command": command_to_send,
+                                    "client_id": target_client_id
+                                })
+                                # Note: persistent_autox_clients_data will be updated via save_autox_clients_to_file
+                                # which reads from the modified active_autox_clients.
                     
-                    if target_autox_client_ws:
-                        trade_command_payload = {
-                            "signal_id": new_live_signal['id'],
-                            "symbol": new_live_signal['symbol'],
-                            "direction": "up" if new_live_signal['signal'] == 1 else "down",
-                            "amount": str(new_live_signal['investment_amount']), # AutoX需要字符串金额
-                            "timestamp": new_live_signal['signal_time'] # ISO格式时间字符串
-                        }
-                        command_to_send = {"type": "execute_trade", "payload": trade_command_payload}
-                        await _send_autox_command(target_autox_client_ws, command_to_send)
-                        new_live_signal['autox_triggered_info'] = {
-                            "client_id": target_client_id, # 使用获取到的 client_id
-                            "sent_at": format_for_display(now_utc()),
-                            "status": "command_sent"
-                        }
-                        # 触发AutoX后，也保存一下客户端状态的变更
-                        await save_autox_clients_to_file()
+                    # Outside the lock, send commands asynchronously
+                    if clients_to_send_command_to:
+                        tasks_for_sending = []
+                        for client_trigger_details in clients_to_send_command_to:
+                            tasks_for_sending.append(
+                                _send_autox_command(client_trigger_details["ws"], client_trigger_details["command"])
+                            )
+                            # Update the signal's triggered info list
+                            new_live_signal['autox_triggered_info'].append({
+                                "client_id": client_trigger_details["client_id"], 
+                                "sent_at": format_for_display(now_utc()),
+                                "status": "command_sent" # Initial status, client will update later
+                            })
+                        
+                        if tasks_for_sending:
+                            await asyncio.gather(*tasks_for_sending) # Concurrently send all commands
+                            await save_autox_clients_to_file() # Persist the status change (e.g., to 'processing_trade')
+                        
+                        # If, for some reason, no commands were actually appended to tasks_for_sending
+                        # (though logic above should ensure it if clients_to_send_command_to is not empty)
+                        # or if all sends failed silently (not typical for _send_autox_command)
+                        if not new_live_signal['autox_triggered_info']:
+                             # This case implies an issue if clients_to_send_command_to was populated but info list is empty.
+                             # For robustness, set a specific status.
+                             new_live_signal['autox_triggered_info'] = {"status": "command_preparation_failed_or_no_client_info_logged"}
                     else:
-                        print(f"信号 {new_live_signal['id']} 符合AutoX触发条件，但未找到合适的空闲AutoX客户端。")
-                        new_live_signal['autox_triggered_info'] = {"status": "no_available_client"}
+                        # No clients met the criteria
+                        print(f"信号 {new_live_signal['id']} 符合AutoX触发条件，但未找到合适的空闲AutoX客户端进行广播。")
+                        new_live_signal['autox_triggered_info'] = {"status": "no_available_client_for_broadcast"}
 
-                with live_signals_lock: # 保护对 live_signals 的写入
+
+                with live_signals_lock: 
                     live_signals.append(new_live_signal)
                 
-                await save_live_signals_async() # 调用已修改的异步保存函数
+                await save_live_signals_async() 
                 
-                print(f"有效交易信号 (Config ID: {live_test_config_data['_config_id']}): ID={new_live_signal['id']}, 交易对={new_live_signal['symbol']}_{new_live_signal['interval']}, 方向={'上涨' if new_live_signal['signal'] == 1 else '下跌'}, 置信度={new_live_signal['confidence']:.2f}, 投资额={new_live_signal['investment_amount']:.2f}, AutoX: {new_live_signal['autox_triggered_info']}")
+                num_triggered = 0
+                if isinstance(new_live_signal.get('autox_triggered_info'), list): # Check if it's a list
+                    num_triggered = len(new_live_signal['autox_triggered_info'])
+                
+                print(f"有效交易信号 (Config ID: {live_test_config_data['_config_id']}): ID={new_live_signal['id']}, 交易对={new_live_signal['symbol']}_{new_live_signal['interval']}, 方向={'上涨' if new_live_signal['signal'] == 1 else '下跌'}, 置信度={new_live_signal['confidence']:.2f}, 投资额={new_live_signal['investment_amount']:.2f}, AutoX触发客户端数: {num_triggered}")
                 
                 await manager.broadcast_json(
                     {"type": "new_signal", "data": new_live_signal},
                     filter_func=lambda c: websocket_to_config_id_map.get(c) == new_live_signal['origin_config_id']
                 )
-    except Exception as e: print(f"处理K线数据时发生严重错误: {e}\n{traceback.format_exc()}")
+    except Exception as e:
+        print(f"处理K线数据时发生严重错误: {e}\n{traceback.format_exc()}")
 
 def kline_callback_wrapper(kline_data): # 基本不变
     try: signals_queue.put_nowait(kline_data)
