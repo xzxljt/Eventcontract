@@ -29,3 +29,5 @@ kline_cache/
 *.kline
 data_cache/
 test.py
+
+.kline_cache/
