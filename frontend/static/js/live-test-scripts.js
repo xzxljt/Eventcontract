@@ -167,19 +167,39 @@ const app = createApp({
                 });
             }
             // 应用日期时间筛选
-            const startDate = signalManagementFilter.value.startDate ? new Date(signalManagementFilter.value.startDate) : null;
-            const endDate = signalManagementFilter.value.endDate ? new Date(signalManagementFilter.value.endDate) : null;
+            let startDate = null;
+            if (signalManagementFilter.value.startDate) {
+                // 解析 YYYY-MM-DDTHH:mm 格式字符串为本地时间
+                const parts = signalManagementFilter.value.startDate.match(/(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+                if (parts) {
+                    // parts[1]=年, parts[2]=月 (1-12), parts[3]=日, parts[4]=时, parts[5]=分
+                    // Date 构造函数中的月份是 0-indexed (0-11)
+                    startDate = new Date(parseInt(parts[1]), parseInt(parts[2]) - 1, parseInt(parts[3]), parseInt(parts[4]), parseInt(parts[5]));
+                }
+            }
+
+            let endDate = null;
+            if (signalManagementFilter.value.endDate) {
+                 // 解析 YYYY-MM-DDTHH:mm 格式字符串为本地时间
+                 const parts = signalManagementFilter.value.endDate.match(/(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+                 if (parts) {
+                     // Date 构造函数中的月份是 0-indexed (0-11)
+                     endDate = new Date(parseInt(parts[1]), parseInt(parts[2]) - 1, parseInt(parts[3]), parseInt(parts[4]), parseInt(parts[5]));
+                 }
+            }
 
             if (startDate || endDate) {
                 filtered = filtered.filter(s => {
+                    // signalTime 是后端提供的 UTC 时间
                     const signalTime = s.signal_time ? new Date(s.signal_time) : null;
                     if (!signalTime || isNaN(signalTime.getTime())) return false; // 忽略无效时间信号
 
                     let pass = true;
-                    if (startDate && signalTime < startDate) {
+                    // 将本地时间 Date 对象转换为 UTC 毫秒进行比较
+                    if (startDate && signalTime.getTime() < startDate.getTime()) {
                         pass = false;
                     }
-                    if (endDate && signalTime > endDate) {
+                    if (endDate && signalTime.getTime() > endDate.getTime()) {
                         pass = false;
                     }
                     return pass;
@@ -193,8 +213,31 @@ const app = createApp({
                 if (isNaN(timeA) || isNaN(timeB)) return 0; // 处理无效日期
                 return timeB - timeA;
             });
-            console.log("LiveTest: displayedManagedSignals computed property returning", sortedFiltered.length, "signals."); // Added log
-            return sortedFiltered;
+
+            // 为每个信号添加一个本地日期字段，供日历分组使用
+            const signalsWithLocalDate = sortedFiltered.map(s => {
+                const signalTime = s.signal_time ? new Date(s.signal_time) : null;
+                let localDate = null;
+                if (signalTime && !isNaN(signalTime.getTime())) {
+                    // 使用 toLocaleDateString 获取本地日期字符串，然后解析
+                    // 这样可以确保获取的是本地时区的日期
+                    const localDateString = signalTime.toLocaleDateString('zh-CN', {
+                        year: 'numeric',
+                        month: '2-digit',
+                        day: '2-digit',
+                        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone // 使用浏览器本地时区
+                    });
+                    // 解析本地日期字符串为 Date 对象 (时间部分为本地时区的午夜)
+                    localDate = new Date(localDateString);
+                }
+                return {
+                    ...s,
+                    local_date: localDate // 添加本地日期字段
+                };
+            });
+
+            console.log("LiveTest: displayedManagedSignals computed property returning", signalsWithLocalDate.length, "signals with local_date."); // Added log
+            return signalsWithLocalDate;
             // .slice(0, 50); // 可选：如果信号过多，可以限制初始显示数量或实现分页
         });
 

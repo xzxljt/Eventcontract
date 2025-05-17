@@ -1,6 +1,9 @@
 import pandas as pd
 import numpy as np
 from typing import Dict, Any, Tuple, List
+import logging # 导入logging模块
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 class Strategy:
     """策略基类，所有具体策略都应继承此类"""
@@ -36,7 +39,7 @@ class Strategy:
         在完整的DataFrame上一次性计算所有需要的技术指标。
         子策略应重写此方法。
         """
-        print(f"({self.name}) 基类 calculate_all_indicators 调用，检查数据类型。")
+        logger.info(f"({self.name}) 基类 calculate_all_indicators 调用，检查数据类型。")
         df_checked = self._ensure_data_types(df)
         # 子类将在这里添加具体的指标计算
         return df_checked

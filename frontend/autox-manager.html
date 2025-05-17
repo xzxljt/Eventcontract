@@ -16,29 +16,9 @@
 </head>
 <body>
     <div id="app" v-cloak>
-        <nav class="navbar navbar-expand-lg navbar-dark bg-primary fixed-top">
-            <div class="container-fluid">
-                <a class="navbar-brand" href="#"><i class="bi bi-robot me-2"></i>币安事件合约交易信号机器人</a>
-                <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
-                    <span class="navbar-toggler-icon"></span>
-                </button>
-                <div class="collapse navbar-collapse" id="navbarNav">
-                    <ul class="navbar-nav">
-                        <li class="nav-item">
-                            <a class="nav-link" href="/">回测系统</a>
-                        </li>
-                        <li class="nav-item">
-                            <a class="nav-link" href="/live">实时监控</a>
-                        </li>
-                        <li class="nav-item">
-                            <a class="nav-link active" aria-current="page" href="/autox">AutoX 管理</a>
-                        </li>
-                    </ul>
-                </div>
-            </div>
-        </nav>
+        <div id="navbar-container"></div>
 
-        <div class="container-fluid mt-4 pt-5"> <!-- pt-5 for fixed-top navbar -->
+        <div class="container-fluid mt-4">
             <!-- AutoX Clients Card -->
             <div class="card shadow-sm mb-4">
                 <div class="card-header d-flex justify-content-between align-items-center">
@@ -293,7 +273,14 @@
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <!-- Custom Utils JS (must be loaded before scripts that use its functions globally) -->
     <script src="/static/js/utils.js"></script>
+    <!-- Load Navbar Script -->
+    <script src="/static/js/load-navbar.js"></script>
     <!-- Custom JS for this page -->
     <script src="/static/js/autox-manager-scripts.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            loadNavbar('navbar-container', '/templates/navbar.html');
+        });
+    </script>
 </body>
 </html>

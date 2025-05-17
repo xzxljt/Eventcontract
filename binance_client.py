@@ -257,7 +257,7 @@ class BinanceClient:
                 'limit': min(limit, self.MAX_KLINE_LIMIT) 
             }
             if end_time: params['endTime'] = end_time
-            # print(f"获取最新的 {params['limit']} 条K线数据 (不缓存): 交易对={symbol}, 周期={interval}")
+            logger.info(f"获取最新的 {params['limit']} 条K线数据 (不缓存): 交易对={symbol}, 周期={interval}")
             data = self._request('GET', '/fapi/v1/klines', params=params, is_fapi=True)
             all_klines_data.extend(data)
         

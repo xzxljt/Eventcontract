@@ -138,6 +138,7 @@ class DeleteSignalsRequest(BaseModel):
 # --- CORS, StaticFiles, BinanceClient ---
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 app.mount("/static", StaticFiles(directory="frontend/static"), name="static")
+app.mount("/templates", StaticFiles(directory="templates"), name="templates") # Add this line to serve templates directory
 binance_client = BinanceClient()
 
 # --- WebSocket 连接管理器 ---
@@ -253,30 +254,35 @@ def _blocking_load_json_from_file(file_path: str, default_value: Any = None) -> 
 async def load_active_test_config():
     """从文件异步加载活动测试配置。"""
     global active_live_test_config_id, running_live_test_configs
-    
+
+    print(f"尝试从文件 {ACTIVE_TEST_CONFIG_FILE} 加载活动测试配置...") # 新增日志
+
     loaded_data = await asyncio.to_thread(
-        _blocking_load_json_from_file, 
-        ACTIVE_TEST_CONFIG_FILE, 
+        _blocking_load_json_from_file,
+        ACTIVE_TEST_CONFIG_FILE,
         default_value={"active_config_id": None, "config_data": None, "last_updated": None}
     )
-    
+
     if not isinstance(loaded_data, dict):
         print(f"警告: {ACTIVE_TEST_CONFIG_FILE} 包含无效数据格式，将使用默认空配置。")
         return
-    
+
     active_config_id = loaded_data.get("active_config_id")
     config_data = loaded_data.get("config_data")
-    
+
     if active_config_id and config_data:
         with active_live_test_config_lock:
             active_live_test_config_id = active_config_id
-        
+
         with running_live_test_configs_lock:
             running_live_test_configs[active_config_id] = config_data
-        
-        print(f"已从 {ACTIVE_TEST_CONFIG_FILE} 加载活动测试配置 (ID: {active_config_id})")
+
+        print(f"成功从 {ACTIVE_TEST_CONFIG_FILE} 加载活动测试配置 (ID: {active_config_id})。") # 修改日志
+        # 可以选择在这里打印加载的配置数据，但可能比较冗长
+        # print(f"加载的配置数据: {config_data}")
+
     else:
-        print(f"{ACTIVE_TEST_CONFIG_FILE} 中没有活动测试配置或配置不完整。")
+        print(f"{ACTIVE_TEST_CONFIG_FILE} 未找到活动测试配置或配置不完整。") # 修改日志
 
 async def save_active_test_config():
     """异步保存当前活动测试配置到文件。"""
@@ -966,8 +972,9 @@ async def startup_event():
     # 所有加载函数已改为异步
     await load_live_signals_async()
     await load_strategy_parameters_from_file()
-    await load_autox_clients_from_file() 
-    
+    await load_autox_clients_from_file()
+    await load_active_test_config() # 新增：加载活动测试配置
+
     # 创建后台任务
     asyncio.create_task(process_kline_queue())
     asyncio.create_task(background_signal_verifier())

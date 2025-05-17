@@ -343,62 +343,92 @@ const app = createApp({
                 }
                 } catch (err) {
                     console.error('Backtest failed:', err);
-                    if (err.response && err.response.data && Array.isArray(err.response.data.detail)) {
-                        // --- 修改开始 ---
-                        const newFieldErrors = {};
-                        let detailedErrorMessages = [];
+                    // console.log('Full error object for debugging:', JSON.stringify(err, Object.getOwnPropertyNames(err)));
+                    // if (err.response) console.log('Error response data for debugging:', JSON.stringify(err.response.data));
 
-                        err.response.data.detail.forEach(d => {
-                            const loc = d.loc; // Pydantic error location array, e.g., ['body', 'symbol'] or ['body', 'prediction_strategy_params', 'rsi_period']
-                            let fieldKey = '';
-                            let userFriendlyPath = loc.slice(1).join(' -> '); // e.g., symbol or prediction_strategy_params -> rsi_period
+                    // Reset errors first
+                    validationError.value = null;
+                    error.value = null;
+                    fieldErrors.value = {};
 
-                            // 1. 顶层参数 (symbol, interval, startTime, endTime, predictionStrategy, eventPeriod, confidenceThreshold)
-                            if (loc.length === 2 && typeof loc[1] === 'string') { // e.g. ['body', 'symbol']
-                                fieldKey = loc[1]; // 'symbol', 'interval', 'start_time', 'end_time', 'prediction_strategy_id', 'event_period', 'confidence_threshold'
-                                // 映射到HTML中使用的ID (如果不同)
-                                if (fieldKey === 'start_time') fieldKey = 'startTime';
-                                else if (fieldKey === 'end_time') fieldKey = 'endTime';
-                                else if (fieldKey === 'prediction_strategy_id') fieldKey = 'predictionStrategy'; // select ID
-                                else if (fieldKey === 'event_period') fieldKey = 'eventPeriod'; // select ID
-                                else if (fieldKey === 'confidence_threshold') fieldKey = 'confidenceThreshold'; // range input ID
-                            }
-                            // 2. 预测策略参数 (e.g. ['body', 'prediction_strategy_params', 'rsi_period'])
-                            else if (loc.length === 3 && loc[1] === 'prediction_strategy_params' && typeof loc[2] === 'string') {
-                                fieldKey = `pred_param_${loc[2]}`; // e.g. pred_param_rsi_period
-                            }
-                            // 3. 投资设置 (e.g. ['body', 'investment', 'initial_balance'])
-                            else if (loc.length === 3 && loc[1] === 'investment' && typeof loc[2] === 'string') {
-                                // Map investment sub-fields to their input IDs
-                                const investmentFieldMap = {
-                                    'initial_balance': 'initialBalance',
-                                    'profit_rate_pct': 'profitRate',
-                                    'loss_rate_pct': 'lossRate',
-                                    'min_investment_amount': 'minInvestment',
-                                    'max_investment_amount': 'maxInvestment',
-                                    'investment_strategy_id': 'investmentStrategySelect' // select ID
-                                };
-                                fieldKey = investmentFieldMap[loc[2]] || loc[2]; // Fallback to loc[2] if not in map
-                            }
-                            // 4. 投资策略特定参数 (e.g. ['body', 'investment', 'investment_strategy_specific_params', 'amount'])
-                            else if (loc.length === 4 && loc[1] === 'investment' && loc[2] === 'investment_strategy_specific_params' && typeof loc[3] === 'string') {
-                                fieldKey = `inv_param_${loc[3]}`; // e.g. inv_param_amount
-                            }
+                    console.log('[DEBUG] Catch Block: Full error object:', err);
 
-                            if (fieldKey) {
-                                newFieldErrors[fieldKey] = d.msg;
-                            }
-                            detailedErrorMessages.push(`字段 "${userFriendlyPath}": ${d.msg}`);
-                        });
+                    if (err.response) {
+                        const status = err.response.status;
+                        const data = err.response.data;
+                        console.log(`[DEBUG] Catch Block: Response Status: ${status}`);
+                        console.log('[DEBUG] Catch Block: Response Data:', JSON.stringify(data));
 
-                        fieldErrors.value = newFieldErrors;
-                        validationError.value = `回测参数校验失败:\n${detailedErrorMessages.join("\n")}`;
-                        error.value = null; // 清除通用错误
-                        // --- 修改结束 ---
+                        if ((status === 422 || status === 400) && data && data.detail) {
+                            // Likely a validation error from FastAPI/Pydantic
+                            if (Array.isArray(data.detail) && data.detail.length > 0) {
+                                console.log('[DEBUG] Processing Pydantic array errors. Raw detail:', JSON.stringify(data.detail));
+                                const newFieldErrorsLocal = {};
+                                const detailedMessagesLocal = [];
+                                data.detail.forEach(d => {
+                                    const loc = d.loc;
+                                    const msg = d.msg;
+                                    let fieldKey = '';
+                                    let userFriendlyPath = '未知字段';
+
+                                    if (Array.isArray(loc) && loc.length > 1) { // loc[0] is 'body' or 'query'
+                                        userFriendlyPath = loc.slice(1).join(' -> ');
+                                        if (loc.length === 2 && typeof loc[1] === 'string') { // Top-level field
+                                            fieldKey = loc[1]; // General assignment
+                                            // Specific mapping for known top-level fields if their model name differs from HTML binding key
+                                            if (fieldKey === 'start_time') fieldKey = 'startTime';
+                                            else if (fieldKey === 'end_time') fieldKey = 'endTime';
+                                            else if (fieldKey === 'prediction_strategy_id') fieldKey = 'predictionStrategy';
+                                            // Add other direct mappings if necessary, e.g. 'symbol', 'interval', 'eventPeriod', 'confidence_threshold'
+                                        } else if (loc.length > 2 && typeof loc[1] === 'string') { // Nested field
+                                            const parentKey = loc[1];
+                                            const childKey = loc[2];
+                                            if (parentKey === 'prediction_strategy_params' && typeof childKey === 'string') {
+                                                fieldKey = `predictionStrategyParams.${childKey}`;
+                                            } else if (parentKey === 'investment') {
+                                                if (childKey === 'investment_strategy_specific_params' && loc.length > 3 && typeof loc[3] === 'string') {
+                                                    fieldKey = `investmentStrategyParams.${loc[3]}`;
+                                                } else if (typeof childKey === 'string' && childKey !== 'investment_strategy_specific_params') {
+                                                    // For direct children of 'investment' like 'initial_balance'
+                                                    fieldKey = childKey; 
+                                                }
+                                            }
+                                        }
+                                    }
+                                    console.log(`[DEBUG] Pydantic error item: loc=${JSON.stringify(loc)}, msg='${msg}', userFriendlyPath='${userFriendlyPath}', determined fieldKey='${fieldKey}'`);
+                                    if (msg) {
+                                        detailedMessagesLocal.push(`${userFriendlyPath}: ${msg}`);
+                                        if (fieldKey) newFieldErrorsLocal[fieldKey] = msg;
+                                    } else {
+                                        detailedMessagesLocal.push(`${userFriendlyPath}: (无详细错误信息)`);
+                                    }
+                                });
+                                fieldErrors.value = newFieldErrorsLocal;
+                                if (detailedMessagesLocal.length > 0) {
+                                    validationError.value = "表单校验失败，请检查以下字段：\n" + detailedMessagesLocal.join("\n");
+                                } else {
+                                    validationError.value = "表单校验失败，但未获取到详细错误信息。请检查控制台。";
+                                }
+                            } else if (typeof data.detail === 'string') {
+                                // Detail is a single string for 400/422 error
+                                validationError.value = data.detail;
+                            } else {
+                                // Status is 422/400, data.detail exists but is not a non-empty array or string (e.g. empty array [])
+                                validationError.value = `校验失败 (代码 ${status})，错误详情格式无法解析或为空。请查看API响应。`;
+                            }
+                        } else if (data && data.detail && typeof data.detail === 'string') {
+                            // Non-422/400 error, but has a 'detail' string (e.g. 500 error with a message)
+                            error.value = data.detail;
+                        } else if (err.response.statusText) {
+                            // Generic HTTP error without a specific 'detail' message
+                            error.value = `API 错误 ${status}: ${err.response.statusText}`;
+                        } else {
+                            // Fallback for err.response existing but no other info
+                            error.value = `发生HTTP错误 (代码 ${status})，无更多信息。`;
+                        }
                     } else {
-                        error.value = err.response?.data?.detail || '回测失败，请检查参数和API连接。';
-                        validationError.value = null; // 清除校验错误
-                        fieldErrors.value = {}; // 清除字段错误
+                        // Network error or other error without a response object (e.g., err.request was made but no response received)
+                        error.value = '回测时发生网络错误或未知客户端错误，请检查网络连接和控制台。';
                     }
                 } finally {
                     loading.value = false;

@@ -89,7 +89,7 @@ class Backtester:
             except Exception as e:
                 print(f"错误: DataFrame 索引无法转换为 DatetimeIndex: {e}")
                 return self._calculate_statistics([], 0.0, 0, 0) # 如果转换失败，返回空统计
-        
+
         if not self.df.index.is_monotonic_increasing:
             print("警告: DataFrame 索引未排序，正在排序...")
             self.df.sort_index(inplace=True)
@@ -119,13 +119,13 @@ class Backtester:
         last_trade_result: Optional[bool] = None # 上一次交易的结果 (True for win, False for loss)
         consecutive_wins = 0; max_consecutive_wins = 0 # 连胜统计
         consecutive_losses = 0; max_consecutive_losses = 0 # 连败统计
-        
+
         # 策略生成信号所需的最小历史K线条数，减去1是因为窗口本身包含当前K线
         min_data_for_signal_logic = getattr(self.strategy, 'min_history_periods', 2) # 策略可以定义这个值，默认为2
         # 确定回测开始的索引位置。需要足够的历史数据来填充第一个信号生成窗口。
         # self.kline_fetch_limit_for_signal 是模拟实时获取K线时，每次用于生成信号的窗口大小。
-        start_index = self.kline_fetch_limit_for_signal -1 
-        
+        start_index = self.kline_fetch_limit_for_signal -1
+
         if start_index >= len(self.df_with_indicators):
             print(f"错误: 数据量 ({len(self.df_with_indicators)}) 不足以形成一个大小为 {self.kline_fetch_limit_for_signal} 的信号生成窗口。")
             return self._calculate_statistics([], 0.0, 0, 0)
@@ -138,7 +138,7 @@ class Backtester:
         for i in range(start_index, len(self.df_with_indicators)):
             num_signals_evaluated += 1
             current_kline_time = self.df_with_indicators.index[i] # 当前K线的时间戳（通常是K线开始时间）
-            
+
             # 构建当前用于生成信号的K线窗口
             # 窗口的起始位置是 i - self.kline_fetch_limit_for_signal + 1
             # 窗口的结束位置是 i (包含当前K线)
@@ -148,7 +148,7 @@ class Backtester:
             # 确保窗口数据量满足策略的最小需求
             if len(df_window) < min_data_for_signal_logic:
                 continue # 跳过这个时间点，因为数据不足
-            
+
             # 使用策略在当前窗口上生成信号
             # generate_signals_from_indicators_on_window 是一个优化方法，
             # 它假设指标已在 df_with_indicators 中，只在小窗口上应用信号逻辑。
@@ -163,7 +163,7 @@ class Backtester:
                'signal' not in temp_signal_df_window.columns or \
                'confidence' not in temp_signal_df_window.columns:
                 continue # 如果没有信号或置信度列，跳过
-            
+
             # 确保策略返回的DataFrame长度与输入窗口一致
             if len(temp_signal_df_window) != len(df_window):
                 # 这是一个潜在问题，因为我们期望信号是针对窗口中的每一条K线（尤其是最后一条）
@@ -177,8 +177,8 @@ class Backtester:
 
             # 如果没有信号或置信度低于阈值，则忽略
             if signal_val == 0 or confidence_val < self.confidence_threshold:
-                continue 
-            
+                continue
+
             num_valid_signals_found += 1 # 有效预测信号计数增加
             current_kline_data_row = self.df_with_indicators.iloc[i] # 获取当前K线的完整数据行
 
@@ -192,7 +192,7 @@ class Backtester:
                     effective_signal_price = signal_price_original * (1 + self.slippage_pct)
                 elif signal_val == -1: # 做空时，成交价比信号价低
                     effective_signal_price = signal_price_original * (1 - self.slippage_pct)
-            
+
             # 计算事件合约的预期结束时间
             end_time_dt_expected = signal_time_obj + timedelta(minutes=self.period_minutes)
             # 在DataFrame中查找预期结束时间对应的K线索引位置
@@ -210,21 +210,21 @@ class Backtester:
                 # 根据配置决定使用收盘价还是开盘价作为事件结束价格
                 end_price = actual_end_kline_row['close'] if self.use_close_for_end_price else actual_end_kline_row['open']
                 actual_end_time_obj = self.df_with_indicators.index[future_kline_index_pos] # 实际的事件结束时间
-                
+
                 # 计算价格变化百分比 (基于考虑滑点后的信号价格)
                 price_change_pct = (end_price - effective_signal_price) / effective_signal_price * 100 if effective_signal_price != 0 else 0
-                
+
                 # 判断预测方向是否正确
                 if signal_val == 1 and price_change_pct > 0: prediction_correct_for_trade = True
                 elif signal_val == -1 and price_change_pct < 0: prediction_correct_for_trade = True
                 else: prediction_correct_for_trade = False
-                
+
                 # 使用投资策略计算本次的投资金额
                 calculated_investment_by_strategy = self.investment_strategy.calculate_investment(
                     current_balance=current_balance,
                     previous_trade_result=last_trade_result # 将上次交易结果传递给策略
                 )
-                
+
                 # 投资金额的调整逻辑
                 if current_balance < self.investment_strategy.min_amount: # 如果余额连最小投资额都不到
                     current_investment_this_trade = 0.0 # 则不投资
@@ -233,19 +233,19 @@ class Backtester:
                     current_investment_this_trade = min(current_balance, self.investment_strategy.max_amount)
                     current_investment_this_trade = max(self.investment_strategy.min_amount, current_investment_this_trade)
                     # 再次确保调整后的投资额不超过当前余额（处理 minAmount > current_balance 的极端情况）
-                    current_investment_this_trade = min(current_balance, current_investment_this_trade) 
+                    current_investment_this_trade = min(current_balance, current_investment_this_trade)
                 else: # 余额充足
                     current_investment_this_trade = calculated_investment_by_strategy
-                
+
                 # 应用全局的最小/最大投资限制（这些是硬性限制，策略内部的min/max是建议）
                 current_investment_this_trade = max(self.investment_strategy.min_amount, min(self.investment_strategy.max_amount, current_investment_this_trade))
                 # 再次确保投资额不超过当前余额
                 current_investment_this_trade = min(current_balance, current_investment_this_trade)
-                
+
                 # 如果最终确定的投资额仍然低于策略的最小允许投资额（例如余额过少），则不进行此交易
                 if current_investment_this_trade < self.investment_strategy.min_amount:
                     current_investment_this_trade = 0.0
-                
+
                 # 如果确定要投资 (投资额 > 0)
                 if current_investment_this_trade > 0:
                     trade_occurred_successfully = True # 标记交易成功发生
@@ -258,7 +258,7 @@ class Backtester:
                         consecutive_losses += 1; consecutive_wins = 0 # 更新连胜/连败计数
                         max_consecutive_losses = max(max_consecutive_losses, consecutive_losses)
                     current_balance += pnl_amount # 更新账户余额
-                
+
                 if trade_occurred_successfully: # 如果交易发生了，更新上次交易结果
                     last_trade_result = prediction_correct_for_trade
 
@@ -297,7 +297,7 @@ class Backtester:
             if current_balance <= 0 and self.initial_balance > 0 : # 检查 initial_balance > 0 防止初始就为0时误判
                 print(f"余额耗尽在 {signal_time_obj.strftime('%Y-%m-%d %H:%M:%S')}。停止回测。")
                 break # 跳出主循环
-        
+
         print(f"回测循环优化版结束。总共评估 {num_signals_evaluated} 个K线时间点，找到 {num_valid_signals_found} 个有效预测信号，生成 {len(predictions)} 条交易记录。")
         self.results = self._calculate_statistics(predictions, max_drawdown, max_consecutive_wins, max_consecutive_losses)
         return self.results
@@ -305,13 +305,13 @@ class Backtester:
     def _calculate_statistics(self, predictions: List[Dict[str, Any]], max_drawdown_val: float, max_wins: int, max_losses: int) -> Dict[str, Any]:
         # 筛选出实际发生交易的预测记录
         actual_trades_predictions = [p for p in predictions if p.get('investment_amount', 0) > 0 and p.get('result') is not None]
-        
+
         daily_pnl_summary = {} # 用于存储每日盈亏和交易统计
 
         # --- 处理没有实际交易发生的情况 ---
         if not actual_trades_predictions:
             # 即使没有实际交易，也可能存在预测信号，我们需要根据这些信号的时间范围来初始化 daily_pnl_summary
-            if predictions: 
+            if predictions:
                 try:
                     # 筛选出包含有效 'signal_time' 的预测记录
                     valid_predictions_for_dates = [p for p in predictions if isinstance(p.get('signal_time'), (datetime, pd.Timestamp))]
@@ -324,14 +324,14 @@ class Backtester:
                         # 为回测范围内的每一天生成空的每日统计
                         while current_event_date <= end_date_obj:
                             daily_pnl_summary[current_event_date.strftime('%Y-%m-%d')] = {
-                                'pnl': 0.0, 
+                                'pnl': 0.0,
                                 'trades': 0,
                                 'balance': round(self.initial_balance, 2) # 如果没有交易，每日余额设为初始余额
                             }
                             current_event_date += timedelta(days=1)
                 except Exception as e:
                     print(f"生成空每日盈亏时出错(no actual trades): {e}. Predictions sample: {predictions[:2]}")
-            
+
             # 返回不包含交易的统计结果
             return {
                 'total_predictions': 0, 'total_wins': 0, 'total_losses': 0, 'win_rate': 0.0,
@@ -349,18 +349,18 @@ class Backtester:
 
         # --- 如果有实际交易发生，则进行详细统计 ---
         pred_df = pd.DataFrame(actual_trades_predictions) # 将实际交易记录转换为DataFrame以便分析
-        
+
         total_predictions_count = len(pred_df) # 总交易次数
         total_wins_count = pred_df['result'].sum() # 总胜利次数 (True计为1, False计为0)
         total_losses_count = total_predictions_count - total_wins_count # 总失败次数
         win_rate_val = total_wins_count / total_predictions_count * 100 if total_predictions_count > 0 else 0.0 # 胜率
-        
+
         # 做多交易统计
         long_df = pred_df[pred_df['signal'] == 1]
         long_predictions_count = len(long_df)
         long_wins_count = long_df['result'].sum() if not long_df.empty else 0
         long_win_rate_val = long_wins_count / long_predictions_count * 100 if long_predictions_count > 0 else 0.0
-        
+
         # 做空交易统计
         short_df = pred_df[pred_df['signal'] == -1]
         short_predictions_count = len(short_df)
@@ -371,10 +371,10 @@ class Backtester:
         final_balance_val = pred_df['balance_after_trade'].iloc[-1] if not pred_df.empty else self.initial_balance # 最终余额
         total_investment_volume_val = pred_df['investment_amount'].sum() # 总投资额
         total_pnl_amount_val = pred_df['pnl_amount'].sum() # 总盈亏金额
-        
+
         roi_percentage_val = (total_pnl_amount_val / self.initial_balance) * 100 if self.initial_balance > 0 else 0.0 # 投资回报率
         average_pnl_per_trade_val = total_pnl_amount_val / total_predictions_count if total_predictions_count > 0 else 0.0 # 平均每笔交易盈亏
-        
+
         # 盈利因子计算
         total_profit_from_wins_val = pred_df[pred_df['pnl_amount'] > 0]['pnl_amount'].sum() # 所有盈利交易的总利润
         total_loss_from_losses_val = abs(pred_df[pred_df['pnl_amount'] < 0]['pnl_amount'].sum()) # 所有亏损交易的总损失（取绝对值）
@@ -386,16 +386,24 @@ class Backtester:
             # 确保 'signal_time' 列是 datetime 类型
             if not pd.api.types.is_datetime64_any_dtype(temp_df_for_daily['signal_time']):
                  temp_df_for_daily['signal_time'] = pd.to_datetime(temp_df_for_daily['signal_time'])
-            
+
+            # 将 signal_time 从 UTC 转换为 'Asia/Shanghai' 时区
+            # 确保 signal_time 已经带有 UTC 时区信息
+            if temp_df_for_daily['signal_time'].dt.tz is None:
+                 # 如果没有时区信息，假设它是 UTC
+                 temp_df_for_daily['signal_time'] = temp_df_for_daily['signal_time'].dt.tz_localize('UTC')
+            temp_df_for_daily['signal_time'] = temp_df_for_daily['signal_time'].dt.tz_convert('Asia/Shanghai')
+
             temp_df_for_daily = temp_df_for_daily.set_index('signal_time') # 将信号时间设为索引以进行重采样
-            
+
             # 定义每日聚合操作
             daily_aggregations = {
                 'pnl_amount': 'sum', # 每日盈亏总和
                 'investment_amount': 'count', # 每日交易次数 (使用 investment_amount 列计数，假设每笔有效交易都有投资额)
                 'balance_after_trade': 'last'  # 每日的最后一个余额作为当日结束余额
             }
-            daily_summary_raw = temp_df_for_daily.resample('D').agg(daily_aggregations) # 按天重采样并聚合
+            # 按天重采样并聚合，使用本地时间进行分组
+            daily_summary_raw = temp_df_for_daily.resample('D').agg(daily_aggregations)
             # 重命名聚合后的列
             daily_summary_raw.rename(columns={'pnl_amount': 'pnl', 'investment_amount': 'trades', 'balance_after_trade': 'balance'}, inplace=True)
 
@@ -403,19 +411,29 @@ class Backtester:
             if predictions: # 使用完整的 'predictions' 列表（包含未交易的信号）来确定日期范围
                 valid_predictions_for_dates = [p for p in predictions if isinstance(p.get('signal_time'), (datetime, pd.Timestamp))]
                 if valid_predictions_for_dates:
-                    all_signal_times = [pd.to_datetime(p['signal_time']) for p in valid_predictions_for_dates]
-                    overall_start_date = min(all_signal_times).normalize() # 规范化到日期开始（00:00:00）
+                    # 将所有 signal_time 转换为带有 'Asia/Shanghai' 时区的 datetime 对象以进行比较
+                    all_signal_times = []
+                    for p in valid_predictions_for_dates:
+                        dt_obj = pd.to_datetime(p['signal_time'])
+                        if dt_obj.tz is None:
+                            # 如果是时区无感的，先本地化为UTC，再转换为目标时区
+                            all_signal_times.append(dt_obj.tz_localize('UTC').tz_convert('Asia/Shanghai'))
+                        else:
+                            # 如果是时区感知的，直接转换为目标时区
+                            all_signal_times.append(dt_obj.tz_convert('Asia/Shanghai'))
+
+                    overall_start_date = min(all_signal_times).normalize() # 规范化到日期开始（00:00:00），此时已是本地时间
                     overall_end_date = max(all_signal_times).normalize()
-                    # 创建包含回测期间所有日期的 DatetimeIndex
-                    all_days_in_simulation_range = pd.date_range(start=overall_start_date, end=overall_end_date, freq='D')
-                    
+                    # 创建包含回测期间所有日期的 DatetimeIndex，使用本地时区
+                    all_days_in_simulation_range = pd.date_range(start=overall_start_date, end=overall_end_date, freq='D', tz='Asia/Shanghai')
+
                     # 使用完整日期范围重新索引每日摘要，填充缺失日期的NaN
                     daily_summary_reindexed = daily_summary_raw.reindex(all_days_in_simulation_range)
-                    
+
                     # 填充NaN值
                     daily_summary_reindexed['pnl'] = daily_summary_reindexed['pnl'].fillna(0.0) # 没有交易的日期，pnl为0
                     daily_summary_reindexed['trades'] = daily_summary_reindexed['trades'].fillna(0).astype(int) # 没有交易的日期，trades为0
-                    
+
                     # 为没有交易的日期的 'balance' 填充正确的余额
                     # 逻辑：如果某天 balance 是 NaN，它应该等于前一天交易结束后的余额。
                     # 如果回测开始的第一天就没有交易，其余额应为初始余额。
@@ -433,8 +451,8 @@ class Backtester:
                     if pd.isna(daily_summary_reindexed['balance'].iloc[0]):
                         daily_summary_reindexed['balance'].iloc[0] = self.initial_balance
                     # 向前填充以处理可能因其他原因（理论上不应发生）导致的中间NaN
-                    daily_summary_reindexed['balance'] = daily_summary_reindexed['balance'].ffill() 
-                    
+                    daily_summary_reindexed['balance'] = daily_summary_reindexed['balance'].ffill()
+
                     # 将处理后的每日摘要存入 daily_pnl_summary 字典
                     for date_index, row_data in daily_summary_reindexed.iterrows():
                         daily_pnl_summary[date_index.strftime('%Y-%m-%d')] = {

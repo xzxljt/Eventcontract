@@ -1,7 +1,6 @@
 /* frontend/static/css/autox-manager-styles.css */
 
 body {
-    padding-top: 70px; /* Account for fixed-top navbar */
     background-color: var(--bs-gray-100); /* Slightly off-white background for the page */
 }
 
