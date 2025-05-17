@@ -72,25 +72,19 @@
     ```
     **重要提示:** `.env` 文件包含敏感信息，不应提交到版本控制中。`.gitignore` 文件已配置忽略 `.env` 文件。
 
-5.  **启动后端服务**
+5.  **启动应用服务**
     在项目根目录下运行：
     ```bash
-    python main.py
+    uvicorn main:app
     ```
-    服务将在 `http://localhost:8000` 运行。
+    服务将在 `.env` 文件或环境变量中配置的主机和端口上运行 (默认为 `http://127.0.0.1:8000`)。
 
-6.  **打开前端界面**
-    -   直接在浏览器中打开 `frontend/index.html` 文件。
-    -   或者使用简单的 HTTP 服务器（例如 Python 的 `http.server`）在 `frontend` 目录下启动服务：
-        ```bash
-        cd frontend
-        python -m http.server
-        ```
-        然后访问 `http://localhost:8000`。
+6.  **访问前端界面**
+    启动应用服务后，前端界面即可通过浏览器访问。访问地址为主机和端口，例如 `http://127.0.0.1:8000` (如果使用默认配置)。
 
 ## API文档
 
-启动后端服务后，可以访问 `http://localhost:8000/docs` 查看由 FastAPI 自动生成的完整 API 文档（Swagger UI）。
+启动应用服务后，可以访问 `/docs` 路径查看由 FastAPI 自动生成的完整 API 文档（Swagger UI）。访问地址为主机和端口加上 `/docs`，例如 `http://127.0.0.1:8000/docs` (如果使用默认配置)。
 
 主要 API 端点包括：
 
@@ -107,6 +101,8 @@
 -   `/api/config/...`: 配置相关的 API 端点。
 
 ## WebSocket 端点
+
+WebSocket 端点与应用服务在同一主机和端口上。
 
 -   `/ws/live-test`: 用于实时信号监控的前端 WebSocket 连接。
 -   `/ws/autox_control`: 用于自动交易客户端连接和接收指令的 WebSocket 连接。
