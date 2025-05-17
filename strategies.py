@@ -2,7 +2,6 @@ import pandas as pd
 import numpy as np
 from typing import Dict, Any, Tuple, List
 import logging # 导入logging模块
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 class Strategy:

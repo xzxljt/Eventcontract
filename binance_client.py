@@ -35,7 +35,6 @@ import websocket # 新增 (确保 websocket-client 已安装)
 from functools import partial # 新增
 
 # 配置日志记录
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 class BinanceClient:
@@ -77,8 +76,9 @@ class BinanceClient:
         self._last_kline_log_time: Dict[str, float] = {} # 键为 ws_key, 值为时间戳 (秒)
         
         # WebSocket 重连配置和状态
-        self._max_reconnect_attempts = 10 # 最大重连尝试次数
-        self._reconnect_delay_base = 5 # 基础重连延迟 (秒)
+        # 从环境变量读取WebSocket重连设置，如果不存在则使用默认值
+        self._max_reconnect_attempts = int(os.getenv("WS_RECONNECT_ATTEMPTS", "10")) # 最大重连尝试次数
+        self._reconnect_delay_base = int(os.getenv("WS_RECONNECT_INTERVAL", "5")) # 基础重连延迟 (秒)
         self._reconnect_attempts: Dict[str, int] = {} # 存储每个连接的重连尝试次数
         
         self.ws_management_lock = threading.RLock() # 使用可重入锁

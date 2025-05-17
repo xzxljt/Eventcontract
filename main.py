@@ -21,6 +21,30 @@ import random
 import traceback
 import uuid # 唯一ID生成
 
+import logging
+
+# 配置日志记录
+# 可以配置输出到文件和控制台
+import sys
+
+logging.basicConfig(
+    level=logging.INFO, # 设置最低日志级别，例如 logging.DEBUG 可以看到更详细的日志
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        # 使用 TimedRotatingFileHandler 实现按天轮转，保留最近7天的日志
+        logging.handlers.TimedRotatingFileHandler(
+            "service.log",
+            when="midnight", # 每天午夜轮转
+            interval=1,      # 轮转间隔为1天
+            backupCount=7,   # 保留最近7天的日志文件
+            encoding='utf-8' # 指定编码
+        ),
+        logging.StreamHandler(sys.stdout) # 保留：输出到控制台
+    ]
+)
+
+# 获取一个 Logger 实例，通常使用 __name__
+logger = logging.getLogger(__name__)
 # 导入项目组件
 from strategies import Strategy, get_available_strategies
 from investment_strategies import BaseInvestmentStrategy, get_available_investment_strategies
@@ -974,6 +998,34 @@ async def startup_event():
     await load_strategy_parameters_from_file()
     await load_autox_clients_from_file()
     await load_active_test_config() # 新增：加载活动测试配置
+
+    # 如果存在活动测试配置，启动相应的K线流
+    current_active_config_id = None
+    with active_live_test_config_lock:
+        current_active_config_id = active_live_test_config_id
+
+    if current_active_config_id:
+        current_active_config = None
+        with running_live_test_configs_lock:
+            if current_active_config_id in running_live_test_configs:
+                current_active_config = running_live_test_configs[current_active_config_id]
+
+        if current_active_config:
+            symbol = current_active_config.get('symbol')
+            interval = current_active_config.get('interval')
+            if symbol and interval and symbol != 'all' and interval != 'all':
+                try:
+                    await start_kline_websocket_if_needed(symbol, interval)
+                    print(f"应用启动：已根据活动配置 {current_active_config_id} 启动 {symbol} {interval} 的K线流。")
+                except Exception as e:
+                    print(f"应用启动：根据活动配置 {current_active_config_id} 启动K线流失败: {e}")
+            else:
+                 print(f"应用启动：活动配置 {current_active_config_id} 的交易对或周期无效，未启动K线流。")
+        else:
+             print(f"应用启动：未在 running_live_test_configs 中找到 ID 为 {current_active_config_id} 的活动配置数据。")
+    else:
+        print("应用启动：未找到活动测试配置。")
+
 
     # 创建后台任务
     asyncio.create_task(process_kline_queue())
@@ -2061,6 +2113,9 @@ if __name__ == "__main__":
         loop.create_task(task)
     
     # 启动服务器
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # 从环境变量读取主机和端口，如果不存在则使用默认值
+    host = os.getenv("SERVER_HOST", "0.0.0.0")
+    port = int(os.getenv("SERVER_PORT", "8000")) # 端口通常是整数
+    uvicorn.run(app, host=host, port=port)
 
 # --- END OF FILE main.py ---
