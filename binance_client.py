@@ -1,6 +1,7 @@
 # --- START OF FILE binance_client.py ---
 
 import os
+import ssl # 添加ssl模块导入，用于WebSocket连接配置
 from dotenv import load_dotenv
 load_dotenv(override=True) # 强制覆盖已存在的同名环境变量
 use_proxy_str = os.environ.get('USE_PROXY', 'false').lower()
@@ -81,7 +82,18 @@ class BinanceClient:
         self._reconnect_delay_base = int(os.getenv("WS_RECONNECT_INTERVAL", "5")) # 基础重连延迟 (秒)
         self._reconnect_attempts: Dict[str, int] = {} # 存储每个连接的重连尝试次数
         
+        # WebSocket 连接监控和超时设置
+        self._ws_monitor_interval = int(os.getenv("WS_MONITOR_INTERVAL", "30")) # WebSocket监控间隔（秒）
+        self._ws_connection_timeout = int(os.getenv("WS_CONNECTION_TIMEOUT", "60")) # WebSocket连接超时（秒）
+        self._ws_shutdown_timeout = int(os.getenv("WS_SHUTDOWN_TIMEOUT", "30")) # WebSocket关闭超时（秒）
+        self._ws_last_activity: Dict[str, float] = {} # 存储每个连接的最后活动时间
+        self._ws_monitor_thread = None # WebSocket监控线程
+        self._ws_monitor_running = False # WebSocket监控线程运行标志
+        
         self.ws_management_lock = threading.RLock() # 使用可重入锁
+        
+        # 启动WebSocket连接监控线程
+        self._start_ws_monitor()
 
     def _sign_request(self, params: dict) -> str:
         """为需要签名的请求生成签名"""
@@ -406,15 +418,37 @@ class BinanceClient:
                                       on_open=partial(self._on_ws_open, ws_key=ws_key),
                                       on_message=partial(self._on_ws_message, ws_key=ws_key, user_callback=user_callback, symbol_arg=symbol, interval_arg=interval),
                                       on_error=partial(self._on_ws_error, ws_key=ws_key, symbol_arg=symbol, interval_arg=interval),
-                                      on_close=partial(self._on_ws_close, ws_key=ws_key, user_callback=user_callback, symbol_arg=symbol, interval_arg=interval))
+                                      on_close=partial(self._on_ws_close, ws_key=ws_key, user_callback=user_callback, symbol_arg=symbol, interval_arg=interval),
+                                      on_ping=partial(self._on_ws_ping, ws_key=ws_key),
+                                      on_pong=partial(self._on_ws_pong, ws_key=ws_key))
+            
+            # 保存回调函数到WebSocketApp实例，以便监控线程可以访问
+            new_ws_app.callback = user_callback
             
             self.ws_connections[ws_key] = new_ws_app # Store the new instance
             
+            # 设置WebSocket连接超时和心跳参数
+            ping_interval = 30  # 30秒发送一次ping
+            ping_timeout = 10   # 10秒内没有收到pong则认为连接断开
+            connection_timeout = 30  # 连接超时时间
+            
             # Pass the new_ws_app to the lambda to ensure the correct app is run
-            ws_thread = threading.Thread(target=lambda app=new_ws_app: app.run_forever(reconnect=False), daemon=True)
+            # 添加超时参数和心跳检测
+            ws_thread = threading.Thread(
+                target=lambda app=new_ws_app: app.run_forever(
+                    reconnect=False,
+                    ping_interval=ping_interval,
+                    ping_timeout=ping_timeout,
+                    http_proxy_host=os.environ.get('HTTP_PROXY_HOST'),
+                    http_proxy_port=os.environ.get('HTTP_PROXY_PORT'),
+                    sslopt={"cert_reqs": ssl.CERT_NONE} if should_use_proxy else None,
+                    skip_utf8_validation=True
+                ),
+                daemon=True
+            )
             self.ws_threads[ws_key] = ws_thread
             ws_thread.start()
-            logger.info(f"交易对 {symbol} {interval} (key={ws_key}) 的K线WebSocket处理线程已启动。新实例ID: {id(new_ws_app)}")
+            logger.info(f"交易对 {symbol} {interval} (key={ws_key}) 的K线WebSocket处理线程已启动。新实例ID: {id(new_ws_app)}，ping间隔: {ping_interval}秒，ping超时: {ping_timeout}秒")
 
     def _on_ws_open(self, ws_app_instance, ws_key: str):
         with self.ws_management_lock:
@@ -423,6 +457,8 @@ class BinanceClient:
                 logger.info(f"WebSocket OPENED: key={ws_key}, instance_id={id(ws_app_instance)}, url={ws_app_instance.url}")
                 self._reconnect_attempts[ws_key] = 0 # Reset reconnect attempts on successful open
                 self._intentional_stops.pop(ws_key, None) # Clear any stale stop flag
+                # 初始化或更新最后活动时间
+                self._ws_last_activity[ws_key] = time.time()
             else:
                 # This on_open is from a stale instance, not the one we just started (or an unexpected one)
                 logger.warning(f"WebSocket OPENED (STALE): key={ws_key}, instance_id={id(ws_app_instance)}. 当前跟踪实例为 {id(self.ws_connections.get(ws_key)) if self.ws_connections.get(ws_key) else 'None'}. 关闭此过时连接。")
@@ -430,6 +466,52 @@ class BinanceClient:
                     ws_app_instance.close() # Attempt to close the stale connection
                 except Exception:
                     pass # Ignore errors on closing stale connection
+                    
+    def _on_ws_ping(self, ws_app_instance, message, ws_key: str):
+        """处理WebSocket ping事件
+        
+        更新连接的最后活动时间，并记录ping事件
+        """
+        with self.ws_management_lock:
+            if ws_key in self.ws_connections and self.ws_connections[ws_key] == ws_app_instance:
+                current_time = time.time()
+                self._ws_last_activity[ws_key] = current_time
+                # 每10分钟记录一次ping事件，避免日志过多
+                if not hasattr(self, '_last_ping_log') or current_time - getattr(self, '_last_ping_log', {}).get(ws_key, 0) > 600:
+                    logger.debug(f"WebSocket PING: key={ws_key}, instance_id={id(ws_app_instance)}")
+                    if not hasattr(self, '_last_ping_log'):
+                        self._last_ping_log = {}
+                    self._last_ping_log[ws_key] = current_time
+            else:
+                # 如果是过时的实例发送的ping，记录警告并尝试关闭
+                logger.warning(f"收到来自过时WebSocket实例的PING: key={ws_key}, instance_id={id(ws_app_instance)}")
+                try:
+                    ws_app_instance.close()
+                except Exception:
+                    pass
+    
+    def _on_ws_pong(self, ws_app_instance, message, ws_key: str):
+        """处理WebSocket pong事件
+        
+        更新连接的最后活动时间，并记录pong事件
+        """
+        with self.ws_management_lock:
+            if ws_key in self.ws_connections and self.ws_connections[ws_key] == ws_app_instance:
+                current_time = time.time()
+                self._ws_last_activity[ws_key] = current_time
+                # 每10分钟记录一次pong事件，避免日志过多
+                if not hasattr(self, '_last_pong_log') or current_time - getattr(self, '_last_pong_log', {}).get(ws_key, 0) > 600:
+                    logger.debug(f"WebSocket PONG: key={ws_key}, instance_id={id(ws_app_instance)}")
+                    if not hasattr(self, '_last_pong_log'):
+                        self._last_pong_log = {}
+                    self._last_pong_log[ws_key] = current_time
+            else:
+                # 如果是过时的实例发送的pong，记录警告
+                logger.warning(f"收到来自过时WebSocket实例的PONG: key={ws_key}, instance_id={id(ws_app_instance)}")
+                try:
+                    ws_app_instance.close()
+                except Exception:
+                    pass
 
     def _on_ws_message(self, ws_app_instance, message_str: str, ws_key: str, user_callback: callable, symbol_arg: str, interval_arg: str):
         # Optional: For high-frequency messages, checking instance ID every time might add overhead.
@@ -438,6 +520,10 @@ class BinanceClient:
         #     if self.ws_connections.get(ws_key) != ws_app_instance:
         #         # logger.debug(f"WebSocket MESSAGE (STALE): key={ws_key}, instance_id={id(ws_app_instance)}. 忽略消息。")
         #         return
+
+        # 更新最后活动时间
+        with self.ws_management_lock:
+            self._ws_last_activity[ws_key] = time.time()
 
         try:
             data = json.loads(message_str)
@@ -483,44 +569,72 @@ class BinanceClient:
         # Error often (but not always) leads to on_close. Reconnection logic is primarily in on_close.
 
     def _on_ws_close(self, ws_app_instance, close_status_code, close_msg, ws_key: str, user_callback: callable, symbol_arg: str, interval_arg: str):
+        """处理WebSocket连接关闭事件
+        
+        此方法负责处理连接关闭时的资源清理和重连逻辑
+        
+        Args:
+            ws_app_instance: WebSocketApp实例
+            close_status_code: 关闭状态码
+            close_msg: 关闭消息
+            ws_key: WebSocket连接键
+            user_callback: 用户回调函数
+            symbol_arg: 交易对
+            interval_arg: K线周期
+        """
         is_intentional_stop_local = False
-        was_current_active_instance = False # Was this the instance we were actively tracking?
+        was_current_active_instance = False # 是否是当前正在跟踪的实例
 
         with self.ws_management_lock:
             logger.info(f"WebSocket CLOSED: key={ws_key}, instance_id={id(ws_app_instance)}, code={close_status_code}, reason='{close_msg}'")
             
-            # Check if this closed instance is the one we are currently tracking
+            # 检查关闭的实例是否是当前正在跟踪的实例
             if self.ws_connections.get(ws_key) == ws_app_instance:
                 was_current_active_instance = True
                 logger.info(f"关闭的实例 {id(ws_app_instance)} 是当前 {ws_key} 的活跃实例。从跟踪中移除。")
-                self.ws_connections.pop(ws_key, None) # Remove from tracking
-                self.ws_threads.pop(ws_key, None)     # Also remove its thread reference
+                # 从跟踪中移除
+                self.ws_connections.pop(ws_key, None) 
+                self.ws_threads.pop(ws_key, None)     
+                # 更新最后活动时间，确保监控线程不会尝试重置已关闭的连接
+                self._ws_last_activity.pop(ws_key, None)
             elif ws_key not in self.ws_connections and ws_key not in self.ws_threads:
-                 # This implies the ws_key was already cleaned up, e.g., by stop_kline_websocket
-                 logger.info(f"{ws_key} 的连接已被移除，此关闭事件 ({id(ws_app_instance)}) 可能对应已处理的实例。")
-                 # was_current_active_instance remains False
-            else: # ws_key exists in ws_connections, but the instance ID does not match
-                 logger.warning(f"关闭的实例 {id(ws_app_instance)} (key={ws_key}) 不是当前跟踪的实例 {id(self.ws_connections.get(ws_key)) if self.ws_connections.get(ws_key) else 'None'}。不从此回调触发重连。")
-                 return # Do not reconnect for a stale instance's close event
+                # 这意味着ws_key已经被清理，例如通过stop_kline_websocket
+                logger.info(f"{ws_key} 的连接已被移除，此关闭事件 ({id(ws_app_instance)}) 可能对应已处理的实例。")
+                # was_current_active_instance保持为False
+            else: # ws_key存在于ws_connections中，但实例ID不匹配
+                logger.warning(f"关闭的实例 {id(ws_app_instance)} (key={ws_key}) 不是当前跟踪的实例 {id(self.ws_connections.get(ws_key)) if self.ws_connections.get(ws_key) else 'None'}。不从此回调触发重连。")
+                # 尝试关闭过时的socket，防止资源泄漏
+                try:
+                    if hasattr(ws_app_instance, 'sock') and ws_app_instance.sock:
+                        ws_app_instance.sock.close()
+                except Exception:
+                    pass
+                return # 不为过时实例的关闭事件触发重连
 
-            # Check if this was an intentional stop AFTER determining if it was current
-            is_intentional_stop_local = self._intentional_stops.pop(ws_key, False) # Get and remove the flag
+            # 在确定是否是当前实例后，检查是否是主动停止
+            is_intentional_stop_local = self._intentional_stops.pop(ws_key, False) # 获取并移除标志
 
+        # 如果是主动停止，清理资源并返回
         if is_intentional_stop_local:
             logger.info(f"WebSocket {ws_key} (inst={id(ws_app_instance)}) 是主动停止，不进行重连。")
-            with self.ws_management_lock: # Ensure cleanup of these states too
+            with self.ws_management_lock: # 确保这些状态也被清理
                 self._reconnect_attempts.pop(ws_key, None)
                 self._last_kline_log_time.pop(ws_key, None)
+                # 确保所有相关资源都被清理
+                if hasattr(self, '_last_ping_log'):
+                    self._last_ping_log.pop(ws_key, None)
+                if hasattr(self, '_last_pong_log'):
+                    self._last_pong_log.pop(ws_key, None)
             return
         
-        # Only attempt to reconnect if it was the current active instance and not an intentional stop
+        # 只有当它是当前活跃实例且不是主动停止时，才尝试重连
         if was_current_active_instance: 
             logger.info(f"WebSocket {ws_key} (inst={id(ws_app_instance)}) 非主动关闭，准备尝试重连。")
-            # Pass original symbol, interval, and user_callback for the reconnect attempt
+            # 传递原始的交易对、周期和用户回调函数进行重连尝试
             self._reconnect_websocket(symbol_arg, interval_arg, user_callback)
-        # If it was_current_active_instance is False, it means the instance that closed was stale,
-        # or the ws_key was already cleaned up (e.g., by an explicit stop).
-        # In those cases, we've already returned or decided not to reconnect.
+        # 如果was_current_active_instance为False，意味着关闭的实例是过时的，
+        # 或者ws_key已经被清理（例如通过显式停止）。
+        # 在这些情况下，我们已经返回或决定不重连。
 
     def _reconnect_websocket(self, symbol: str, interval: str, user_callback: callable): # Renamed arg for clarity
         ws_key = f"{symbol.lower()}_{interval}"
@@ -584,15 +698,314 @@ class BinanceClient:
             # Clean up other related states for this ws_key
             self._reconnect_attempts.pop(ws_key, None)
             self._last_kline_log_time.pop(ws_key, None)
-
-    def stop_all_websockets(self):
-        with self.ws_management_lock: # Ensure exclusive access while iterating and stopping
-            num_connections = len(self.ws_connections)
-            if num_connections == 0:
-                logger.info("没有活动的WebSocket连接需要停止。")
-                return
+            
+    def reset_kline_websocket(self, symbol: str, interval: str, user_callback: callable):
+        """重置指定交易对的K线WebSocket连接，用于解决连接卡死的情况。
+        
+        此方法会先停止现有连接，然后重新建立连接。
+        """
+        ws_key = f"{symbol.lower()}_{interval}"
+        logger.warning(f"正在重置交易对 {symbol} {interval} (key={ws_key}) 的K线WebSocket连接...")
+        
+        # 先停止现有连接
+        self.stop_kline_websocket(symbol, interval)
+        
+        # 等待一小段时间确保连接完全关闭
+        time.sleep(2)
+        
+        # 重新建立连接
+        try:
+            self.start_kline_websocket(symbol, interval, user_callback)
+            logger.info(f"交易对 {symbol} {interval} (key={ws_key}) 的K线WebSocket连接已重置")
+            return True
+        except Exception as e:
+            logger.error(f"重置交易对 {symbol} {interval} (key={ws_key}) 的K线WebSocket连接失败: {e}")
+            return False
+            
+    def _start_ws_monitor(self):
+        """启动WebSocket连接监控线程
+        
+        此线程定期检查所有WebSocket连接的状态，重置超时连接，并确保连接活跃
+        """
+        if self._ws_monitor_running:
+            logger.debug("WebSocket监控线程已在运行")
+            return
+            
+        def monitor_websockets():
+            self._ws_monitor_running = True
+            logger.info(f"WebSocket连接监控线程已启动，监控间隔: {self._ws_monitor_interval}秒，连接超时: {self._ws_connection_timeout}秒")
+            
+            while self._ws_monitor_running:
+                try:
+                    with self.ws_management_lock:
+                        current_time = time.time()
+                        # 检查所有WebSocket连接
+                        for ws_key, last_activity in list(self._ws_last_activity.items()):
+                            # 跳过已经停止的连接
+                            if ws_key not in self.ws_connections or self._intentional_stops.get(ws_key, False):
+                                # 清理不再需要的活动记录
+                                if ws_key not in self.ws_connections:
+                                    self._ws_last_activity.pop(ws_key, None)
+                                continue
+                                
+                            # 获取WebSocket实例
+                            ws_app = self.ws_connections.get(ws_key)
+                            if not ws_app:
+                                continue
+                                
+                            # 检查连接是否超时
+                            inactive_time = current_time - last_activity
+                            if inactive_time > self._ws_connection_timeout:
+                                logger.warning(f"WebSocket连接 {ws_key} 超时 ({inactive_time:.1f}秒)，尝试重置")
+                                try:
+                                    # 检查连接状态
+                                    is_connected = ws_app.sock and ws_app.sock.connected
+                                    logger.info(f"WebSocket {ws_key} 连接状态: {'已连接' if is_connected else '未连接'}, 实例ID: {id(ws_app)}")
+                                    
+                                    # 解析ws_key获取symbol和interval
+                                    if '_' in ws_key:
+                                        symbol, interval = ws_key.split('_', 1)
+                                        # 获取回调函数
+                                        if hasattr(ws_app, 'callback'):
+                                            # 重置连接
+                                            self.reset_kline_websocket(symbol, interval, ws_app.callback)
+                                        else:
+                                            logger.error(f"WebSocket {ws_key} 实例没有callback属性，无法重置")
+                                            # 尝试强制关闭并移除
+                                            try:
+                                                # 标记为主动停止，防止重连
+                                                self._intentional_stops[ws_key] = True
+                                                ws_app.close()
+                                            except Exception as e_close:
+                                                logger.error(f"关闭WebSocket {ws_key} 失败: {e_close}")
+                                                # 尝试强制关闭socket
+                                                try:
+                                                    if ws_app.sock:
+                                                        ws_app.sock.close()
+                                                except Exception:
+                                                    pass
+                                            # 从跟踪中移除
+                                            self.ws_connections.pop(ws_key, None)
+                                            self.ws_threads.pop(ws_key, None)
+                                            self._ws_last_activity.pop(ws_key, None)
+                                    else:
+                                        logger.error(f"无法解析WebSocket键 {ws_key}")
+                                except Exception as e:
+                                    logger.error(f"重置超时WebSocket连接 {ws_key} 失败: {e}", exc_info=True)
+                                    # 尝试强制关闭并移除
+                                    try:
+                                        self._intentional_stops[ws_key] = True
+                                        if ws_app.sock:
+                                            ws_app.sock.close()
+                                        self.ws_connections.pop(ws_key, None)
+                                        self.ws_threads.pop(ws_key, None)
+                                        self._ws_last_activity.pop(ws_key, None)
+                                    except Exception as e_force_close:
+                                        logger.error(f"强制关闭WebSocket {ws_key} 失败: {e_force_close}")
+                            elif inactive_time > self._ws_connection_timeout * 0.7:
+                                # 如果接近超时（超过70%阈值），尝试发送ping来保活
+                                logger.info(f"WebSocket连接 {ws_key} 接近超时 ({inactive_time:.1f}秒)，尝试发送ping保活")
+                                try:
+                                    if ws_app.sock and ws_app.sock.connected:
+                                        ws_app.sock.ping()
+                                        # 更新最后活动时间，避免频繁ping
+                                        self._ws_last_activity[ws_key] = current_time - (self._ws_connection_timeout * 0.5)
+                                    else:
+                                        logger.warning(f"WebSocket {ws_key} 的socket不可用或未连接，无法发送ping")
+                                        # 如果socket已断开但WebSocketApp仍在跟踪中，尝试重置
+                                        if '_' in ws_key and hasattr(ws_app, 'callback'):
+                                            symbol, interval = ws_key.split('_', 1)
+                                            self.reset_kline_websocket(symbol, interval, ws_app.callback)
+                                except Exception as e:
+                                    logger.warning(f"向WebSocket {ws_key} 发送ping失败: {e}")
+                                    # 如果ping失败，可能连接已经断开，尝试重置
+                                    if '_' in ws_key and hasattr(ws_app, 'callback'):
+                                        try:
+                                            symbol, interval = ws_key.split('_', 1)
+                                            self.reset_kline_websocket(symbol, interval, ws_app.callback)
+                                        except Exception as e_reset:
+                                            logger.error(f"重置WebSocket {ws_key} 失败: {e_reset}")
+                except Exception as e:
+                    logger.error(f"WebSocket监控线程发生错误: {e}", exc_info=True)
+                    
+                # 休眠指定时间
+                time.sleep(self._ws_monitor_interval)
                 
-            logger.info(f"正在停止所有 {num_connections} 个活动的WebSocket连接...")
+            logger.info("WebSocket连接监控线程已停止")
+        
+        # 创建并启动监控线程
+        self._ws_monitor_thread = threading.Thread(target=monitor_websockets, daemon=True, name="WS-Monitor")
+        self._ws_monitor_thread.start()
+        
+    def _stop_ws_monitor(self):
+        """停止WebSocket连接监控线程
+        
+        此方法会尝试优雅地停止监控线程，并在超时后返回
+        """
+        if not self._ws_monitor_running:
+            logger.debug("WebSocket连接监控线程未运行，无需停止")
+            return True
+            
+        logger.info("正在停止WebSocket连接监控线程...")
+        self._ws_monitor_running = False
+        
+        # 等待线程结束
+        if self._ws_monitor_thread and self._ws_monitor_thread.is_alive():
+            # 设置更长的超时时间，确保线程有足够时间完成当前迭代并退出
+            monitor_stop_timeout = 10  # 10秒超时
+            logger.debug(f"等待监控线程结束，超时时间: {monitor_stop_timeout}秒")
+            
+            self._ws_monitor_thread.join(timeout=monitor_stop_timeout)
+            if self._ws_monitor_thread.is_alive():
+                logger.warning(f"WebSocket连接监控线程未能在{monitor_stop_timeout}秒内停止，这可能导致资源泄漏")
+                return False
+        
+        logger.info("WebSocket连接监控线程已成功停止")
+        return True
+    
+    def stop_all_websockets(self):
+        """停止所有WebSocket连接
+        
+        此方法会尝试优雅地关闭所有活动的WebSocket连接，并在必要时强制关闭
+        以确保服务能够正常退出，防止进程卡死
+        """
+        logger.warning("正在停止所有WebSocket连接...")
+        
+        # 首先停止监控线程
+        self._stop_ws_monitor()
+        
+        # 第一阶段：尝试优雅关闭所有连接
+        with self.ws_management_lock:
+            # 复制键列表，避免在迭代过程中修改字典
+            ws_keys = list(self.ws_connections.keys())
+            logger.info(f"需要关闭 {len(ws_keys)} 个WebSocket连接")
+            
+            # 标记所有连接为主动停止，防止重连
+            for ws_key in ws_keys:
+                self._intentional_stops[ws_key] = True
+            
+            # 尝试优雅关闭每个连接
+            for ws_key in ws_keys:
+                try:
+                    # 解析ws_key获取symbol和interval
+                    if '_' in ws_key:
+                        symbol, interval = ws_key.split('_', 1)
+                        logger.info(f"正在停止 {symbol} {interval} 的WebSocket连接...")
+                        self.stop_kline_websocket(symbol, interval)
+                    else:
+                        logger.warning(f"无法解析WebSocket键 {ws_key}，尝试直接关闭")
+                        # 直接关闭连接
+                        if ws_key in self.ws_connections:
+                            try:
+                                ws_app = self.ws_connections[ws_key]
+                                logger.info(f"正在关闭WebSocket连接 {ws_key} (实例ID: {id(ws_app)})")
+                                ws_app.close()
+                            except Exception as e:
+                                logger.error(f"关闭WebSocket连接 {ws_key} 失败: {e}")
+                            # 无论是否成功关闭，都从跟踪中移除
+                            self.ws_connections.pop(ws_key, None)
+                except Exception as e:
+                    logger.error(f"停止WebSocket连接 {ws_key} 时发生错误: {e}")
+        
+        # 第二阶段：等待线程结束，并在必要时强制关闭
+        shutdown_start = time.time()
+        force_close_timeout = self._ws_shutdown_timeout * 0.7  # 70%的时间用于等待优雅关闭
+        force_close_deadline = shutdown_start + force_close_timeout
+        final_deadline = shutdown_start + self._ws_shutdown_timeout
+        
+        logger.info(f"等待WebSocket线程结束，优雅关闭超时: {force_close_timeout:.1f}秒，最终超时: {self._ws_shutdown_timeout}秒")
+        
+        # 等待线程结束，直到优雅关闭超时
+        while time.time() < force_close_deadline:
+            with self.ws_management_lock:
+                remaining_threads = [(k, t) for k, t in self.ws_threads.items() if t.is_alive()]
+                if not remaining_threads:
+                    logger.info("所有WebSocket线程已正常结束")
+                    break
+                logger.debug(f"仍有 {len(remaining_threads)} 个WebSocket线程在运行...")
+            time.sleep(0.5)
+        
+        # 如果仍有线程在运行，尝试强制关闭
+        with self.ws_management_lock:
+            remaining_threads = [(k, t) for k, t in self.ws_threads.items() if t.is_alive()]
+            if remaining_threads:
+                logger.warning(f"有 {len(remaining_threads)} 个WebSocket线程在 {force_close_timeout:.1f} 秒内未能正常结束，尝试强制关闭")
+                
+                # 强制关闭所有剩余的WebSocket连接
+                for ws_key, thread in remaining_threads:
+                    try:
+                        ws_app = self.ws_connections.get(ws_key)
+                        if ws_app and ws_app.sock:
+                            logger.warning(f"强制关闭WebSocket连接 {ws_key} 的socket")
+                            try:
+                                ws_app.sock.close()
+                            except Exception as e:
+                                logger.error(f"强制关闭WebSocket {ws_key} 的socket失败: {e}")
+                    except Exception as e:
+                        logger.error(f"强制关闭WebSocket {ws_key} 时发生错误: {e}")
+        
+        # 最后等待所有线程结束或达到最终超时
+        while time.time() < final_deadline:
+            with self.ws_management_lock:
+                remaining_threads = [(k, t) for k, t in self.ws_threads.items() if t.is_alive()]
+                if not remaining_threads:
+                    logger.info("所有WebSocket线程已结束")
+                    break
+                logger.warning(f"仍有 {len(remaining_threads)} 个WebSocket线程在强制关闭后仍在运行...")
+            time.sleep(0.5)
+        
+        # 最终清理
+        with self.ws_management_lock:
+            remaining_threads = [(k, t) for k, t in self.ws_threads.items() if t.is_alive()]
+            if remaining_threads:
+                logger.error(f"有 {len(remaining_threads)} 个WebSocket线程在 {self._ws_shutdown_timeout} 秒内未能结束，服务可能无法正常退出")
+                for ws_key, thread in remaining_threads:
+                    logger.error(f"未能结束的线程: {ws_key}, 线程ID: {thread.ident}")
+            
+            # 清理所有连接和线程记录
+            self.ws_connections.clear()
+            self.ws_threads.clear()
+            self._intentional_stops.clear()
+            self._ws_last_activity.clear()
+            self._reconnect_attempts.clear()
+            self._last_kline_log_time.clear()
+            
+            # 清理其他可能的循环引用
+            if hasattr(self, '_last_ping_log'):
+                self._last_ping_log.clear()
+            if hasattr(self, '_last_pong_log'):
+                self._last_pong_log.clear()
+            
+        logger.warning("所有WebSocket连接资源已清理完毕")
+        return True
+
+    def reset_kline_websocket(self, symbol: str, interval: str, user_callback: callable):
+        """重置指定交易对和周期的K线WebSocket连接
+        
+        此方法会先停止现有连接，然后重新启动一个新连接
+        """
+        ws_key = f"{symbol.lower()}_{interval}"
+        logger.info(f"正在重置交易对 {symbol} {interval} (key={ws_key}) 的K线WebSocket连接")
+        
+        try:
+            # 先停止现有连接
+            self.stop_kline_websocket(symbol, interval)
+            
+            # 等待一小段时间确保连接完全关闭
+            time.sleep(1)
+            
+            # 启动新连接
+            self.start_kline_websocket(symbol, interval, user_callback)
+            logger.info(f"交易对 {symbol} {interval} (key={ws_key}) 的K线WebSocket连接已重置")
+        except Exception as e:
+            logger.error(f"重置交易对 {symbol} {interval} (key={ws_key}) 的K线WebSocket连接失败: {e}", exc_info=True)
+            # 尝试再次启动连接
+            try:
+                self.start_kline_websocket(symbol, interval, user_callback)
+            except Exception as e2:
+                logger.error(f"重试启动交易对 {symbol} {interval} (key={ws_key}) 的K线WebSocket连接失败: {e2}", exc_info=True)
+    
+    # 原始的stop_all_websockets方法已被上面的增强版本替代
             # Iterate over a copy of keys because stop_kline_websocket modifies the dictionary
             for ws_key in list(self.ws_connections.keys()): 
                 try:
@@ -605,6 +1018,35 @@ class BinanceClient:
                         logger.warning(f"无法从键 '{ws_key}' 中解析交易对和周期，跳过停止。")
                 except Exception as e:
                     logger.error(f"停止WebSocket (键: {ws_key}) 时发生错误: {e}", exc_info=True)
+            
+            # 强制关闭任何剩余的连接
+            remaining_connections = list(self.ws_connections.items())
+            if remaining_connections:
+                logger.warning(f"在正常停止后，仍有 {len(remaining_connections)} 个WebSocket连接未关闭。尝试强制关闭...")
+                for ws_key, ws_app in remaining_connections:
+                    try:
+                        # 标记为主动停止，防止重连
+                        self._intentional_stops[ws_key] = True
+                        # 强制关闭连接
+                        if hasattr(ws_app, 'sock') and ws_app.sock:
+                            ws_app.sock.close()
+                        # 从跟踪中移除
+                        self.ws_connections.pop(ws_key, None)
+                        self.ws_threads.pop(ws_key, None)
+                        logger.info(f"已强制关闭WebSocket连接: {ws_key}")
+                    except Exception as e:
+                        logger.error(f"强制关闭 {ws_key} 的WebSocket连接失败: {e}")
+            
+            # 清理所有相关状态
+            self._reconnect_attempts.clear()
+            self._last_kline_log_time.clear()
+            self._intentional_stops.clear()
+            
+            # 最终检查
+            if self.ws_connections:
+                logger.error(f"在所有清理尝试后，仍有 {len(self.ws_connections)} 个WebSocket连接未关闭。")
+            else:
+                logger.info("所有WebSocket连接已成功停止和清理。")
         
         logger.info(f"已发送停止请求给所有活动的WebSocket连接。")
 

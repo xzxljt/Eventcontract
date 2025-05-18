@@ -27,16 +27,36 @@ import logging
 # 可以配置输出到文件和控制台
 import sys
 
+# 配置日志记录
+# 可以配置输出到文件和控制台
+import sys
+import os # Already imported at line 4, but good to be explicit here
+import logging.handlers # Already implicitly used, but good to be explicit
+
+# 从环境变量读取日志配置
+LOG_DIR = os.getenv("LOG_DIR", "logs")
+LOG_FILENAME = os.getenv("LOG_FILENAME", "service.log")
+LOG_ROTATION_WHEN = os.getenv("LOG_ROTATION_WHEN", "midnight")
+LOG_ROTATION_INTERVAL = int(os.getenv("LOG_ROTATION_INTERVAL", "1"))
+LOG_BACKUP_COUNT = int(os.getenv("LOG_BACKUP_COUNT", "7"))
+
+# 确保日志目录存在
+if not os.path.exists(LOG_DIR):
+    os.makedirs(LOG_DIR)
+
+# 构建完整的日志文件路径
+log_file_path = os.path.join(LOG_DIR, LOG_FILENAME)
+
 logging.basicConfig(
     level=logging.INFO, # 设置最低日志级别，例如 logging.DEBUG 可以看到更详细的日志
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        # 使用 TimedRotatingFileHandler 实现按天轮转，保留最近7天的日志
+        # 使用 TimedRotatingFileHandler 实现按配置轮转和保留历史日志
         logging.handlers.TimedRotatingFileHandler(
-            "service.log",
-            when="midnight", # 每天午夜轮转
-            interval=1,      # 轮转间隔为1天
-            backupCount=7,   # 保留最近7天的日志文件
+            log_file_path,
+            when=LOG_ROTATION_WHEN, # 轮转周期
+            interval=LOG_ROTATION_INTERVAL, # 轮转间隔
+            backupCount=LOG_BACKUP_COUNT,   # 保留历史日志文件数量
             encoding='utf-8' # 指定编码
         ),
         logging.StreamHandler(sys.stdout) # 保留：输出到控制台
@@ -65,13 +85,59 @@ AUTOX_CLIENTS_FILE = "config/autox_clients_data.json" # AutoX 客户端数据文
 # 这个字典将以 client_id 为键，存储客户端的注册信息和最新状态
 persistent_autox_clients_data: Dict[str, Dict[str, Any]] = {}
 
+# AutoX客户端心跳检测间隔 (秒)
+AUTOX_HEARTBEAT_INTERVAL = 30
+# AutoX客户端心跳超时时间 (秒)，应大于心跳间隔
+AUTOX_HEARTBEAT_TIMEOUT = 60
+
 
 # 初始化 FastAPI 应用
 app = FastAPI(
     title="币安事件合约交易信号机器人", # 应用标题
     description="基于技术指标的币安事件合约交易信号生成和回测系统", # 应用描述
-    version="1.4.2" # 应用版本
+    version="1.4.3" # 应用版本
 )
+
+# 添加信号处理，确保服务能够正确响应系统信号
+import signal
+import platform
+
+def handle_sigterm(signum, frame):
+    """处理SIGTERM信号，确保服务能够优雅关闭。"""
+    logger.warning(f"收到系统信号 {signum}，准备优雅关闭服务...")
+    # 这里不需要做任何事情，因为信号会传递给uvicorn，
+    # uvicorn会触发FastAPI的shutdown事件，我们在shutdown_event中处理清理工作
+    # 记录日志以便于调试
+    logger.warning("信号已处理，等待uvicorn触发shutdown事件...")
+
+# 只在非Windows系统上注册信号处理函数
+# Windows下的信号处理机制与Unix/Linux不同，可能导致问题
+if platform.system() != "Windows":
+    try:
+        signal.signal(signal.SIGTERM, handle_sigterm)
+        signal.signal(signal.SIGINT, handle_sigterm)
+        logger.info("已注册系统信号处理函数")
+    except Exception as e:
+        logger.warning(f"注册信号处理函数失败: {e}，这在某些环境下是正常的")
+
+# 添加FastAPI应用关闭事件处理函数
+@app.on_event("shutdown")
+async def shutdown_event():
+    """应用关闭时的清理工作
+    
+    确保所有WebSocket连接被正确关闭，防止进程卡死
+    """
+    logger.warning("应用正在关闭，执行清理工作...")
+    
+    # 停止所有币安WebSocket连接
+    logger.info("正在停止所有币安WebSocket连接...")
+    try:
+        binance_client.stop_all_websockets()
+        logger.info("所有币安WebSocket连接已停止")
+    except Exception as e:
+        logger.error(f"停止币安WebSocket连接时发生错误: {e}", exc_info=True)
+    
+    logger.warning("应用清理工作完成，准备退出...")
 
 # --- WebSocket 连接管理器 (保持不变) ---
 class ConnectionManager:
@@ -1030,6 +1096,7 @@ async def startup_event():
     # 创建后台任务
     asyncio.create_task(process_kline_queue())
     asyncio.create_task(background_signal_verifier())
+    asyncio.create_task(autox_heartbeat_check()) # 新增：启动AutoX心跳检测任务
     print("应用启动完成。后台任务已启动。")
 
 @app.on_event("shutdown")
@@ -1338,8 +1405,10 @@ async def autox_websocket_endpoint(websocket: WebSocket):
                         )
                     
                     client_info_to_store_dict = client_info_model.model_dump(mode='json')
-                    active_autox_clients[websocket] = client_info_to_store_dict 
-                    persistent_autox_clients_data[client_id_local] = client_info_to_store_dict 
+                    # 在 active_autox_clients 中记录最后一次收到 pong 的时间
+                    client_info_to_store_dict['last_pong_time'] = now_utc().isoformat()
+                    active_autox_clients[websocket] = client_info_to_store_dict
+                    persistent_autox_clients_data[client_id_local] = client_info_to_store_dict
 
                 print(f"AutoX客户端已注册/更新: ID={client_id_local}, 支持交易对={supported_symbols_list}, 备注='{client_info_to_store_dict.get('notes', '') if client_info_to_store_dict else ''}'")
                 await websocket.send_json({"type": "registered", "message": "客户端注册成功。", "client_info": client_info_to_store_dict})
@@ -1426,12 +1495,15 @@ async def autox_websocket_endpoint(websocket: WebSocket):
                     await broadcast_autox_clients_status() 
                     await save_autox_clients_to_file() 
 
-            elif message_type == "pong": 
-                with autox_clients_lock: 
+            elif message_type == "pong":
+                # 收到客户端的 pong 回复，更新最后活动时间和 pong 时间
+                with autox_clients_lock:
                      if websocket in active_autox_clients:
                         active_autox_clients[websocket]['last_seen'] = now_utc().isoformat()
+                        active_autox_clients[websocket]['last_pong_time'] = now_utc().isoformat() # 更新 pong 时间
                         if client_id_local and client_id_local in persistent_autox_clients_data:
                             persistent_autox_clients_data[client_id_local]['last_seen'] = now_utc().isoformat()
+                            # persistent_autox_clients_data 不存储 last_pong_time，只存储最后活动时间
             else:
                 print(f"收到来自AutoX客户端 {client_id_local or '未知'} 的未知消息类型: {message_type}")
                 await websocket.send_json({"type": "error", "message": f"不支持的消息类型: {message_type}"})
@@ -1459,9 +1531,56 @@ async def autox_websocket_endpoint(websocket: WebSocket):
         if disconnected_client_id: 
             await broadcast_autox_clients_status() 
             await save_autox_clients_to_file()
+ 
+ 
+ # --- 后台任务：AutoX客户端心跳检测 ---
+async def autox_heartbeat_check():
+    """定期检查AutoX客户端心跳，断开超时的连接。"""
+    global active_autox_clients, autox_clients_lock
+    while True:
+        await asyncio.sleep(AUTOX_HEARTBEAT_INTERVAL)
+        now = now_utc()
+        disconnected_clients = []
 
+        with autox_clients_lock:
+            # 遍历 active_autox_clients 的副本，以便在迭代时修改原字典
+            for ws, client_info in list(active_autox_clients.items()):
+                client_id = client_info.get('client_id', '未知')
+                last_pong_time_str = client_info.get('last_pong_time')
+                
+                if last_pong_time_str:
+                    try:
+                        last_pong_time = parse_frontend_datetime(last_pong_time_str)
+                        if not last_pong_time.tzinfo:
+                             last_pong_time = last_pong_time.replace(tzinfo=timezone.utc)
+                        else:
+                             last_pong_time = last_pong_time.astimezone(timezone.utc)
 
-# --- WebSocket 端点 for AutoX Status (/ws/autox_status) (逻辑不变) ---
+                        if (now - last_pong_time).total_seconds() > AUTOX_HEARTBEAT_TIMEOUT:
+                            print(f"AutoX客户端 {client_id} 心跳超时，断开连接。")
+                            disconnected_clients.append(ws)
+                    except Exception as e:
+                        print(f"处理AutoX客户端 {client_id} 心跳时间时出错: {e}")
+                        # 如果时间解析出错，也考虑断开连接以避免僵尸连接
+                        disconnected_clients.append(ws)
+                else:
+                    # 如果没有 last_pong_time 字段 (可能是旧的客户端或注册失败)，也考虑断开
+                    print(f"AutoX客户端 {client_id} 缺少 last_pong_time 字段，断开连接。")
+                    disconnected_clients.append(ws)
+
+        # 在锁外关闭连接，避免阻塞
+        for ws in disconnected_clients:
+            try:
+                # 使用非正常关闭码 (例如 1011 内部错误) 或 1008 (策略违规)
+                # 1000 是正常关闭，不适合这里
+                await ws.close(code=1008, reason="Heartbeat timeout")
+            except Exception as e:
+                print(f"关闭超时AutoX客户端连接失败: {e}")
+
+        # 关闭连接后，autox_websocket_endpoint 的 finally 块会被触发，处理后续的移除和广播
+
+ 
+ # --- WebSocket 端点 for AutoX Status (/ws/autox_status) (逻辑不变) ---
 @app.websocket("/ws/autox_status")
 async def autox_status_websocket_endpoint(websocket: WebSocket):
     await autox_status_manager.connect(websocket)
@@ -2093,6 +2212,71 @@ async def generate_enhanced_test_signal(
         "autox_attempt_details": autox_attempt_log
     }
 
+# --- 添加优雅关闭机制 ---
+@app.on_event("shutdown")
+async def shutdown_event():
+    """在应用关闭时执行清理操作，确保所有资源正确释放。"""
+    logger.info("服务正在关闭，执行清理操作...")
+    
+    # 1. 停止所有WebSocket连接
+    try:
+        logger.info("正在关闭所有币安WebSocket连接...")
+        binance_client.stop_all_websockets()
+        logger.info("所有币安WebSocket连接已关闭")
+    except Exception as e:
+        logger.error(f"关闭币安WebSocket连接时出错: {e}")
+    
+    # 2. 保存所有持久化数据
+    try:
+        logger.info("正在保存所有持久化数据...")
+        await asyncio.gather(
+            save_live_signals_async(),
+            save_strategy_parameters_to_file(),
+            save_autox_clients_to_file(),
+            save_active_test_config()
+        )
+        logger.info("所有持久化数据已保存")
+    except Exception as e:
+        logger.error(f"保存持久化数据时出错: {e}")
+    
+    # 3. 关闭所有AutoX客户端连接
+    try:
+        logger.info(f"正在关闭 {len(autox_manager.active_connections)} 个AutoX客户端连接...")
+        for ws in list(autox_manager.active_connections):
+            try:
+                await ws.close(code=1000, reason="服务器正在关闭")
+            except Exception as ws_err:
+                logger.error(f"关闭AutoX WebSocket连接时出错: {ws_err}")
+        logger.info("所有AutoX客户端连接已关闭")
+    except Exception as e:
+        logger.error(f"关闭AutoX客户端连接时出错: {e}")
+    
+    # 4. 关闭所有UI WebSocket连接
+    try:
+        logger.info(f"正在关闭 {len(manager.active_connections)} 个UI WebSocket连接...")
+        for ws in list(manager.active_connections):
+            try:
+                await ws.close(code=1000, reason="服务器正在关闭")
+            except Exception as ws_err:
+                logger.error(f"关闭UI WebSocket连接时出错: {ws_err}")
+        logger.info("所有UI WebSocket连接已关闭")
+    except Exception as e:
+        logger.error(f"关闭UI WebSocket连接时出错: {e}")
+    
+    # 5. 关闭所有状态监控WebSocket连接
+    try:
+        logger.info(f"正在关闭 {len(autox_status_manager.active_connections)} 个状态监控WebSocket连接...")
+        for ws in list(autox_status_manager.active_connections):
+            try:
+                await ws.close(code=1000, reason="服务器正在关闭")
+            except Exception as ws_err:
+                logger.error(f"关闭状态监控WebSocket连接时出错: {ws_err}")
+        logger.info("所有状态监控WebSocket连接已关闭")
+    except Exception as e:
+        logger.error(f"关闭状态监控WebSocket连接时出错: {e}")
+    
+    logger.info("服务关闭清理操作完成")
+
 if __name__ == "__main__":
     # 创建启动任务列表
     startup_tasks = [
@@ -2116,6 +2300,7 @@ if __name__ == "__main__":
     # 从环境变量读取主机和端口，如果不存在则使用默认值
     host = os.getenv("SERVER_HOST", "0.0.0.0")
     port = int(os.getenv("SERVER_PORT", "8000")) # 端口通常是整数
-    uvicorn.run(app, host=host, port=port)
+    # 设置超时参数，确保服务能够正常关闭
+    uvicorn.run(app, host=host, port=port, timeout_keep_alive=30, timeout_graceful_shutdown=30)
 
 # --- END OF FILE main.py ---

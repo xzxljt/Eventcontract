@@ -32,3 +32,10 @@ test.py
 
 .kline_cache/
 live_signals.json
+GRACEFUL_SHUTDOWN_README.md
+service.log.2025-05-17
+autoxjs/autox_binance_executor.js
+config/active_test_config.json
+config/autox_clients_data.json
+
+eventcontract.service.example
