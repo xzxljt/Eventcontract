@@ -3,13 +3,16 @@
 # 导入必要的库
 import os
 import pandas as pd
+from dotenv import load_dotenv
+load_dotenv(override=True) # 强制覆盖已存在的同名环境变量
+from pandas import Timestamp # 确保明确导入 Timestamp 类型
 from fastapi import FastAPI, HTTPException, Query, Depends, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, ValidationError
 from typing import List, Dict, Any, Optional
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone # 明确导入 date 类
 import uvicorn
 import numpy as np
 import json
@@ -43,6 +46,14 @@ LOG_BACKUP_COUNT = int(os.getenv("LOG_BACKUP_COUNT", "7"))
 # 确保日志目录存在
 if not os.path.exists(LOG_DIR):
     os.makedirs(LOG_DIR)
+
+# --- AutoX 交易日志配置 ---
+AUTOX_TRADE_LOG_DIR = os.path.join(LOG_DIR, "trade_logs")
+
+def get_autox_trade_log_file_path(date: Optional[datetime.date] = None) -> str:
+    """获取指定日期或今天的 AutoX 交易日志文件路径。"""
+    if date is None: date = datetime.date.today()
+    return os.path.join(AUTOX_TRADE_LOG_DIR, f"trade_logs_{date.strftime('%Y-%m-%d')}.json")
 
 # 构建完整的日志文件路径
 log_file_path = os.path.join(LOG_DIR, LOG_FILENAME)
@@ -85,10 +96,6 @@ AUTOX_CLIENTS_FILE = "config/autox_clients_data.json" # AutoX 客户端数据文
 # 这个字典将以 client_id 为键，存储客户端的注册信息和最新状态
 persistent_autox_clients_data: Dict[str, Dict[str, Any]] = {}
 
-# AutoX客户端心跳检测间隔 (秒)
-AUTOX_HEARTBEAT_INTERVAL = 30
-# AutoX客户端心跳超时时间 (秒)，应大于心跳间隔
-AUTOX_HEARTBEAT_TIMEOUT = 60
 
 
 # 初始化 FastAPI 应用
@@ -157,6 +164,7 @@ class ConnectionManager:
 
 # --- Pydantic 模型定义 (保持不变) ---
 class InvestmentStrategySettings(BaseModel):
+    model_config = {'arbitrary_types_allowed': True} # 允许任意类型
     amount: float = Field(20.0, description="基础投资金额或固定金额")
     strategy_id: str = Field("fixed", description="投资策略ID")
     minAmount: float = Field(5.0, description="最小投资金额")
@@ -168,6 +176,7 @@ class InvestmentStrategySettings(BaseModel):
 
 
 class BacktestInvestmentSettings(BaseModel):
+    model_config = {'arbitrary_types_allowed': True} # 允许任意类型
     initial_balance: float = Field(1000.0, description="回测初始模拟资金")
     investment_strategy_id: str = Field("fixed", description="投资策略ID")
     investment_strategy_specific_params: Optional[Dict[str, Any]] = Field(None, description="选定投资策略的特定参数")
@@ -177,6 +186,7 @@ class BacktestInvestmentSettings(BaseModel):
     loss_rate_pct: float = Field(100.0, description="事件合约亏损百分比 (%)")
 
 class BacktestRequest(BaseModel):
+    model_config = {'arbitrary_types_allowed': True} # 允许任意类型
     symbol: str = Field(..., description="交易对")
     interval: str = Field(..., description="K线周期")
     start_time: datetime = Field(..., description="回测开始时间 (中国时区)")
@@ -188,47 +198,55 @@ class BacktestRequest(BaseModel):
     investment: BacktestInvestmentSettings = Field(..., description="投资设置")
 
 class SymbolInfo(BaseModel):
+    model_config = {'arbitrary_types_allowed': True} # 允许任意类型
     symbol: str; base_asset: str; quote_asset: str
 class StrategyParameterSet(BaseModel):
+    model_config = {'arbitrary_types_allowed': True} # 允许任意类型
     strategy_type: str = Field(..., description="策略类型: 'prediction' or 'investment'")
     strategy_id: str = Field(..., description="策略ID")
     params: Dict[str, Any] = Field(..., description="策略参数")
 
 class AutoXClientInfo(BaseModel):
+    model_config = {'arbitrary_types_allowed': True} # 允许任意类型
     client_id: str
-    status: str = "idle" 
+    status: str = "idle"
     supported_symbols: List[str] = ["BTCUSDT"]
     last_seen: Optional[datetime] = None
     connected_at: datetime = Field(default_factory=now_utc)
     notes: Optional[str] = Field(None, description="管理员为客户端添加的备注")
 
 class AutoXTradeLogEntry(BaseModel):
+    model_config = {'arbitrary_types_allowed': True} # 允许任意类型
     log_id: str = Field(default_factory=lambda: uuid.uuid4().hex)
     client_id: str
     signal_id: Optional[str] = None
-    command_type: str 
+    command_type: str
     command_payload: Dict[str, Any]
-    status: str 
+    status: str
     details: Optional[str] = None
     error_message: Optional[str] = None
     timestamp: datetime = Field(default_factory=now_utc)
 
 class TriggerAutoXTradePayload(BaseModel):
+    model_config = {'arbitrary_types_allowed': True} # 允许任意类型
     symbol: str = "ETHUSDT"
-    direction: str = Query(..., pattern="^(up|down)$") 
-    amount: str = "5" 
+    direction: str = Query(..., pattern="^(up|down)$")
+    amount: str = "5"
     signal_id: Optional[str] = None
 
 class ClientNotesPayload(BaseModel):
+    model_config = {'arbitrary_types_allowed': True} # 允许任意类型
     notes: Optional[str] = Field(None, max_length=255)
 
 class DeleteSignalsRequest(BaseModel):
+    model_config = {'arbitrary_types_allowed': True} # 允许任意类型
     signal_ids: List[str]
 
 # --- CORS, StaticFiles, BinanceClient ---
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 app.mount("/static", StaticFiles(directory="frontend/static"), name="static")
 app.mount("/templates", StaticFiles(directory="templates"), name="templates") # Add this line to serve templates directory
+app.mount("/autoxjs", StaticFiles(directory="autoxjs"), name="autoxjs") # Add this line to serve autoxjs directory
 binance_client = BinanceClient()
 
 # --- WebSocket 连接管理器 ---
@@ -265,6 +283,7 @@ autox_clients_lock = threading.Lock() # 用于保护 active_autox_clients 和 pe
 autox_trade_logs: List[Dict[str, Any]] = []
 autox_trade_logs_lock = threading.Lock() # 用于保护 autox_trade_logs
 MAX_AUTOX_LOG_ENTRIES = 200
+current_autox_trade_log_date: date = date.today() # 当前日志对应的日期
 
 # --- 辅助函数：确保数据是JSON可序列化的 (保持不变) ---
 def ensure_json_serializable(data: Any) -> Any:
@@ -341,6 +360,36 @@ def _blocking_load_json_from_file(file_path: str, default_value: Any = None) -> 
         return {}
 
 # --- 修改后的持久化函数 ---
+async def load_autox_trade_logs():
+    """在应用启动时加载当天的 AutoX 交易日志。"""
+    global autox_trade_logs, current_autox_trade_log_date
+
+    current_date = date.today() # 使用导入的 date 类
+    log_file_path = get_autox_trade_log_file_path(current_date)
+    current_autox_trade_log_date = current_date # 记录当前加载的日志日期
+
+    print(f"尝试从文件 {log_file_path} 加载当天的 AutoX 交易日志...")
+
+    loaded_data = await asyncio.to_thread(
+        _blocking_load_json_from_file,
+        log_file_path,
+        default_value=[] # 交易日志是列表
+    )
+
+    # 验证加载的数据结构
+    valid_logs = []
+    if isinstance(loaded_data, list):
+        for log_entry_dict in loaded_data:
+            try:
+                # 使用 Pydantic 模型验证并转换为字典
+                log_model = AutoXTradeLogEntry(**log_entry_dict)
+                valid_logs.append(log_model.model_dump(mode='json'))
+            except Exception as e_val:
+                print(f"加载AutoX交易日志时验证失败: {e_val}. 跳过此日志条目。")
+
+    with autox_trade_logs_lock: # 保护对全局变量的写入
+        autox_trade_logs = valid_logs
+
 async def load_active_test_config():
     """从文件异步加载活动测试配置。"""
     global active_live_test_config_id, running_live_test_configs
@@ -374,19 +423,40 @@ async def load_active_test_config():
     else:
         print(f"{ACTIVE_TEST_CONFIG_FILE} 未找到活动测试配置或配置不完整。") # 修改日志
 
+async def save_autox_trade_logs_async():
+    """异步保存 AutoX 交易日志到当天的文件。"""
+    global autox_trade_logs, current_autox_trade_log_date
+
+    log_file_path = get_autox_trade_log_file_path(current_autox_trade_log_date)
+    logs_copy = []
+    with autox_trade_logs_lock: # 获取锁以安全地复制数据
+        logs_copy = [log.copy() for log in autox_trade_logs] # 创建副本以传递给线程
+
+    try:
+        # 确保日志目录存在
+        log_dir = os.path.dirname(log_file_path)
+        if not os.path.exists(log_dir):
+            os.makedirs(log_dir)
+
+        await asyncio.to_thread(_blocking_save_json_to_file, log_file_path, logs_copy)
+        # print(f"AutoX 交易日志已异步保存到文件 {log_file_path}。") # 保存函数内部会打印
+    except Exception as e:
+        print(f"异步保存 AutoX 交易日志到 {log_file_path} 失败 (从主调函数看): {e}\n{traceback.format_exc()}")
+
+
 async def save_active_test_config():
     """异步保存当前活动测试配置到文件。"""
     global active_live_test_config_id, running_live_test_configs
-    
+
     config_to_save = {
         "active_config_id": None,
         "config_data": None,
         "last_updated": format_for_display(now_utc())
     }
-    
+
     with active_live_test_config_lock:
         config_id = active_live_test_config_id
-    
+
     if config_id:
         with running_live_test_configs_lock:
             if config_id in running_live_test_configs:
@@ -749,6 +819,7 @@ async def _send_autox_command(client_ws: WebSocket, command: Dict[str, Any]): # 
             autox_trade_logs.append(AutoXTradeLogEntry(**log_entry_data).model_dump(mode='json'))
             if len(autox_trade_logs) > MAX_AUTOX_LOG_ENTRIES:
                 autox_trade_logs.pop(0)
+        await save_autox_trade_logs_async() # 新增：保存交易日志
     except Exception as e:
         print(f"向AutoX客户端发送指令失败: {e}")
 
@@ -1060,6 +1131,7 @@ async def stop_kline_websocket_if_not_needed(symbol: str, interval: str):
 @app.on_event("startup")
 async def startup_event():
     # 所有加载函数已改为异步
+    await load_autox_trade_logs() # 新增：加载当天的交易日志
     await load_live_signals_async()
     await load_strategy_parameters_from_file()
     await load_autox_clients_from_file()
@@ -1096,8 +1168,19 @@ async def startup_event():
     # 创建后台任务
     asyncio.create_task(process_kline_queue())
     asyncio.create_task(background_signal_verifier())
-    asyncio.create_task(autox_heartbeat_check()) # 新增：启动AutoX心跳检测任务
     print("应用启动完成。后台任务已启动。")
+
+    # 新增：启动每日日志切换和清理任务
+    asyncio.create_task(daily_log_rotation_and_cleanup())
+
+# 新增：每日日志轮转和清理任务 (占位符)
+async def daily_log_rotation_and_cleanup():
+    """后台任务：每日检查并轮转 AutoX 交易日志，清理旧文件。"""
+    logger.info("每日日志轮转和清理任务已启动。")
+    while True:
+        # TODO: 实现日志轮转和清理逻辑
+        # 例如：检查当前日期是否与日志文件日期一致，不一致则切换并清理旧文件
+        await asyncio.sleep(3600) # 每小时检查一次 (可以调整)
 
 @app.on_event("shutdown")
 async def shutdown_event(): # 基本不变
@@ -1109,6 +1192,9 @@ async def shutdown_event(): # 基本不变
 @app.websocket("/ws/live-test")
 async def websocket_endpoint(websocket: WebSocket):
     global active_live_test_config_id
+    global active_live_test_config_id # 声明为全局变量
+    global running_live_test_configs # 也需要声明 running_live_test_configs 为全局变量
+    global websocket_to_config_id_map # 也需要声明 websocket_to_config_id_map 为全局变量
     await manager.connect(websocket)
     try:
         # 发送初始信号数据
@@ -1200,7 +1286,6 @@ async def websocket_endpoint(websocket: WebSocket):
                     if not all(key in config_payload_data for key in required_keys):
                         await websocket.send_json({"type": "error", "data": {"message": "运行时配置缺少必要字段。"}})
                         continue
-                    
                     # Pydantic 模型验证 investment_settings
                     validated_investment_settings = InvestmentStrategySettings(**config_payload_data["investment_settings"]).model_dump(mode='json')
                     config_payload_data["investment_settings"] = validated_investment_settings # 使用验证后的数据
@@ -1216,107 +1301,85 @@ async def websocket_endpoint(websocket: WebSocket):
                     })
                     continue # 继续处理下一个消息
                 except Exception as e_val:
-                     # Handle other exceptions during config processing
-                     print(f"处理 set_runtime_config 时发生未知错误: {e_val}\n{traceback.format_exc()}")
-                     await websocket.send_json({"type": "error", "data": {"message": f"应用配置时发生未知错误: {str(e_val)}"}})
-                     continue # 继续处理下一个消息
+                    # Handle other exceptions during config processing
+                    print(f"处理 set_runtime_config 时发生未知错误: {e_val}\n{traceback.format_exc()}")
+                    await websocket.send_json({"type": "error", "data": {"message": f"应用配置时发生未知错误: {str(e_val)}"}})
+                    continue # 继续处理下一个消息
 
+                # --- 新逻辑：无论是否已有活动配置，都允许覆盖并保存新配置 ---
+                # 先移除当前WebSocket的旧配置ID映射
                 existing_config_id = websocket_to_config_id_map.pop(websocket, None)
-                if existing_config_id: 
-                    # 如果当前WebSocket已经关联到一个配置ID，先移除这个关联
-                    # 但不删除配置，因为可能其他设备还在使用
-                    pass
-                
-                # 检查是否已有活动的测试配置
-                current_active_config_id = None
+                # 生成/复用活动配置ID
+                new_config_id = None
                 with active_live_test_config_lock:
-                    current_active_config_id = active_live_test_config_id
-                
-                if current_active_config_id:
-                    # 已有活动配置，使用现有配置ID
-                    new_config_id = current_active_config_id
-                    
-                    # 获取现有配置数据
-                    existing_config = None
-                    with running_live_test_configs_lock:
-                        if current_active_config_id in running_live_test_configs:
-                            existing_config = running_live_test_configs[current_active_config_id]
-                    
-                    if existing_config:
-                        # 发送会话恢复通知
-                        await websocket.send_json({
-                            "type": "session_recovered",
-                            "data": {
-                                "config_id": new_config_id,
-                                "message": "已恢复现有测试会话",
-                                "config": existing_config
-                            }
-                        })
-                        
-                        # 将当前WebSocket关联到现有配置ID
-                        websocket_to_config_id_map[websocket] = new_config_id
-                        return
-                else:
-                    # 没有活动配置，创建新配置ID
-                    new_config_id = uuid.uuid4().hex
-                    
-                    # 设置为全局活动配置ID
-                    with active_live_test_config_lock:
+                    if active_live_test_config_id:
+                        new_config_id = active_live_test_config_id
+                    else:
+                        new_config_id = uuid.uuid4().hex
                         active_live_test_config_id = new_config_id
-                
-                new_symbol = config_payload_data['symbol']; new_interval = config_payload_data['interval']
-                
-                # current_balance 使用 investment_settings 中的 simulatedBalance 初始化
-                # 如果 simulatedBalance 未提供，则使用默认值 (例如 1000.0)
+
+                new_symbol = config_payload_data['symbol']
+                new_interval = config_payload_data['interval']
                 initial_simulated_balance = config_payload_data["investment_settings"].get("simulatedBalance")
                 initial_current_balance = initial_simulated_balance if initial_simulated_balance is not None else 1000.0
 
-                full_config_to_store = { 
-                    "symbol": new_symbol, "interval": new_interval,
-                    "prediction_strategy_id": config_payload_data["prediction_strategy_id"],
-                    "prediction_strategy_params": config_payload_data.get("prediction_strategy_params"),
-                    "confidence_threshold": config_payload_data["confidence_threshold"],
-                    "event_period": config_payload_data["event_period"],
-                    "investment_settings": config_payload_data["investment_settings"], 
-                    "autox_enabled": config_payload_data.get("autox_enabled", True),
-                    "current_balance": initial_current_balance, # 初始化会话余额
-                    "total_profit_loss_amount": 0.0, # 新增：初始化总盈亏额
-                    "created_at": format_for_display(now_utc()) # 记录创建时间
-                }
+                # 构造完整配置，保留当前余额和盈亏（如果已有配置）
+                with running_live_test_configs_lock:
+                    old_config = running_live_test_configs.get(new_config_id)
+                    full_config_to_store = {
+                        "symbol": new_symbol,
+                        "interval": new_interval,
+                        "prediction_strategy_id": config_payload_data["prediction_strategy_id"],
+                        "prediction_strategy_params": config_payload_data.get("prediction_strategy_params"),
+                        "confidence_threshold": config_payload_data["confidence_threshold"],
+                        "event_period": config_payload_data["event_period"],
+                        "investment_settings": config_payload_data["investment_settings"],
+                        "autox_enabled": config_payload_data.get("autox_enabled", True),
+                        "current_balance": old_config["current_balance"] if old_config and "current_balance" in old_config else initial_current_balance,
+                        "total_profit_loss_amount": old_config["total_profit_loss_amount"] if old_config and "total_profit_loss_amount" in old_config else 0.0,
+                        "created_at": old_config["created_at"] if old_config and "created_at" in old_config else format_for_display(now_utc())
+                    }
+                    running_live_test_configs[new_config_id] = full_config_to_store
+
+                websocket_to_config_id_map[websocket] = new_config_id
 
                 try:
-                    if new_symbol != 'all' and new_interval != 'all': 
+                    if new_symbol != 'all' and new_interval != 'all':
                         await start_kline_websocket_if_needed(new_symbol, new_interval)
-                    
-                    with running_live_test_configs_lock: 
-                        running_live_test_configs[new_config_id] = full_config_to_store
-                    
-                    websocket_to_config_id_map[websocket] = new_config_id
-                    
                     # 保存活动配置到文件
                     await save_active_test_config()
                     # 发送给客户端的 full_config_to_store 将包含 current_balance
                     await websocket.send_json({"type": "config_set_confirmation", "data": {"success": True, "message": "运行时配置已应用。", "config_id": new_config_id, "applied_config": full_config_to_store}})
-                except Exception as e_start_stream: 
+                except Exception as e_start_stream:
                     await websocket.send_json({"type": "error", "data": {"message": f"应用配置时启动K线流失败: {str(e_start_stream)}"}})
-                    with running_live_test_configs_lock: 
+                    with running_live_test_configs_lock:
                         running_live_test_configs.pop(new_config_id, None)
                     websocket_to_config_id_map.pop(websocket, None) 
             
             elif message_type == 'stop_current_test':
                 config_id_to_stop = websocket_to_config_id_map.pop(websocket, None)
                 stopped_config_content = None
-                if config_id_to_stop:
-                    with running_live_test_configs_lock: 
-                        stopped_config_content = running_live_test_configs.pop(config_id_to_stop, None)
                 
+                if config_id_to_stop:
+                    with running_live_test_configs_lock:
+                        stopped_config_content = running_live_test_configs.pop(config_id_to_stop, None)
+                    
+                    # 清除全局活动配置ID
+                    with active_live_test_config_lock:
+                        if active_live_test_config_id == config_id_to_stop:
+                            active_live_test_config_id = None
+                            print(f"已清除全局活动配置ID: {config_id_to_stop}")
+                    
+                    # 保存更新后的活动配置状态 (应为空或新的活动配置)
+                    await save_active_test_config()
+
                 if stopped_config_content:
                     await stop_kline_websocket_if_not_needed(stopped_config_content['symbol'], stopped_config_content['interval'])
                     await websocket.send_json({"type": "test_stopped_confirmation", "data": {"success": True, "message": "当前测试配置已停止。", "stopped_config_id": config_id_to_stop}})
                 else:
                     await websocket.send_json({"type": "error", "data": {"message": "未找到活动的测试配置来停止。"}})
             
-            await asyncio.sleep(0.1) 
+            await asyncio.sleep(0.1)
 
     except WebSocketDisconnect: 
         print(f"客户端 {getattr(websocket, 'client', 'N/A')} 断开连接。")
@@ -1349,169 +1412,190 @@ async def autox_websocket_endpoint(websocket: WebSocket):
     
     try:
         while True:
-            data = await websocket.receive_json()
-            message_type = data.get("type")
-            payload = data.get("payload", {})
+            try:
+                # 处理不同类型的WebSocket消息
+                data = await websocket.receive_json()
+                logger.debug(f"收到AutoX客户端消息 (JSON): {data}")
+                message_type = data.get("type")
+                payload = data.get("payload", {})
 
-            if message_type == "register":
-                client_id_from_payload = payload.get("client_id")
-                supported_symbols_list = payload.get("supported_symbols", ["BTCUSDT"])
-                client_notes_from_payload = payload.get("notes") # JS脚本目前不发送这个，但可以保留
+                # 处理文本消息的逻辑
+                if message_type == "register":
+                            client_id_from_payload = payload.get("client_id")
+                            supported_symbols_list = payload.get("supported_symbols", ["BTCUSDT"])
+                            client_notes_from_payload = payload.get("notes") # JS脚本目前不发送这个，但可以保留
 
-                if not client_id_from_payload:
-                    await websocket.send_json({"type": "error", "message": "注册失败：client_id 不能为空。"})
-                    await websocket.close(code=1008)
-                    return
+                            if not client_id_from_payload:
+                                await websocket.send_json({"type": "error", "message": "注册失败：client_id 不能为空。"})
+                                await websocket.close(code=1008)
+                                return
 
-                client_id_local = client_id_from_payload 
+                            client_id_local = client_id_from_payload
 
-                client_info_to_store_dict: Optional[Dict[str, Any]] = None
+                            client_info_to_store_dict: Optional[Dict[str, Any]] = None
 
-                with autox_clients_lock: 
-                    existing_persistent_info = persistent_autox_clients_data.get(client_id_local)
+                            with autox_clients_lock:
+                                existing_persistent_info = persistent_autox_clients_data.get(client_id_local)
+                                
+                                old_ws_to_close = None
+                                for ws_iter, active_info_iter in active_autox_clients.items():
+                                    if active_info_iter.get('client_id') == client_id_local and ws_iter != websocket:
+                                        print(f"AutoX客户端 {client_id_local} 重复连接 (不同WebSocket)，准备关闭旧连接。")
+                                        old_ws_to_close = ws_iter
+                                        break
+                                
+                                if old_ws_to_close:
+                                    try:
+                                        await old_ws_to_close.close(code=1000, reason="New connection for this client_id")
+                                    except Exception: pass
+                                    autox_manager.disconnect(old_ws_to_close)
+                                    active_autox_clients.pop(old_ws_to_close, None)
+
+                                if existing_persistent_info:
+                                    final_notes = client_notes_from_payload if client_notes_from_payload is not None else existing_persistent_info.get('notes')
+                                    client_info_model = AutoXClientInfo(
+                                        client_id=client_id_local,
+                                        status='idle',
+                                        supported_symbols=supported_symbols_list,
+                                        last_seen=now_utc(),
+                                        connected_at=parse_frontend_datetime(existing_persistent_info.get('connected_at')) if existing_persistent_info.get('connected_at') else now_utc(),
+                                        notes=final_notes
+                                    )
+                                else:
+                                    client_info_model = AutoXClientInfo(
+                                        client_id=client_id_local,
+                                        status='idle',
+                                        supported_symbols=supported_symbols_list,
+                                        last_seen=now_utc(),
+                                        connected_at=now_utc(),
+                                        notes=client_notes_from_payload
+                                    )
+                                
+                                client_info_to_store_dict = client_info_model.model_dump(mode='json')
+                                # 在 active_autox_clients 中记录最后一次收到 pong 的时间
+                                client_info_to_store_dict['last_pong_time'] = now_utc().isoformat()
+                                active_autox_clients[websocket] = client_info_to_store_dict
+                                persistent_autox_clients_data[client_id_local] = client_info_to_store_dict
+
+                            print(f"AutoX客户端已注册/更新: ID={client_id_local}, 支持交易对={supported_symbols_list}, 备注='{client_info_to_store_dict.get('notes', '') if client_info_to_store_dict else ''}'")
+                            await websocket.send_json({"type": "registered", "message": "客户端注册成功。", "client_info": client_info_to_store_dict})
+                            
+                            await broadcast_autox_clients_status()
+                            await save_autox_clients_to_file()
+ 
+                elif message_type == "status_update":
+                    if not client_id_local:
+                        await websocket.send_json({"type": "error", "message": "未注册的客户端不能发送状态更新。"})
+                        continue
+
+                    client_reported_status = payload.get("status")
+                    if not client_reported_status:
+                        print(f"AutoX客户端 {client_id_local} 发送的状态更新中缺少 status 字段。")
+                        continue
+
+                    updated_info_for_broadcast = None
                     
-                    old_ws_to_close = None
-                    for ws_iter, active_info_iter in active_autox_clients.items():
-                        if active_info_iter.get('client_id') == client_id_local and ws_iter != websocket:
-                            print(f"AutoX客户端 {client_id_local} 重复连接 (不同WebSocket)，准备关闭旧连接。")
-                            old_ws_to_close = ws_iter
-                            break
-                    
-                    if old_ws_to_close:
-                        try:
-                            await old_ws_to_close.close(code=1000, reason="New connection for this client_id")
-                        except Exception: pass 
-                        autox_manager.disconnect(old_ws_to_close) 
-                        active_autox_clients.pop(old_ws_to_close, None) 
+                    # 定义哪些JS上报的状态表示一个交易周期的结束，之后客户端应变为空闲
+                    # 这些状态是JS脚本通过sendStatusUpdate的tradeStatus参数发送的
+                    TERMINAL_AND_RESET_TO_IDLE_STATUSES = {
+                        "trade_execution_failed",    # JS: 交易执行失败
+                        "manual_confirmation_pending", # JS: 脚本已设置好参数，等待人工确认 (自动化流程结束)
+                        "internal_error",            # JS: 客户端内部错误
+                        # "trade_execution_succeeded" # 如果JS将来会报告明确的成功，也应加进来
+                    }
 
-                    if existing_persistent_info:
-                        final_notes = client_notes_from_payload if client_notes_from_payload is not None else existing_persistent_info.get('notes')
-                        client_info_model = AutoXClientInfo(
-                            client_id=client_id_local,
-                            status='idle', 
-                            supported_symbols=supported_symbols_list,
-                            last_seen=now_utc(),
-                            connected_at=parse_frontend_datetime(existing_persistent_info.get('connected_at')) if existing_persistent_info.get('connected_at') else now_utc(),
-                            notes=final_notes
-                        )
-                    else:
-                        client_info_model = AutoXClientInfo(
-                            client_id=client_id_local,
-                            status='idle',
-                            supported_symbols=supported_symbols_list,
-                            last_seen=now_utc(),
-                            connected_at=now_utc(),
-                            notes=client_notes_from_payload
-                        )
-                    
-                    client_info_to_store_dict = client_info_model.model_dump(mode='json')
-                    # 在 active_autox_clients 中记录最后一次收到 pong 的时间
-                    client_info_to_store_dict['last_pong_time'] = now_utc().isoformat()
-                    active_autox_clients[websocket] = client_info_to_store_dict
-                    persistent_autox_clients_data[client_id_local] = client_info_to_store_dict
+                    with autox_clients_lock:
+                        if websocket not in active_autox_clients:
+                            print(f"警告: 收到来自未知/已断开 WebSocket (client_id登记为: {client_id_local}) 的状态更新。忽略。")
+                            continue # 忽略来自不再活跃的websocket连接的消息
+                        
+                        current_client_info_active = active_autox_clients[websocket]
+                        current_client_info_persistent = persistent_autox_clients_data.get(client_id_local)
 
-                print(f"AutoX客户端已注册/更新: ID={client_id_local}, 支持交易对={supported_symbols_list}, 备注='{client_info_to_store_dict.get('notes', '') if client_info_to_store_dict else ''}'")
-                await websocket.send_json({"type": "registered", "message": "客户端注册成功。", "client_info": client_info_to_store_dict})
-                
-                await broadcast_autox_clients_status() 
-                await save_autox_clients_to_file() 
+                        # 默认情况下，客户端的下一个状态是它自己报告的状态
+                        next_client_status_to_set = client_reported_status
 
-            elif message_type == "status_update":
-                if not client_id_local: 
-                    await websocket.send_json({"type": "error", "message": "未注册的客户端不能发送状态更新。"})
-                    continue
+                        # 如果报告的状态是终端状态，则将客户端的最终状态设置为 'idle'
+                        if client_reported_status in TERMINAL_AND_RESET_TO_IDLE_STATUSES:
+                            next_client_status_to_set = "idle"
+                            print(f"AutoX客户端 {client_id_local} 报告状态 '{client_reported_status}', 将其重置为 'idle'。")
+                            # 对于这些状态，也清除 last_signal_id
+                            current_client_info_active.pop('last_signal_id', None)
+                            if current_client_info_persistent:
+                                current_client_info_persistent.pop('last_signal_id', None)
+                        elif client_reported_status == "idle":
+                            # 如果客户端明确报告自己是idle (例如，可能是手动干预或脚本逻辑)
+                            current_client_info_active.pop('last_signal_id', None)
+                            if current_client_info_persistent:
+                                current_client_info_persistent.pop('last_signal_id', None)
+                        # 对于其他中间状态 (如 command_received, amount_set_attempted, direction_selected)，
+                        # 客户端状态将设置为这些中间状态。服务器在派发新任务时检查的是 'idle'。
 
-                client_reported_status = payload.get("status") 
-                if not client_reported_status:
-                    print(f"AutoX客户端 {client_id_local} 发送的状态更新中缺少 status 字段。")
-                    continue
-
-                updated_info_for_broadcast = None
-                
-                # 定义哪些JS上报的状态表示一个交易周期的结束，之后客户端应变为空闲
-                # 这些状态是JS脚本通过sendStatusUpdate的tradeStatus参数发送的
-                TERMINAL_AND_RESET_TO_IDLE_STATUSES = {
-                    "trade_execution_failed",    # JS: 交易执行失败
-                    "manual_confirmation_pending", # JS: 脚本已设置好参数，等待人工确认 (自动化流程结束)
-                    "internal_error",            # JS: 客户端内部错误
-                    # "trade_execution_succeeded" # 如果JS将来会报告明确的成功，也应加进来
-                }
-
-                with autox_clients_lock:
-                    if websocket not in active_autox_clients:
-                        print(f"警告: 收到来自未知/已断开 WebSocket (client_id登记为: {client_id_local}) 的状态更新。忽略。")
-                        continue # 忽略来自不再活跃的websocket连接的消息
-                    
-                    current_client_info_active = active_autox_clients[websocket]
-                    current_client_info_persistent = persistent_autox_clients_data.get(client_id_local)
-
-                    # 默认情况下，客户端的下一个状态是它自己报告的状态
-                    next_client_status_to_set = client_reported_status
-
-                    # 如果报告的状态是终端状态，则将客户端的最终状态设置为 'idle'
-                    if client_reported_status in TERMINAL_AND_RESET_TO_IDLE_STATUSES:
-                        next_client_status_to_set = "idle"
-                        print(f"AutoX客户端 {client_id_local} 报告状态 '{client_reported_status}', 将其重置为 'idle'。")
-                        # 对于这些状态，也清除 last_signal_id
-                        current_client_info_active.pop('last_signal_id', None)
+                        current_client_info_active['status'] = next_client_status_to_set
+                        current_client_info_active['last_seen'] = now_utc().isoformat()
+                        
                         if current_client_info_persistent:
-                            current_client_info_persistent.pop('last_signal_id', None)
-                    elif client_reported_status == "idle": 
-                        # 如果客户端明确报告自己是idle (例如，可能是手动干预或脚本逻辑)
-                        current_client_info_active.pop('last_signal_id', None)
-                        if current_client_info_persistent:
-                            current_client_info_persistent.pop('last_signal_id', None)
-                    # 对于其他中间状态 (如 command_received, amount_set_attempted, direction_selected)，
-                    # 客户端状态将设置为这些中间状态。服务器在派发新任务时检查的是 'idle'。
+                            current_client_info_persistent['status'] = next_client_status_to_set
+                            current_client_info_persistent['last_seen'] = now_utc().isoformat()
+                        else:
+                            # 理论上注册时就应该有了，但作为保障
+                            persistent_autox_clients_data[client_id_local] = current_client_info_active.copy()
+                        
+                        updated_info_for_broadcast = current_client_info_active.copy()
 
-                    current_client_info_active['status'] = next_client_status_to_set
-                    current_client_info_active['last_seen'] = now_utc().isoformat()
+                    # 日志记录部分
+                    log_payload = {
+                        "client_id": client_id_local, "signal_id": payload.get("signal_id"),
+                        "command_type": "status_from_client", "command_payload": payload,
+                        "status": client_reported_status, # 日志中记录JS上报的原始状态
+                        "details": payload.get("details"), "error_message": payload.get("error_message"),
+                    }
+                    with autox_trade_logs_lock:
+                        autox_trade_logs.append(AutoXTradeLogEntry(**log_payload).model_dump(mode='json'))
+                        if len(autox_trade_logs) > MAX_AUTOX_LOG_ENTRIES:
+                            autox_trade_logs.pop(0)
+
+                    await save_autox_trade_logs_async() # 新增：保存交易日志
+                    final_set_status = updated_info_for_broadcast.get('status') if updated_info_for_broadcast else 'N/A'
+                    print(f"收到AutoX客户端 {client_id_local} 状态更新: '{client_reported_status}' (原始), Signal ID: {payload.get('signal_id')}. "
+                          f"客户端最终状态设置为: '{final_set_status}'")
                     
-                    if current_client_info_persistent:
-                        current_client_info_persistent['status'] = next_client_status_to_set
-                        current_client_info_persistent['last_seen'] = now_utc().isoformat()
-                    else: 
-                        # 理论上注册时就应该有了，但作为保障
-                        persistent_autox_clients_data[client_id_local] = current_client_info_active.copy()
-                    
-                    updated_info_for_broadcast = current_client_info_active.copy()
+                    if updated_info_for_broadcast:
+                        await broadcast_autox_clients_status()
+                        await save_autox_clients_to_file()
+ 
+                elif message_type == "pong":
+                    # 收到客户端的 pong 回复，更新最后活动时间和 pong 时间
+                    with autox_clients_lock:
+                        if websocket in active_autox_clients:
+                            active_autox_clients[websocket]['last_seen'] = now_utc().isoformat()
+                            active_autox_clients[websocket]['last_pong_time'] = now_utc().isoformat() # 更新 pong 时间
+                            if client_id_local and client_id_local in persistent_autox_clients_data:
+                                persistent_autox_clients_data[client_id_local]['last_seen'] = now_utc().isoformat()
+                                # persistent_autox_clients_data 不存储 last_pong_time，只存储最后活动时间
+                else:
+                    print(f"收到来自AutoX客户端 {client_id_local or '未知'} 的未知消息类型: {message_type}")
+                    await websocket.send_json({"type": "error", "message": f"不支持的消息类型: {message_type}"})
 
-                # 日志记录部分
-                log_payload = { 
-                    "client_id": client_id_local, "signal_id": payload.get("signal_id"),
-                    "command_type": "status_from_client", "command_payload": payload,
-                    "status": client_reported_status, # 日志中记录JS上报的原始状态
-                    "details": payload.get("details"), "error_message": payload.get("error_message"),
-                }
-                with autox_trade_logs_lock: 
-                    autox_trade_logs.append(AutoXTradeLogEntry(**log_payload).model_dump(mode='json'))
-                    if len(autox_trade_logs) > MAX_AUTOX_LOG_ENTRIES: autox_trade_logs.pop(0)
+            except json.JSONDecodeError:
+                print(f"Received invalid JSON from AutoX client {client_id_local or 'unknown'}.")
+                await websocket.send_json({"type": "error", "message": "Invalid JSON format."})
+            except Exception as e:
+                print(f"Error processing AutoX client text message ({client_id_local or 'unknown'}): {e}\n{traceback.format_exc()}")
+                await websocket.send_json({"type": "error", "message": f"Error processing message: {str(e)}"})
 
-                final_set_status = updated_info_for_broadcast.get('status') if updated_info_for_broadcast else 'N/A'
-                print(f"收到AutoX客户端 {client_id_local} 状态更新: '{client_reported_status}' (原始), Signal ID: {payload.get('signal_id')}. "
-                      f"客户端最终状态设置为: '{final_set_status}'")
-                
-                if updated_info_for_broadcast:
-                    await broadcast_autox_clients_status() 
-                    await save_autox_clients_to_file() 
+            # Handle other message types if needed (e.g., binary)
 
-            elif message_type == "pong":
-                # 收到客户端的 pong 回复，更新最后活动时间和 pong 时间
-                with autox_clients_lock:
-                     if websocket in active_autox_clients:
-                        active_autox_clients[websocket]['last_seen'] = now_utc().isoformat()
-                        active_autox_clients[websocket]['last_pong_time'] = now_utc().isoformat() # 更新 pong 时间
-                        if client_id_local and client_id_local in persistent_autox_clients_data:
-                            persistent_autox_clients_data[client_id_local]['last_seen'] = now_utc().isoformat()
-                            # persistent_autox_clients_data 不存储 last_pong_time，只存储最后活动时间
-            else:
-                print(f"收到来自AutoX客户端 {client_id_local or '未知'} 的未知消息类型: {message_type}")
-                await websocket.send_json({"type": "error", "message": f"不支持的消息类型: {message_type}"})
-
-    except WebSocketDisconnect:
-        print(f"AutoX客户端 {client_id_local or getattr(websocket, 'client', 'N/A')} 断开连接。")
-    except Exception as e:
-        print(f"AutoX WebSocket端点错误 ({client_id_local or getattr(websocket, 'client', 'N/A')}): {e}\n{traceback.format_exc()}")
+            except WebSocketDisconnect:
+                print(f"AutoX客户端 {client_id_local or getattr(websocket, 'client', 'N/A')} 断开连接。")
+                break # Exit the loop on disconnect
+            except Exception as e:
+                print(f"AutoX WebSocket端点错误 ({client_id_local or getattr(websocket, 'client', 'N/A')}): {e}\n{traceback.format_exc()}")
+                # Optionally send an error back before breaking
+                try:
+                    await websocket.send_json({"type": "error", "message": f"Server error: {str(e)}"})
+                except: pass # Ignore errors sending error message
+                break # Exit the loop on other exceptions
     finally:
         autox_manager.disconnect(websocket) 
         disconnected_client_id = None
@@ -1533,53 +1617,7 @@ async def autox_websocket_endpoint(websocket: WebSocket):
             await save_autox_clients_to_file()
  
  
- # --- 后台任务：AutoX客户端心跳检测 ---
-async def autox_heartbeat_check():
-    """定期检查AutoX客户端心跳，断开超时的连接。"""
-    global active_autox_clients, autox_clients_lock
-    while True:
-        await asyncio.sleep(AUTOX_HEARTBEAT_INTERVAL)
-        now = now_utc()
-        disconnected_clients = []
-
-        with autox_clients_lock:
-            # 遍历 active_autox_clients 的副本，以便在迭代时修改原字典
-            for ws, client_info in list(active_autox_clients.items()):
-                client_id = client_info.get('client_id', '未知')
-                last_pong_time_str = client_info.get('last_pong_time')
-                
-                if last_pong_time_str:
-                    try:
-                        last_pong_time = parse_frontend_datetime(last_pong_time_str)
-                        if not last_pong_time.tzinfo:
-                             last_pong_time = last_pong_time.replace(tzinfo=timezone.utc)
-                        else:
-                             last_pong_time = last_pong_time.astimezone(timezone.utc)
-
-                        if (now - last_pong_time).total_seconds() > AUTOX_HEARTBEAT_TIMEOUT:
-                            print(f"AutoX客户端 {client_id} 心跳超时，断开连接。")
-                            disconnected_clients.append(ws)
-                    except Exception as e:
-                        print(f"处理AutoX客户端 {client_id} 心跳时间时出错: {e}")
-                        # 如果时间解析出错，也考虑断开连接以避免僵尸连接
-                        disconnected_clients.append(ws)
-                else:
-                    # 如果没有 last_pong_time 字段 (可能是旧的客户端或注册失败)，也考虑断开
-                    print(f"AutoX客户端 {client_id} 缺少 last_pong_time 字段，断开连接。")
-                    disconnected_clients.append(ws)
-
-        # 在锁外关闭连接，避免阻塞
-        for ws in disconnected_clients:
-            try:
-                # 使用非正常关闭码 (例如 1011 内部错误) 或 1008 (策略违规)
-                # 1000 是正常关闭，不适合这里
-                await ws.close(code=1008, reason="Heartbeat timeout")
-            except Exception as e:
-                print(f"关闭超时AutoX客户端连接失败: {e}")
-
-        # 关闭连接后，autox_websocket_endpoint 的 finally 块会被触发，处理后续的移除和广播
-
- 
+  
  # --- WebSocket 端点 for AutoX Status (/ws/autox_status) (逻辑不变) ---
 @app.websocket("/ws/autox_status")
 async def autox_status_websocket_endpoint(websocket: WebSocket):
@@ -1794,7 +1832,8 @@ async def generate_test_signal():
     
     test_signal_data = {
         'id': f"TEST_{symbol}_{pred_id_test}_{int(time.time())}_{random.randint(100,999)}", 'symbol': symbol, 'interval': "1m", 'prediction_strategy_id': pred_id_test, 'prediction_strategy_params': pred_params_test,
-        'signal_time': format_for_display(signal_time), 'signal': random.choice([1, -1]), 'confidence': random.uniform(60, 95), 'signal_price': price_val, 'event_period': "10m",
+        'signal_time': format_for_display(signal_time),
+        'signal': random.choice([1, -1]), 'confidence': random.uniform(60, 95), 'signal_price': price_val, 'event_period': "10m",
         'expected_end_time': format_for_display(end_time), 'investment_amount': 20.0, 'profit_rate_pct': 80.0, 'loss_rate_pct': 100.0,
         'actual_end_price': None, 'price_change_pct': None, 'result': None, 'pnl_pct': None, 'actual_profit_loss_amount': None, 'verified': False, 'verify_time': None,
         'origin_config_id': 'test_signal_broadcast_all', 'autox_triggered_info': None
@@ -1865,7 +1904,7 @@ async def send_test_command_to_autox_client(client_id: str, command_type: str = 
     try:
         await _send_autox_command(target_ws, command_to_send) # _send_autox_command 已经是异步的
         return {"status": "success", "message": f"测试指令 '{command_type}' 已发送给客户端 {client_id}。"}
-    except Exception as e: # 通常 _send_autox_command 内部会处理错误
+    except Exception as e:
         raise HTTPException(status_code=500, detail=f"发送测试指令给客户端 {client_id} 失败: {str(e)}")
     
 
@@ -2165,7 +2204,7 @@ async def generate_enhanced_test_signal(
                     test_signal_data['autox_triggered_info'] = {
                         "client_id": client_id_for_signal,
                         "sent_at": format_for_display(now_utc()),
-                        "status": "command_sent_via_test_api"
+                        "status": "command_sent"
                     }
                     autox_attempt_log["status"] = "command_sent"
                     autox_attempt_log["client_id"] = client_id_for_signal
@@ -2178,7 +2217,7 @@ async def generate_enhanced_test_signal(
                             active_autox_clients[target_autox_client_ws]['status'] = 'idle'
                             active_autox_clients[target_autox_client_ws].pop('last_signal_id', None)
             else:
-                test_signal_data['autox_triggered_info'] = {"status": "no_available_client_for_test_api"}
+                test_signal_data['autox_triggered_info'] = {"status": "no_available_client_for_broadcast"}
                 autox_attempt_log["status"] = "no_available_client"
         else: # AUTOX_GLOBAL_ENABLED is False
              autox_attempt_log["status"] = "autox_globally_disabled"
@@ -2233,7 +2272,8 @@ async def shutdown_event():
             save_live_signals_async(),
             save_strategy_parameters_to_file(),
             save_autox_clients_to_file(),
-            save_active_test_config()
+            save_active_test_config(),
+            save_autox_trade_logs_async() # 新增：保存交易日志
         )
         logger.info("所有持久化数据已保存")
     except Exception as e:
@@ -2245,8 +2285,7 @@ async def shutdown_event():
         for ws in list(autox_manager.active_connections):
             try:
                 await ws.close(code=1000, reason="服务器正在关闭")
-            except Exception as ws_err:
-                logger.error(f"关闭AutoX WebSocket连接时出错: {ws_err}")
+            except Exception: pass
         logger.info("所有AutoX客户端连接已关闭")
     except Exception as e:
         logger.error(f"关闭AutoX客户端连接时出错: {e}")
@@ -2257,8 +2296,7 @@ async def shutdown_event():
         for ws in list(manager.active_connections):
             try:
                 await ws.close(code=1000, reason="服务器正在关闭")
-            except Exception as ws_err:
-                logger.error(f"关闭UI WebSocket连接时出错: {ws_err}")
+            except Exception: pass
         logger.info("所有UI WebSocket连接已关闭")
     except Exception as e:
         logger.error(f"关闭UI WebSocket连接时出错: {e}")
@@ -2269,8 +2307,7 @@ async def shutdown_event():
         for ws in list(autox_status_manager.active_connections):
             try:
                 await ws.close(code=1000, reason="服务器正在关闭")
-            except Exception as ws_err:
-                logger.error(f"关闭状态监控WebSocket连接时出错: {ws_err}")
+            except Exception: pass
         logger.info("所有状态监控WebSocket连接已关闭")
     except Exception as e:
         logger.error(f"关闭状态监控WebSocket连接时出错: {e}")

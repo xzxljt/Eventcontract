@@ -4,7 +4,7 @@ const { createApp, ref, onMounted, onUnmounted, computed, watch, getCurrentInsta
 
 const app = createApp({
     setup() {
-        // --- 从 utils.js 引入或准备使用的函数 ---
+        // --- From utils.js 引入或准备使用的函数 ---
         const utilFormatDateTime = typeof formatDateTime === 'function' ? formatDateTime : (val) => val || '-';
         const utilGetWinRateClass = typeof getWinRateClass === 'function' ? getWinRateClass : () => '';
         const utilGetPnlClass = typeof getPnlClass === 'function' ? getPnlClass : () => '';
@@ -619,15 +619,20 @@ const app = createApp({
                             activeTestConfigDetails.value = null; // 清理
                         }
                         break;
-                    case "session_restored":
-                        console.log("LiveTest: Received session_restored message:", message.data);
-                        currentConfigId.value = message.data.config_id;
-                        localStorage.setItem('liveTestConfigId', currentConfigId.value);
-                        populateUiFromConfigDetails(message.data.config_details);
-                        // 更新活动配置细节
-                        activeTestConfigDetails.value = message.data.config_details;
-                        console.log("LiveTest: activeTestConfigDetails after session_restored:", activeTestConfigDetails.value);
-                        showServerMessage(`会话已恢复 (ID: ${currentConfigId.value.substring(0,8)}...)`, false, 4000);
+                    case "session_recovered":
+                        console.log("LiveTest: Received session_recovered message:", message.data);
+                        if (message.data && message.data.config_id) {
+                            currentConfigId.value = message.data.config_id;
+                            localStorage.setItem('liveTestConfigId', currentConfigId.value);
+                            if (message.data.config_details) {
+                                populateUiFromConfigDetails(message.data.config_details);
+                                activeTestConfigDetails.value = message.data.config_details;
+                                console.log("LiveTest: activeTestConfigDetails after session_recovered:", activeTestConfigDetails.value);
+                            }
+                            showServerMessage(`会话已恢复 (ID: ${currentConfigId.value.substring(0,8)}...)`, false, 4000);
+                        } else {
+                            showServerMessage('会话恢复失败：无效的配置信息', true, 4000);
+                        }
                         break;
                     case "session_not_found":
                         showServerMessage(`未能恢复会话 (ID: ${message.data.config_id ? message.data.config_id.substring(0,8) : 'N/A'}...)，请重新应用配置。`, true, 6000);
@@ -787,12 +792,12 @@ const app = createApp({
                         } else {
                            const defaultSeqDef = selectedInvestmentStrategy.value.parameters.find(p => p.name === 'sequence');
                            finalInvestmentSpecificParams.sequence = defaultSeqDef?.default && Array.isArray(defaultSeqDef.default) ? defaultSeqDef.default : [10,20,40];
-                           showServerMessage("马丁格尔序列无效，已使用默认值发送。", true, 3000);
+                           showServerMessage("Martin Gauge序列无效，已使用默认值发送。", true, 3000);
                         }
                     } catch (e) {
                         const defaultSeqDef = selectedInvestmentStrategy.value.parameters.find(p => p.name === 'sequence');
                         finalInvestmentSpecificParams.sequence = defaultSeqDef?.default && Array.isArray(defaultSeqDef.default) ? defaultSeqDef.default : [10,20,40];
-                        showServerMessage("解析马丁格尔序列错误，已使用默认值发送。", true, 3000);
+                        showServerMessage("解析Martin Gauge序列错误，已使用默认值发送。", true, 3000);
                     }
                 }
             }
@@ -800,18 +805,18 @@ const app = createApp({
             const investmentSettingsPayload = {
                 strategy_id: selectedInvestmentStrategy.value.id,
                 investment_strategy_specific_params: finalInvestmentSpecificParams,
+                // 确保包含 InvestmentStrategySettings Pydantic 模型的所有字段
+                amount: parseFloat(monitorSettings.value.investment.amount),
                 minAmount: parseFloat(monitorSettings.value.investment.minAmount),
                 maxAmount: parseFloat(monitorSettings.value.investment.maxAmount),
+                percentageOfBalance: parseFloat(monitorSettings.value.investment.percentageOfBalance),
                 profitRate: parseFloat(monitorSettings.value.investment.profitRate),
                 lossRate: parseFloat(monitorSettings.value.investment.lossRate),
+                simulatedBalance: parseFloat(monitorSettings.value.investment.simulatedBalance),
             };
-            if (selectedInvestmentStrategy.value.id === 'percentage_of_balance') {
-                investmentSettingsPayload.percentageOfBalance = parseFloat(monitorSettings.value.investment.percentageOfBalance);
-                investmentSettingsPayload.simulatedBalance = parseFloat(monitorSettings.value.investment.simulatedBalance);
-            } else {
-                 investmentSettingsPayload.amount = parseFloat(monitorSettings.value.investment.amount);
-            }
-            
+
+            // 在发送新配置之前，清除当前的 configId，以便后端生成新的测试 ID
+
             const configPayload = {
                 type: 'set_runtime_config',
                 data: {
@@ -824,7 +829,15 @@ const app = createApp({
                     investment_settings: investmentSettingsPayload
                 }
             };
-            socket.value.send(JSON.stringify(configPayload));
+
+            try {
+                socket.value.send(JSON.stringify(configPayload));
+                console.log("LiveTest: Sending runtime config:", configPayload);
+            } catch (error) {
+                console.error("LiveTest: Error sending runtime config:", error);
+                showServerMessage("发送配置时发生错误：" + error.message, true);
+                applyingConfig.value = false;
+            }
         };
 
         const stopCurrentTest = () => {

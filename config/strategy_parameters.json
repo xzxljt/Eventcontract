@@ -1,9 +1,9 @@
 {
     "prediction_strategies": {
         "simple_rsi": {
-            "rsi_period": 18,
-            "rsi_overbought": 80,
-            "rsi_oversold": 20
+            "rsi_period": 15,
+            "rsi_overbought": 78,
+            "rsi_oversold": 22
         },
         "micro_trend_momentum": {
             "ema_period": 5,

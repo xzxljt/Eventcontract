@@ -1,13 +1,13 @@
 {
-    "active_config_id": "195f2a51e00b4c37871a4953b9240606",
+    "active_config_id": "9ac8f76f11e44c7c91371b932275847c",
     "config_data": {
         "symbol": "ETHUSDT",
         "interval": "1m",
         "prediction_strategy_id": "simple_rsi",
         "prediction_strategy_params": {
-            "rsi_period": 18,
-            "rsi_overbought": 80,
-            "rsi_oversold": 20
+            "rsi_period": 15,
+            "rsi_overbought": 78,
+            "rsi_oversold": 22
         },
         "confidence_threshold": 50,
         "event_period": "10m",
@@ -22,9 +22,9 @@
             "simulatedBalance": null
         },
         "autox_enabled": true,
-        "current_balance": 1016.0,
-        "total_profit_loss_amount": 16.0,
-        "created_at": "2025-05-17T07:20:34.738643+08:00"
+        "current_balance": 1000.0,
+        "total_profit_loss_amount": 0.0,
+        "created_at": "2025-05-19T01:51:49.452104+08:00"
     },
-    "last_updated": "2025-05-18T20:43:42.508604+08:00"
+    "last_updated": "2025-05-19T01:52:15.719937+08:00"
 }
