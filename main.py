@@ -703,10 +703,15 @@ async def background_signal_verifier():
                 if not end_time_utc.tzinfo: end_time_utc = end_time_utc.replace(tzinfo=timezone.utc)
                 else: end_time_utc = end_time_utc.astimezone(timezone.utc)
 
+                # Calculate the correct start time for the kline that ends at expected_end_time
+                # For a 1m interval, if expected_end_time is 10:05:00 (meaning the 10:04:00-10:04:59 kline has just closed),
+                # we need the kline that starts at 10:04:00.
+                kline_start_time_utc = end_time_utc - timedelta(minutes=1)
+
                 kline_df = await asyncio.to_thread( # IO密集型操作，放入线程池
                     binance_client.get_historical_klines,
-                    signal_copy_to_verify['symbol'], '1m', 
-                    start_time=int(end_time_utc.timestamp() * 1000), limit=1
+                    signal_copy_to_verify['symbol'], '1m',
+                    start_time=int(kline_start_time_utc.timestamp() * 1000), limit=1 # Use kline_start_time_utc
                 )
                 actual_price = None
                 if not kline_df.empty:
