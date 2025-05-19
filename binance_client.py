@@ -868,6 +868,8 @@ class BinanceClient:
         
         此方法会尝试优雅地关闭所有活动的WebSocket连接，并在必要时强制关闭
         以确保服务能够正常退出，防止进程卡死
+        
+        添加了锁超时机制，避免在服务关闭时可能发生的死锁问题
         """
         logger.warning("正在停止所有WebSocket连接...")
         
@@ -875,37 +877,102 @@ class BinanceClient:
         self._stop_ws_monitor()
         
         # 第一阶段：尝试优雅关闭所有连接
-        with self.ws_management_lock:
-            # 复制键列表，避免在迭代过程中修改字典
-            ws_keys = list(self.ws_connections.keys())
-            logger.info(f"需要关闭 {len(ws_keys)} 个WebSocket连接")
+        # 添加锁获取超时，避免死锁
+        lock_timeout = 5.0  # 5秒锁超时
+        lock_acquired = False
+        
+        try:
+            # 尝试获取锁，但设置超时以避免死锁
+            lock_acquired = self.ws_management_lock.acquire(timeout=lock_timeout)
             
-            # 标记所有连接为主动停止，防止重连
-            for ws_key in ws_keys:
-                self._intentional_stops[ws_key] = True
-            
-            # 尝试优雅关闭每个连接
-            for ws_key in ws_keys:
-                try:
-                    # 解析ws_key获取symbol和interval
-                    if '_' in ws_key:
-                        symbol, interval = ws_key.split('_', 1)
-                        logger.info(f"正在停止 {symbol} {interval} 的WebSocket连接...")
-                        self.stop_kline_websocket(symbol, interval)
-                    else:
-                        logger.warning(f"无法解析WebSocket键 {ws_key}，尝试直接关闭")
-                        # 直接关闭连接
-                        if ws_key in self.ws_connections:
+            if not lock_acquired:
+                logger.error(f"无法在 {lock_timeout} 秒内获取ws_management_lock，可能存在死锁。将尝试不使用锁继续关闭操作。")
+                # 创建当前连接的副本，以便在没有锁的情况下继续
+                ws_keys = list(self.ws_connections.keys()) if hasattr(self, 'ws_connections') else []
+                # 标记所有连接为主动停止，即使没有锁也尝试设置
+                for ws_key in ws_keys:
+                    self._intentional_stops[ws_key] = True
+            else:
+                # 正常获取锁的情况
+                # 复制键列表，避免在迭代过程中修改字典
+                ws_keys = list(self.ws_connections.keys())
+                logger.info(f"需要关闭 {len(ws_keys)} 个WebSocket连接")
+                
+                # 标记所有连接为主动停止，防止重连
+                for ws_key in ws_keys:
+                    self._intentional_stops[ws_key] = True
+        finally:
+            # 如果成功获取了锁，释放它
+            if lock_acquired:
+                self.ws_management_lock.release()
+        
+        # 尝试优雅关闭每个连接
+        for ws_key in ws_keys:
+            try:
+                # 解析ws_key获取symbol和interval
+                if '_' in ws_key:
+                    symbol, interval = ws_key.split('_', 1)
+                    logger.info(f"正在停止 {symbol} {interval} 的WebSocket连接...")
+                    # 修改：直接调用stop_kline_websocket可能会导致死锁，因为它内部也使用了锁
+                    # 我们尝试使用超时机制获取锁
+                    try:
+                        lock_acquired = self.ws_management_lock.acquire(timeout=lock_timeout)
+                        if lock_acquired:
                             try:
-                                ws_app = self.ws_connections[ws_key]
-                                logger.info(f"正在关闭WebSocket连接 {ws_key} (实例ID: {id(ws_app)})")
-                                ws_app.close()
-                            except Exception as e:
-                                logger.error(f"关闭WebSocket连接 {ws_key} 失败: {e}")
-                            # 无论是否成功关闭，都从跟踪中移除
-                            self.ws_connections.pop(ws_key, None)
-                except Exception as e:
-                    logger.error(f"停止WebSocket连接 {ws_key} 时发生错误: {e}")
+                                # 在锁内执行关键操作
+                                self._intentional_stops[ws_key] = True
+                                ws_app_to_stop = self.ws_connections.pop(ws_key, None)
+                                self.ws_threads.pop(ws_key, None)
+                                
+                                if ws_app_to_stop:
+                                    try:
+                                        ws_app_to_stop.close()
+                                    except Exception as e_close:
+                                        logger.error(f"尝试关闭WebSocket实例 {id(ws_app_to_stop)} for {ws_key} 时出错: {e_close}")
+                            finally:
+                                self.ws_management_lock.release()
+                        else:
+                            # 如果无法获取锁，尝试直接关闭连接
+                            logger.warning(f"无法获取锁来停止 {ws_key}，尝试直接关闭连接")
+                            ws_app = self.ws_connections.get(ws_key)
+                            if ws_app:
+                                try:
+                                    ws_app.close()
+                                except Exception as e:
+                                    logger.error(f"直接关闭WebSocket连接 {ws_key} 失败: {e}")
+                    except Exception as e_lock:
+                        logger.error(f"获取锁或关闭WebSocket {ws_key} 时出错: {e_lock}")
+                else:
+                    logger.warning(f"无法解析WebSocket键 {ws_key}，尝试直接关闭")
+                    # 直接关闭连接
+                    try:
+                        lock_acquired = self.ws_management_lock.acquire(timeout=lock_timeout)
+                        if lock_acquired:
+                            try:
+                                if ws_key in self.ws_connections:
+                                    ws_app = self.ws_connections[ws_key]
+                                    logger.info(f"正在关闭WebSocket连接 {ws_key} (实例ID: {id(ws_app)})")
+                                    try:
+                                        ws_app.close()
+                                    except Exception as e:
+                                        logger.error(f"关闭WebSocket连接 {ws_key} 失败: {e}")
+                                    # 无论是否成功关闭，都从跟踪中移除
+                                    self.ws_connections.pop(ws_key, None)
+                            finally:
+                                self.ws_management_lock.release()
+                        else:
+                            # 如果无法获取锁，尝试直接关闭连接
+                            logger.warning(f"无法获取锁来停止 {ws_key}，尝试直接关闭连接")
+                            ws_app = self.ws_connections.get(ws_key)
+                            if ws_app:
+                                try:
+                                    ws_app.close()
+                                except Exception as e:
+                                    logger.error(f"直接关闭WebSocket连接 {ws_key} 失败: {e}")
+                    except Exception as e_lock:
+                        logger.error(f"获取锁或关闭WebSocket {ws_key} 时出错: {e_lock}")
+            except Exception as e:
+                logger.error(f"停止WebSocket连接 {ws_key} 时发生错误: {e}")
         
         # 第二阶段：等待线程结束，并在必要时强制关闭
         shutdown_start = time.time()
@@ -917,64 +984,128 @@ class BinanceClient:
         
         # 等待线程结束，直到优雅关闭超时
         while time.time() < force_close_deadline:
-            with self.ws_management_lock:
-                remaining_threads = [(k, t) for k, t in self.ws_threads.items() if t.is_alive()]
-                if not remaining_threads:
-                    logger.info("所有WebSocket线程已正常结束")
-                    break
-                logger.debug(f"仍有 {len(remaining_threads)} 个WebSocket线程在运行...")
+            remaining_threads = []
+            try:
+                # 尝试获取锁，但设置超时
+                lock_acquired = self.ws_management_lock.acquire(timeout=1.0)  # 较短的超时，因为这是循环
+                if lock_acquired:
+                    try:
+                        remaining_threads = [(k, t) for k, t in self.ws_threads.items() if t.is_alive()]
+                        if not remaining_threads:
+                            logger.info("所有WebSocket线程已正常结束")
+                            break
+                        logger.debug(f"仍有 {len(remaining_threads)} 个WebSocket线程在运行...")
+                    finally:
+                        self.ws_management_lock.release()
+                else:
+                    # 如果无法获取锁，假设仍有线程在运行
+                    logger.warning("无法获取锁来检查剩余线程，假设仍有线程在运行")
+            except Exception as e:
+                logger.error(f"检查剩余线程时出错: {e}")
             time.sleep(0.5)
         
         # 如果仍有线程在运行，尝试强制关闭
-        with self.ws_management_lock:
-            remaining_threads = [(k, t) for k, t in self.ws_threads.items() if t.is_alive()]
-            if remaining_threads:
-                logger.warning(f"有 {len(remaining_threads)} 个WebSocket线程在 {force_close_timeout:.1f} 秒内未能正常结束，尝试强制关闭")
-                
-                # 强制关闭所有剩余的WebSocket连接
-                for ws_key, thread in remaining_threads:
-                    try:
-                        ws_app = self.ws_connections.get(ws_key)
-                        if ws_app and ws_app.sock:
-                            logger.warning(f"强制关闭WebSocket连接 {ws_key} 的socket")
+        remaining_threads = []
+        try:
+            # 尝试获取锁，但设置超时
+            lock_acquired = self.ws_management_lock.acquire(timeout=lock_timeout)
+            if lock_acquired:
+                try:
+                    remaining_threads = [(k, t) for k, t in self.ws_threads.items() if t.is_alive()]
+                    if remaining_threads:
+                        logger.warning(f"有 {len(remaining_threads)} 个WebSocket线程在 {force_close_timeout:.1f} 秒内未能正常结束，尝试强制关闭")
+                        
+                        # 强制关闭所有剩余的WebSocket连接
+                        for ws_key, thread in remaining_threads:
                             try:
-                                ws_app.sock.close()
+                                ws_app = self.ws_connections.get(ws_key)
+                                if ws_app and ws_app.sock:
+                                    logger.warning(f"强制关闭WebSocket连接 {ws_key} 的socket")
+                                    try:
+                                        ws_app.sock.close()
+                                    except Exception as e:
+                                        logger.error(f"强制关闭WebSocket {ws_key} 的socket失败: {e}")
                             except Exception as e:
-                                logger.error(f"强制关闭WebSocket {ws_key} 的socket失败: {e}")
+                                logger.error(f"强制关闭WebSocket {ws_key} 时发生错误: {e}")
+                finally:
+                    self.ws_management_lock.release()
+            else:
+                # 如果无法获取锁，尝试直接关闭所有连接
+                logger.error("无法获取锁来强制关闭连接，尝试直接关闭所有连接")
+                # 尝试直接访问连接字典，即使没有锁保护
+                for ws_key, ws_app in list(self.ws_connections.items()) if hasattr(self, 'ws_connections') else []:
+                    try:
+                        if ws_app and hasattr(ws_app, 'sock') and ws_app.sock:
+                            logger.warning(f"直接强制关闭WebSocket连接 {ws_key} 的socket")
+                            ws_app.sock.close()
                     except Exception as e:
-                        logger.error(f"强制关闭WebSocket {ws_key} 时发生错误: {e}")
+                        logger.error(f"直接强制关闭WebSocket {ws_key} 失败: {e}")
+        except Exception as e:
+            logger.error(f"强制关闭WebSocket连接时出错: {e}")
         
         # 最后等待所有线程结束或达到最终超时
         while time.time() < final_deadline:
-            with self.ws_management_lock:
-                remaining_threads = [(k, t) for k, t in self.ws_threads.items() if t.is_alive()]
-                if not remaining_threads:
-                    logger.info("所有WebSocket线程已结束")
-                    break
-                logger.warning(f"仍有 {len(remaining_threads)} 个WebSocket线程在强制关闭后仍在运行...")
+            remaining_threads = []
+            try:
+                # 尝试获取锁，但设置超时
+                lock_acquired = self.ws_management_lock.acquire(timeout=1.0)  # 较短的超时
+                if lock_acquired:
+                    try:
+                        remaining_threads = [(k, t) for k, t in self.ws_threads.items() if t.is_alive()]
+                        if not remaining_threads:
+                            logger.info("所有WebSocket线程已结束")
+                            break
+                        logger.warning(f"仍有 {len(remaining_threads)} 个WebSocket线程在强制关闭后仍在运行...")
+                    finally:
+                        self.ws_management_lock.release()
+                else:
+                    # 如果无法获取锁，假设仍有线程在运行
+                    logger.warning("无法获取锁来检查剩余线程，假设仍有线程在运行")
+            except Exception as e:
+                logger.error(f"检查剩余线程时出错: {e}")
             time.sleep(0.5)
         
         # 最终清理
-        with self.ws_management_lock:
-            remaining_threads = [(k, t) for k, t in self.ws_threads.items() if t.is_alive()]
-            if remaining_threads:
-                logger.error(f"有 {len(remaining_threads)} 个WebSocket线程在 {self._ws_shutdown_timeout} 秒内未能结束，服务可能无法正常退出")
-                for ws_key, thread in remaining_threads:
-                    logger.error(f"未能结束的线程: {ws_key}, 线程ID: {thread.ident}")
-            
-            # 清理所有连接和线程记录
-            self.ws_connections.clear()
-            self.ws_threads.clear()
-            self._intentional_stops.clear()
-            self._ws_last_activity.clear()
-            self._reconnect_attempts.clear()
-            self._last_kline_log_time.clear()
-            
-            # 清理其他可能的循环引用
-            if hasattr(self, '_last_ping_log'):
-                self._last_ping_log.clear()
-            if hasattr(self, '_last_pong_log'):
-                self._last_pong_log.clear()
+        try:
+            # 尝试获取锁，但设置超时
+            lock_acquired = self.ws_management_lock.acquire(timeout=lock_timeout)
+            if lock_acquired:
+                try:
+                    remaining_threads = [(k, t) for k, t in self.ws_threads.items() if t.is_alive()]
+                    if remaining_threads:
+                        logger.error(f"有 {len(remaining_threads)} 个WebSocket线程在 {self._ws_shutdown_timeout} 秒内未能结束，服务可能无法正常退出")
+                        for ws_key, thread in remaining_threads:
+                            logger.error(f"未能结束的线程: {ws_key}, 线程ID: {thread.ident}")
+                    
+                    # 清理所有连接和线程记录
+                    self.ws_connections.clear()
+                    self.ws_threads.clear()
+                    self._intentional_stops.clear()
+                    self._ws_last_activity.clear()
+                    self._reconnect_attempts.clear()
+                    self._last_kline_log_time.clear()
+                    
+                    # 清理其他可能的循环引用
+                    if hasattr(self, '_last_ping_log'):
+                        self._last_ping_log.clear()
+                    if hasattr(self, '_last_pong_log'):
+                        self._last_pong_log.clear()
+                finally:
+                    self.ws_management_lock.release()
+            else:
+                # 如果无法获取锁，尝试直接清理
+                logger.error("无法获取锁来清理资源，尝试直接清理")
+                # 尝试直接清理资源，即使没有锁保护
+                if hasattr(self, 'ws_connections'): self.ws_connections.clear()
+                if hasattr(self, 'ws_threads'): self.ws_threads.clear()
+                if hasattr(self, '_intentional_stops'): self._intentional_stops.clear()
+                if hasattr(self, '_ws_last_activity'): self._ws_last_activity.clear()
+                if hasattr(self, '_reconnect_attempts'): self._reconnect_attempts.clear()
+                if hasattr(self, '_last_kline_log_time'): self._last_kline_log_time.clear()
+                if hasattr(self, '_last_ping_log'): self._last_ping_log.clear()
+                if hasattr(self, '_last_pong_log'): self._last_pong_log.clear()
+        except Exception as e:
+            logger.error(f"清理WebSocket资源时出错: {e}")
             
         logger.warning("所有WebSocket连接资源已清理完毕")
         return True

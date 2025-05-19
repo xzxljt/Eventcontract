@@ -154,13 +154,61 @@ class ConnectionManager:
         await websocket.accept(); self.active_connections.append(websocket)
     def disconnect(self, websocket: WebSocket):
         if websocket in self.active_connections: self.active_connections.remove(websocket)
-    async def broadcast_json(self, data: dict, filter_func=None):
+    async def broadcast_json(self, data: dict, filter_func=None, timeout_sec: float = 5.0):
+        """广播JSON数据到所有活跃的WebSocket连接
+        
+        Args:
+            data: 要广播的JSON数据
+            filter_func: 可选的过滤函数，决定哪些连接接收广播
+            timeout_sec: 每个WebSocket发送操作的超时时间（秒）
+        """
+        broadcast_start_time = time.time()
+        logger.debug(f"开始WebSocket广播 - {datetime.now().isoformat()}")
+        
         active_connections_copy = list(self.active_connections) # 迭代副本以允许在广播时断开连接
-        for connection in active_connections_copy:
+        total_connections = len(active_connections_copy)
+        success_count = 0
+        error_count = 0
+        
+        for idx, connection in enumerate(active_connections_copy):
             if filter_func is None or filter_func(connection):
-                try: await connection.send_json(data)
-                except WebSocketDisconnect: self.disconnect(connection)
-                except Exception as e: print(f"广播到 {getattr(connection, 'client', 'N/A')} 失败: {e}")
+                conn_start_time = time.time()
+                client_id = getattr(connection, 'client', f'未知客户端-{idx}')
+                
+                try:
+                    # 使用asyncio.wait_for添加超时控制
+                    await asyncio.wait_for(connection.send_json(data), timeout=timeout_sec)
+                    success_count += 1
+                    
+                    # 记录单个连接的发送耗时（仅在调试级别）
+                    conn_elapsed = time.time() - conn_start_time
+                    if conn_elapsed > 0.5:  # 只记录耗时较长的发送
+                        logger.debug(f"WebSocket广播到客户端 {client_id} 耗时: {conn_elapsed:.4f}秒")
+                        
+                except asyncio.TimeoutError:
+                    error_count += 1
+                    logger.warning(f"WebSocket广播到客户端 {client_id} 超时 (>{timeout_sec}秒)")
+                    # 超时后断开连接，避免后续操作继续阻塞
+                    self.disconnect(connection)
+                    
+                except WebSocketDisconnect:
+                    error_count += 1
+                    logger.debug(f"WebSocket广播时发现客户端 {client_id} 已断开连接")
+                    self.disconnect(connection)
+                    
+                except Exception as e:
+                    error_count += 1
+                    logger.error(f"WebSocket广播到客户端 {client_id} 失败: {e}")
+        
+        # 记录广播完成信息
+        broadcast_elapsed = time.time() - broadcast_start_time
+        logger.debug(f"WebSocket广播完成 - 总耗时: {broadcast_elapsed:.4f}秒, 成功: {success_count}/{total_connections}, 失败: {error_count}/{total_connections}")
+        
+        # 如果广播耗时过长，记录警告
+        if broadcast_elapsed > 1.0:  # 超过1秒视为较慢的广播
+            logger.warning(f"WebSocket广播耗时较长: {broadcast_elapsed:.4f}秒, 成功/总数: {success_count}/{total_connections}")
+        
+        return {"total": total_connections, "success": success_count, "error": error_count}
 
 # --- Pydantic 模型定义 (保持不变) ---
 class InvestmentStrategySettings(BaseModel):
@@ -246,7 +294,7 @@ class DeleteSignalsRequest(BaseModel):
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 app.mount("/static", StaticFiles(directory="frontend/static"), name="static")
 app.mount("/templates", StaticFiles(directory="templates"), name="templates") # Add this line to serve templates directory
-app.mount("/autoxjs", StaticFiles(directory="autoxjs"), name="autoxjs") # Add this line to serve autoxjs directory
+# app.mount("/autoxjs", StaticFiles(directory="autoxjs"), name="autoxjs") # Add this line to serve autoxjs directory
 binance_client = BinanceClient()
 
 # --- WebSocket 连接管理器 ---
@@ -1504,46 +1552,63 @@ async def autox_websocket_endpoint(websocket: WebSocket):
                         # "trade_execution_succeeded" # 如果JS将来会报告明确的成功，也应加进来
                     }
 
+                    # 记录状态更新处理开始时间
+                    status_update_start_time = time.time()
+                    logger.debug(f"开始处理客户端 {client_id_local} 状态更新 - {datetime.now().isoformat()}")
+                    
+                    # 在锁内准备数据，但不执行耗时操作
+                    updated_info_for_broadcast = None
+                    should_continue = False
+                    
                     with autox_clients_lock:
                         if websocket not in active_autox_clients:
-                            print(f"警告: 收到来自未知/已断开 WebSocket (client_id登记为: {client_id_local}) 的状态更新。忽略。")
-                            continue # 忽略来自不再活跃的websocket连接的消息
+                            logger.warning(f"警告: 收到来自未知/已断开 WebSocket (client_id登记为: {client_id_local}) 的状态更新。忽略。")
+                            should_continue = True # 标记需要跳过后续处理
                         
-                        current_client_info_active = active_autox_clients[websocket]
-                        current_client_info_persistent = persistent_autox_clients_data.get(client_id_local)
+                        if not should_continue: # 只有在websocket有效时才继续处理
+                            current_client_info_active = active_autox_clients[websocket]
+                            current_client_info_persistent = persistent_autox_clients_data.get(client_id_local)
 
-                        # 默认情况下，客户端的下一个状态是它自己报告的状态
-                        next_client_status_to_set = client_reported_status
+                            # 默认情况下，客户端的下一个状态是它自己报告的状态
+                            next_client_status_to_set = client_reported_status
 
-                        # 如果报告的状态是终端状态，则将客户端的最终状态设置为 'idle'
-                        if client_reported_status in TERMINAL_AND_RESET_TO_IDLE_STATUSES:
-                            next_client_status_to_set = "idle"
-                            print(f"AutoX客户端 {client_id_local} 报告状态 '{client_reported_status}', 将其重置为 'idle'。")
-                            # 对于这些状态，也清除 last_signal_id
-                            current_client_info_active.pop('last_signal_id', None)
+                            # 如果报告的状态是终端状态，则将客户端的最终状态设置为 'idle'
+                            if client_reported_status in TERMINAL_AND_RESET_TO_IDLE_STATUSES:
+                                next_client_status_to_set = "idle"
+                                logger.info(f"AutoX客户端 {client_id_local} 报告状态 '{client_reported_status}', 将其重置为 'idle'。")
+                                # 对于这些状态，也清除 last_signal_id
+                                current_client_info_active.pop('last_signal_id', None)
+                                if current_client_info_persistent:
+                                    current_client_info_persistent.pop('last_signal_id', None)
+                            elif client_reported_status == "idle":
+                                # 如果客户端明确报告自己是idle (例如，可能是手动干预或脚本逻辑)
+                                current_client_info_active.pop('last_signal_id', None)
+                                if current_client_info_persistent:
+                                    current_client_info_persistent.pop('last_signal_id', None)
+                            # 对于其他中间状态 (如 command_received, amount_set_attempted, direction_selected)，
+                            # 客户端状态将设置为这些中间状态。服务器在派发新任务时检查的是 'idle'。
+
+                            current_client_info_active['status'] = next_client_status_to_set
+                            current_client_info_active['last_seen'] = now_utc().isoformat()
+                            
                             if current_client_info_persistent:
-                                current_client_info_persistent.pop('last_signal_id', None)
-                        elif client_reported_status == "idle":
-                            # 如果客户端明确报告自己是idle (例如，可能是手动干预或脚本逻辑)
-                            current_client_info_active.pop('last_signal_id', None)
-                            if current_client_info_persistent:
-                                current_client_info_persistent.pop('last_signal_id', None)
-                        # 对于其他中间状态 (如 command_received, amount_set_attempted, direction_selected)，
-                        # 客户端状态将设置为这些中间状态。服务器在派发新任务时检查的是 'idle'。
-
-                        current_client_info_active['status'] = next_client_status_to_set
-                        current_client_info_active['last_seen'] = now_utc().isoformat()
-                        
-                        if current_client_info_persistent:
-                            current_client_info_persistent['status'] = next_client_status_to_set
-                            current_client_info_persistent['last_seen'] = now_utc().isoformat()
-                        else:
-                            # 理论上注册时就应该有了，但作为保障
-                            persistent_autox_clients_data[client_id_local] = current_client_info_active.copy()
-                        
-                        updated_info_for_broadcast = current_client_info_active.copy()
-
-                    # 日志记录部分
+                                current_client_info_persistent['status'] = next_client_status_to_set
+                                current_client_info_persistent['last_seen'] = now_utc().isoformat()
+                            else:
+                                # 理论上注册时就应该有了，但作为保障
+                                persistent_autox_clients_data[client_id_local] = current_client_info_active.copy()
+                            
+                            updated_info_for_broadcast = current_client_info_active.copy()
+                    
+                    # 记录锁释放时间
+                    lock_release_time = time.time()
+                    logger.debug(f"状态更新锁内处理完成，耗时: {(lock_release_time - status_update_start_time):.4f}秒 - {datetime.now().isoformat()}")
+                    
+                    # 如果需要跳过后续处理，直接返回
+                    if should_continue:
+                        continue
+                    
+                    # 锁外执行日志记录部分
                     log_payload = {
                         "client_id": client_id_local, "signal_id": payload.get("signal_id"),
                         "command_type": "status_from_client", "command_payload": payload,
@@ -1555,14 +1620,24 @@ async def autox_websocket_endpoint(websocket: WebSocket):
                         if len(autox_trade_logs) > MAX_AUTOX_LOG_ENTRIES:
                             autox_trade_logs.pop(0)
 
-                    await save_autox_trade_logs_async() # 新增：保存交易日志
+                    # 锁外执行耗时的IO操作
+                    await save_autox_trade_logs_async() # 保存交易日志
                     final_set_status = updated_info_for_broadcast.get('status') if updated_info_for_broadcast else 'N/A'
-                    print(f"收到AutoX客户端 {client_id_local} 状态更新: '{client_reported_status}' (原始), Signal ID: {payload.get('signal_id')}. "
+                    logger.info(f"收到AutoX客户端 {client_id_local} 状态更新: '{client_reported_status}' (原始), Signal ID: {payload.get('signal_id')}. "
                           f"客户端最终状态设置为: '{final_set_status}'")
                     
+                    # 记录日志处理完成时间
+                    log_process_time = time.time()
+                    logger.debug(f"状态更新日志处理完成，耗时: {(log_process_time - lock_release_time):.4f}秒 - {datetime.now().isoformat()}")
+                    
+                    # 锁外执行广播和文件保存操作
                     if updated_info_for_broadcast:
                         await broadcast_autox_clients_status()
                         await save_autox_clients_to_file()
+                        
+                    # 记录整个状态更新处理完成时间
+                    status_update_end_time = time.time()
+                    logger.debug(f"状态更新处理完成，总耗时: {(status_update_end_time - status_update_start_time):.4f}秒 - {datetime.now().isoformat()}")
  
                 elif message_type == "pong":
                     # 收到客户端的 pong 回复，更新最后活动时间和 pong 时间
@@ -1636,18 +1711,32 @@ async def autox_status_websocket_endpoint(websocket: WebSocket):
 
 # --- 辅助函数：广播AutoX客户端状态 (现在从 persistent_autox_clients_data 读取) ---
 async def broadcast_autox_clients_status():
-    """广播当前AutoX客户端列表到所有连接的AutoX状态前端WebSocket。"""
+    """广播当前AutoX客户端列表到所有连接的AutoX状态前端WebSocket。
+    优化：将数据准备和广播分离，避免在锁内进行耗时IO操作
+    """
+    # 记录开始时间，用于性能监控
+    start_time = time.time()
+    logger.debug(f"开始准备AutoX客户端状态数据 - {datetime.now().isoformat()}")
+    
+    # 第一步：在锁内准备所有需要的数据
     clients_data_to_broadcast = []
-    with autox_clients_lock: # 保护对 persistent_autox_clients_data 的读取
+    persistent_copy = {}
+    active_client_ids = set()
+    
+    with autox_clients_lock: # 保护对客户端数据的读取，但尽量减少锁内操作
         # 创建副本进行迭代和处理
         persistent_copy = {cid: cinfo.copy() for cid, cinfo in persistent_autox_clients_data.items()}
-
-    active_client_ids = set()
-    with autox_clients_lock: # 保护对 active_autox_clients 的读取
+        
+        # 收集活跃客户端ID
         for ws, active_info in active_autox_clients.items():
             if active_info.get('client_id'):
                 active_client_ids.add(active_info['client_id'])
-
+    
+    # 记录锁释放时间
+    lock_release_time = time.time()
+    logger.debug(f"锁内数据准备完成，耗时: {(lock_release_time - start_time):.4f}秒 - {datetime.now().isoformat()}")
+    
+    # 第二步：锁外处理数据
     for client_id, client_info_dict in persistent_copy.items():
         # 确保 Pydantic 模型用于最终序列化，以处理 datetime 等类型
         try:
@@ -1662,11 +1751,20 @@ async def broadcast_autox_clients_status():
             client_model_instance = AutoXClientInfo(**client_info_dict_enriched)
             clients_data_to_broadcast.append(client_model_instance.model_dump(mode='json'))
         except Exception as e_val:
-            print(f"序列化AutoX客户端 {client_id} 信息时出错: {e_val}")
-
-
+            logger.error(f"序列化AutoX客户端 {client_id} 信息时出错: {e_val}")
+    
+    # 记录数据处理完成时间
+    data_process_time = time.time()
+    logger.debug(f"数据处理完成，耗时: {(data_process_time - lock_release_time):.4f}秒 - {datetime.now().isoformat()}")
+    
+    # 第三步：执行广播（锁外操作）
     payload = {"type": "autox_clients_update", "data": clients_data_to_broadcast}
+    logger.debug(f"开始广播AutoX客户端状态 - {datetime.now().isoformat()}")
     await autox_status_manager.broadcast_json(payload)
+    
+    # 记录广播完成时间
+    broadcast_end_time = time.time()
+    logger.debug(f"广播完成，耗时: {(broadcast_end_time - data_process_time):.4f}秒，总耗时: {(broadcast_end_time - start_time):.4f}秒 - {datetime.now().isoformat()}")
     # print(f"已广播AutoX客户端状态更新到 {len(autox_status_manager.active_connections)} 个前端连接。")
 
 
