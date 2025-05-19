@@ -1586,6 +1586,7 @@ async def autox_websocket_endpoint(websocket: WebSocket):
                         "manual_confirmation_pending", # JS: 脚本已设置好参数，等待人工确认 (自动化流程结束)
                         "internal_error",            # JS: 客户端内部错误
                         "trade_execution_completed", # 新增：交易执行完成
+                        "test_command_received", # 新增此行
                         # "trade_execution_succeeded" # 如果JS将来会报告明确的成功，也应加进来
                     }
 
