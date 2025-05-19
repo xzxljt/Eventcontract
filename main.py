@@ -135,6 +135,18 @@ async def shutdown_event():
     确保所有WebSocket连接被正确关闭，防止进程卡死
     """
     logger.warning("应用正在关闭，执行清理工作...")
+
+    # 取消 broadcast_autox_clients_status 的防抖任务
+    global _debounce_task_autox_status
+    if _debounce_task_autox_status and not _debounce_task_autox_status.done():
+        logger.info("正在取消 broadcast_autox_clients_status 的防抖任务...")
+        _debounce_task_autox_status.cancel()
+        try:
+            await _debounce_task_autox_status
+        except asyncio.CancelledError:
+            logger.info("broadcast_autox_clients_status 的防抖任务已取消。")
+        except Exception as e:
+            logger.error(f"等待取消的 broadcast_autox_clients_status 防抖任务时发生错误: {e}", exc_info=True)
     
     # 停止所有币安WebSocket连接
     logger.info("正在停止所有币安WebSocket连接...")
@@ -1319,16 +1331,46 @@ async def websocket_endpoint(websocket: WebSocket):
                         if config_dict: restored_config_data = config_dict.copy() 
                 
                 if restored_config_data:
-                    # 确保恢复的配置有 current_balance
-                    if 'current_balance' not in restored_config_data:
+                    # 确保恢复的配置有 current_balance，并且它是一个有效的数值
+                    current_balance_val = restored_config_data.get('current_balance')
+                    if current_balance_val is None: # 包括 'current_balance' 键不存在，或者键存在但值为 None
+                        logger.info(f"恢复会话 {client_config_id}: 'current_balance' 为 None 或不存在于 restored_config_data。尝试从 investment_settings.simulatedBalance 回退。")
                         sim_bal = restored_config_data.get('investment_settings', {}).get('simulatedBalance')
-                        restored_config_data['current_balance'] = sim_bal if sim_bal is not None else 1000.0
-                        print(f"恢复会话 {client_config_id}: current_balance 不存在，已从simulatedBalance或默认值设置。")
+                        if sim_bal is not None:
+                            restored_config_data['current_balance'] = float(sim_bal) # 确保是 float
+                            logger.info(f"恢复会话 {client_config_id}: 'current_balance' 已从 simulatedBalance ({sim_bal}) 设置。")
+                        else:
+                            restored_config_data['current_balance'] = 1000.0 # 默认值
+                            logger.info(f"恢复会话 {client_config_id}: 'current_balance' 已设置为默认值 1000.0 (simulatedBalance 也为 None)。")
+                    elif not isinstance(current_balance_val, (int, float)):
+                        logger.warning(f"恢复会话 {client_config_id}: 'current_balance' ({current_balance_val}) 不是有效数值类型。将尝试回退。")
+                        sim_bal = restored_config_data.get('investment_settings', {}).get('simulatedBalance')
+                        if sim_bal is not None:
+                            restored_config_data['current_balance'] = float(sim_bal)
+                            logger.info(f"恢复会话 {client_config_id}: 'current_balance' 因类型无效已从 simulatedBalance ({sim_bal}) 重置。")
+                        else:
+                            restored_config_data['current_balance'] = 1000.0
+                            logger.info(f"恢复会话 {client_config_id}: 'current_balance' 因类型无效已重置为默认值 1000.0。")
+                    else:
+                        # 如果 current_balance 存在且是有效数值，确保它是 float 类型以保持一致性
+                        restored_config_data['current_balance'] = float(current_balance_val)
+                        logger.info(f"恢复会话 {client_config_id}: 'current_balance' ({current_balance_val}) 已存在且有效。")
 
-
+                    # 确保 total_profit_loss_amount 也存在且为数值，如果不存在则初始化为 0.0
+                    total_pnl_val = restored_config_data.get('total_profit_loss_amount')
+                    if total_pnl_val is None:
+                        restored_config_data['total_profit_loss_amount'] = 0.0
+                        logger.info(f"恢复会话 {client_config_id}: 'total_profit_loss_amount' 为 None 或不存在，已初始化为 0.0。")
+                    elif not isinstance(total_pnl_val, (int, float)):
+                        restored_config_data['total_profit_loss_amount'] = 0.0
+                        logger.warning(f"恢复会话 {client_config_id}: 'total_profit_loss_amount' ({total_pnl_val}) 不是有效数值类型，已重置为 0.0。")
+                    else:
+                        restored_config_data['total_profit_loss_amount'] = float(total_pnl_val)
+                    
                     websocket_to_config_id_map[websocket] = client_config_id
-                    # 发送给客户端的 restored_config_data 将包含 current_balance
+                    # 发送给客户端的 restored_config_data 将包含 current_balance 和 total_profit_loss_amount
                     await websocket.send_json({"type": "session_restored", "data": {"config_id": client_config_id, "config_details": restored_config_data}})
+                    logger.info(f"会话已恢复 {client_config_id}，发送的 config_details: {json.dumps(ensure_json_serializable(restored_config_data), indent=2)}")
                 else:
                     await websocket.send_json({"type": "session_not_found", "data": {"config_id": client_config_id}})
             
@@ -1533,7 +1575,7 @@ async def autox_websocket_endpoint(websocket: WebSocket):
                             print(f"AutoX客户端已注册/更新: ID={client_id_local}, 支持交易对={supported_symbols_list}, 备注='{client_info_to_store_dict.get('notes', '') if client_info_to_store_dict else ''}'")
                             await websocket.send_json({"type": "registered", "message": "客户端注册成功。", "client_info": client_info_to_store_dict})
                             
-                            await broadcast_autox_clients_status()
+                            await debounced_broadcast_autox_clients_status()
                             await save_autox_clients_to_file()
  
                 elif message_type == "status_update":
@@ -1637,7 +1679,7 @@ async def autox_websocket_endpoint(websocket: WebSocket):
                     
                     # 锁外执行广播和文件保存操作
                     if updated_info_for_broadcast:
-                        await broadcast_autox_clients_status()
+                        await debounced_broadcast_autox_clients_status()
                         await save_autox_clients_to_file()
                         
                     # 记录整个状态更新处理完成时间
@@ -1693,7 +1735,7 @@ async def autox_websocket_endpoint(websocket: WebSocket):
                     persistent_autox_clients_data[disconnected_client_id]['last_seen'] = now_utc().isoformat() 
         
         if disconnected_client_id: 
-            await broadcast_autox_clients_status() 
+            await debounced_broadcast_autox_clients_status()
             await save_autox_clients_to_file()
  
  
@@ -1703,7 +1745,7 @@ async def autox_websocket_endpoint(websocket: WebSocket):
 async def autox_status_websocket_endpoint(websocket: WebSocket):
     await autox_status_manager.connect(websocket)
     try:
-        await broadcast_autox_clients_status() # 连接成功后立即发送当前客户端列表
+        await debounced_broadcast_autox_clients_status() # 连接成功后立即发送当前客户端列表
         while True:
             await websocket.receive_text() # 保持连接，可以处理ping/pong
     except WebSocketDisconnect:
@@ -1713,6 +1755,47 @@ async def autox_status_websocket_endpoint(websocket: WebSocket):
     finally:
         autox_status_manager.disconnect(websocket)
 
+
+# --- 防抖控制变量 for broadcast_autox_clients_status ---
+_debounce_task_autox_status: Optional[asyncio.Task] = None
+DEBOUNCE_DELAY_AUTOX_STATUS: float = 0.3  # 300毫秒
+
+async def _execute_broadcast_after_delay():
+    """实际执行广播的辅助函数，在延迟后调用。"""
+    try:
+        await asyncio.sleep(DEBOUNCE_DELAY_AUTOX_STATUS)
+        # 再次检查任务是否在 sleep 期间被取消
+        if not asyncio.current_task().cancelled():
+            logger.debug(f"Debounce delay for broadcast_autox_clients_status complete, executing now.")
+            await broadcast_autox_clients_status()
+        else:
+            logger.debug(f"Debounce task for broadcast_autox_clients_status was cancelled during delay.")
+    except asyncio.CancelledError:
+        logger.debug(f"Debounce execution task for broadcast_autox_clients_status cancelled.")
+    except Exception as e:
+        logger.error(f"Error during debounced execution of broadcast_autox_clients_status: {e}", exc_info=True)
+
+
+async def debounced_broadcast_autox_clients_status():
+    """
+    防抖版本的 broadcast_autox_clients_status。
+    如果在延迟期间被再次调用，则重置计时器。
+    """
+    global _debounce_task_autox_status
+    
+    if _debounce_task_autox_status and not _debounce_task_autox_status.done():
+        logger.debug("Debouncing broadcast_autox_clients_status: cancelling previous task.")
+        _debounce_task_autox_status.cancel()
+        try:
+            await _debounce_task_autox_status  # 等待任务实际完成取消
+        except asyncio.CancelledError:
+            logger.debug("Previous debounce task for broadcast_autox_clients_status successfully cancelled.")
+        except Exception as e:
+            # 这个异常不应该发生，因为我们期望CancelledError
+            logger.error(f"Unexpected error waiting for previous debounce task cancellation: {e}", exc_info=True)
+
+    logger.debug(f"Scheduling new debounced broadcast_autox_clients_status in {DEBOUNCE_DELAY_AUTOX_STATUS}s.")
+    _debounce_task_autox_status = asyncio.create_task(_execute_broadcast_after_delay())
 
 # --- 辅助函数：广播AutoX客户端状态 (现在从 persistent_autox_clients_data 读取) ---
 async def broadcast_autox_clients_status():
@@ -2064,7 +2147,7 @@ async def trigger_trade_command_for_autox_client(client_id: str, trade_details: 
                 if len(autox_trade_logs) > MAX_AUTOX_LOG_ENTRIES: autox_trade_logs.pop(0)
 
             await save_autox_clients_to_file() # 异步保存状态更改
-            await broadcast_autox_clients_status() # 广播状态更新
+            await debounced_broadcast_autox_clients_status() # 广播状态更新
 
             return {"status": "success", "message": f"'execute_trade' 指令已作为测试发送给客户端 {client_id}。", "sent_command": command_to_send}
         except Exception as e:
@@ -2078,7 +2161,7 @@ async def trigger_trade_command_for_autox_client(client_id: str, trade_details: 
                      active_autox_clients[target_ws].pop('last_signal_id', None)
 
             await save_autox_clients_to_file() # 保存回滚后的状态
-            await broadcast_autox_clients_status()
+            await debounced_broadcast_autox_clients_status()
             raise HTTPException(status_code=500, detail=f"发送 'execute_trade' 指令给客户端 {client_id} 失败: {str(e)}")
     else: # 理论上不会到这里，因为前面已经检查过
         raise HTTPException(status_code=404, detail="未能定位到目标客户端的WebSocket连接。")
@@ -2110,7 +2193,7 @@ async def update_client_notes_endpoint(client_id: str, notes_payload: ClientNote
     
     print(f"客户端 {client_id} 的备注已更新为: '{notes_payload.notes}'")
     await save_autox_clients_to_file() # 异步保存
-    await broadcast_autox_clients_status() # 广播状态更新（可能包含备注变化）
+    await debounced_broadcast_autox_clients_status() # 广播状态更新（可能包含备注变化）
 
     # 返回 Pydantic 模型确保响应格式正确
     return AutoXClientInfo(**updated_client_info_dict) if updated_client_info_dict else None

@@ -427,11 +427,36 @@ const app = createApp({
             // If configDetails.symbol is 'all', we do nothing here, preserving the value set by fetchSymbols
 
             // Also update signalManagementFilter.value.symbol based on the loaded config symbol
-            if (configDetails.symbol) {
-                 signalManagementFilter.value.symbol = configDetails.symbol;
+            const storedFavorites = localStorage.getItem('favoriteSymbols');
+            let favoritesExistAndNotEmpty = false;
+            if (storedFavorites) {
+                try {
+                    const parsedFavorites = JSON.parse(storedFavorites);
+                    if (Array.isArray(parsedFavorites) && parsedFavorites.length > 0) {
+                        favoritesExistAndNotEmpty = true;
+                    }
+                } catch (e) {
+                    console.warn("LiveTest: Could not parse favoriteSymbols from localStorage in populateUiFromConfigDetails", e);
+                }
+            }
+
+            if (favoritesExistAndNotEmpty) {
+                // Favorites exist and are not empty
+                // If configDetails.symbol is a specific trading pair (not 'all' and not empty), prioritize it.
+                if (configDetails.symbol && configDetails.symbol !== 'all') {
+                    signalManagementFilter.value.symbol = configDetails.symbol;
+                } else {
+                    // Otherwise (configDetails.symbol is 'all', empty, or undefined), set to 'favorites'.
+                    signalManagementFilter.value.symbol = 'favorites';
+                }
             } else {
-                 // If configDetails.symbol is null/undefined/empty, default filter to 'all'
-                 signalManagementFilter.value.symbol = 'all';
+                // No favorites, or favorites are empty. Use existing logic.
+                if (configDetails.symbol) {
+                     signalManagementFilter.value.symbol = configDetails.symbol;
+                } else {
+                     // If configDetails.symbol is null/undefined/empty, default filter to 'all'
+                     signalManagementFilter.value.symbol = 'all';
+                }
             }
 
 
@@ -619,15 +644,21 @@ const app = createApp({
                             activeTestConfigDetails.value = null; // 清理
                         }
                         break;
-                    case "session_recovered":
+                    case "session_restored":
                         console.log("LiveTest: Received session_recovered message:", message.data);
                         if (message.data && message.data.config_id) {
                             currentConfigId.value = message.data.config_id;
                             localStorage.setItem('liveTestConfigId', currentConfigId.value);
                             if (message.data.config_details) {
                                 populateUiFromConfigDetails(message.data.config_details);
-                                activeTestConfigDetails.value = message.data.config_details;
-                                console.log("LiveTest: activeTestConfigDetails after session_recovered:", activeTestConfigDetails.value);
+                                // 使用扩展运算符创建新对象以确保响应性
+                                activeTestConfigDetails.value = { ...message.data.config_details };
+                                console.log("LiveTest: activeTestConfigDetails after session_restored (new object):", activeTestConfigDetails.value);
+                                // 进一步确认关键字段是否已正确设置在 activeTestConfigDetails.value 中
+                                if (activeTestConfigDetails.value) {
+                                    console.log("LiveTest: activeTestConfigDetails.value.current_balance:", activeTestConfigDetails.value.current_balance);
+                                    console.log("LiveTest: activeTestConfigDetails.value.total_profit_loss_amount:", activeTestConfigDetails.value.total_profit_loss_amount);
+                                }
                             }
                             showServerMessage(`会话已恢复 (ID: ${currentConfigId.value.substring(0,8)}...)`, false, 4000);
                         } else {
