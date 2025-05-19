@@ -18,6 +18,7 @@ import numpy as np
 import json
 import time
 import asyncio # 确保导入 asyncio
+shutdown_event_async = asyncio.Event() # 全局关闭事件
 import threading
 from queue import Queue, Empty
 import random
@@ -128,35 +129,6 @@ if platform.system() != "Windows":
         logger.warning(f"注册信号处理函数失败: {e}，这在某些环境下是正常的")
 
 # 添加FastAPI应用关闭事件处理函数
-@app.on_event("shutdown")
-async def shutdown_event():
-    """应用关闭时的清理工作
-    
-    确保所有WebSocket连接被正确关闭，防止进程卡死
-    """
-    logger.warning("应用正在关闭，执行清理工作...")
-
-    # 取消 broadcast_autox_clients_status 的防抖任务
-    global _debounce_task_autox_status
-    if _debounce_task_autox_status and not _debounce_task_autox_status.done():
-        logger.info("正在取消 broadcast_autox_clients_status 的防抖任务...")
-        _debounce_task_autox_status.cancel()
-        try:
-            await _debounce_task_autox_status
-        except asyncio.CancelledError:
-            logger.info("broadcast_autox_clients_status 的防抖任务已取消。")
-        except Exception as e:
-            logger.error(f"等待取消的 broadcast_autox_clients_status 防抖任务时发生错误: {e}", exc_info=True)
-    
-    # 停止所有币安WebSocket连接
-    logger.info("正在停止所有币安WebSocket连接...")
-    try:
-        binance_client.stop_all_websockets()
-        logger.info("所有币安WebSocket连接已停止")
-    except Exception as e:
-        logger.error(f"停止币安WebSocket连接时发生错误: {e}", exc_info=True)
-    
-    logger.warning("应用清理工作完成，准备退出...")
 
 # --- WebSocket 连接管理器 (保持不变) ---
 class ConnectionManager:
@@ -666,17 +638,27 @@ async def save_live_signals_async():
 
 # --- 核心业务逻辑函数 ---
 async def process_kline_queue(): # 基本不变，但其调用的 handle_kline_data 会改变
-    while True:
+    while not shutdown_event_async.is_set():
         try:
             # signals_queue.get_nowait() 是同步的，但通常很快
             # 如果队列为空，它会立即抛出 Empty 异常，然后 asyncio.sleep(0.01) 释放控制权
-            kline_data = signals_queue.get_nowait() 
+            kline_data = signals_queue.get_nowait()
+            if shutdown_event_async.is_set(): # 在处理前再次检查
+                logger.info("process_kline_queue: shutdown_event_async set, exiting.")
+                break
             await handle_kline_data(kline_data) # handle_kline_data 现在内部会有异步操作
         except Empty:
+            if shutdown_event_async.is_set():
+                logger.info("process_kline_queue: shutdown_event_async set during empty queue, exiting.")
+                break
             await asyncio.sleep(0.01) # 队列为空时短暂休眠，避免CPU空转
         except Exception as e:
             print(f"处理K线队列时出错: {e}\n{traceback.format_exc()}");
+            if shutdown_event_async.is_set():
+                logger.info("process_kline_queue: shutdown_event_async set during exception, exiting.")
+                break
             await asyncio.sleep(1) # 出错时稍长休眠
+    logger.info("process_kline_queue task gracefully shut down.")
 
 async def background_signal_verifier():
     global live_signals, global_running_balance, global_running_balance_lock, \
@@ -857,6 +839,8 @@ async def background_signal_verifier():
             "current_balance": round(global_running_balance, 2) # 全局余额
         }
         await manager.broadcast_json({"type": "stats_update", "data": stats_payload})
+    logger.info("background_signal_verifier task gracefully shut down.")
+    logger.info("background_signal_verifier task gracefully shut down.")
 
 
 async def _send_autox_command(client_ws: WebSocket, command: Dict[str, Any]): # 基本不变
@@ -1242,16 +1226,21 @@ async def startup_event():
 async def daily_log_rotation_and_cleanup():
     """后台任务：每日检查并轮转 AutoX 交易日志，清理旧文件。"""
     logger.info("每日日志轮转和清理任务已启动。")
-    while True:
+    while not shutdown_event_async.is_set():
+        try:
+            await asyncio.sleep(3600) # 每小时检查一次 (可以调整)
+        except asyncio.CancelledError:
+            logger.info("daily_log_rotation_and_cleanup: sleep cancelled, likely due to shutdown.")
+            break # 如果睡眠被取消，也退出循环
+
+        if shutdown_event_async.is_set():
+            logger.info("daily_log_rotation_and_cleanup: shutdown_event_async set, exiting.")
+            break
         # TODO: 实现日志轮转和清理逻辑
         # 例如：检查当前日期是否与日志文件日期一致，不一致则切换并清理旧文件
-        await asyncio.sleep(3600) # 每小时检查一次 (可以调整)
+        logger.debug("daily_log_rotation_and_cleanup: hourly check.")
+    logger.info("daily_log_rotation_and_cleanup task gracefully shut down.")
 
-@app.on_event("shutdown")
-async def shutdown_event(): # 基本不变
-    print("应用关闭，停止币安WebSocket连接...")
-    binance_client.stop_all_websockets() 
-    print("币安WebSocket连接已停止。")
 
 # --- WebSocket 端点 for Web UI (/ws/live-test) (逻辑微调，确保使用锁和副本) ---
 @app.websocket("/ws/live-test")
@@ -1370,7 +1359,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     websocket_to_config_id_map[websocket] = client_config_id
                     # 发送给客户端的 restored_config_data 将包含 current_balance 和 total_profit_loss_amount
                     await websocket.send_json({"type": "session_restored", "data": {"config_id": client_config_id, "config_details": restored_config_data}})
-                    logger.info(f"会话已恢复 {client_config_id}，发送的 config_details: {json.dumps(ensure_json_serializable(restored_config_data), indent=2)}")
+                    # logger.info(f"会话已恢复 {client_config_id}，发送的 config_details: {json.dumps(ensure_json_serializable(restored_config_data), indent=2)}")
                 else:
                     await websocket.send_json({"type": "session_not_found", "data": {"config_id": client_config_id}})
             
@@ -2437,68 +2426,81 @@ async def generate_enhanced_test_signal(
         "autox_attempt_details": autox_attempt_log
     }
 
-# --- 添加优雅关闭机制 ---
+# --- 统一的优雅关闭机制 ---
 @app.on_event("shutdown")
 async def shutdown_event():
-    """在应用关闭时执行清理操作，确保所有资源正确释放。"""
-    logger.info("服务正在关闭，执行清理操作...")
-    
-    # 1. 停止所有WebSocket连接
+    logger.info("服务正在关闭，开始执行优雅的清理操作...")
+    shutdown_event_async.set() # 1. 通知所有异步后台任务停止
+
+    # 2. 取消 broadcast_autox_clients_status 的防抖任务 (如果存在)
+    global _debounce_task_autox_status
+    if _debounce_task_autox_status and not _debounce_task_autox_status.done():
+        logger.info("正在取消 broadcast_autox_clients_status 的防抖任务...")
+        _debounce_task_autox_status.cancel()
+        try:
+            await _debounce_task_autox_status
+        except asyncio.CancelledError:
+            logger.info("broadcast_autox_clients_status 的防抖任务已成功取消。")
+        except Exception as e:
+            logger.error(f"等待取消的 broadcast_autox_clients_status 防抖任务时发生错误: {e}", exc_info=True)
+
+    # 3. 停止币安WebSocket连接 (BinanceClient.stop_all_websockets 是同步的)
+    # 这个操作应该相对较快，或者其内部有自己的超时和线程管理
     try:
-        logger.info("正在关闭所有币安WebSocket连接...")
+        logger.info("正在停止所有币安WebSocket连接...")
         binance_client.stop_all_websockets()
-        logger.info("所有币安WebSocket连接已关闭")
+        logger.info("所有币安WebSocket连接已停止。")
     except Exception as e:
-        logger.error(f"关闭币安WebSocket连接时出错: {e}")
+        logger.error(f"停止币安WebSocket连接时发生错误: {e}", exc_info=True)
+
+    # 4. 并发保存所有持久化数据
+    logger.info("正在并发保存所有持久化数据...")
+    save_data_tasks = [
+        save_live_signals_async(),
+        save_strategy_parameters_to_file(),
+        save_autox_clients_to_file(),
+        save_active_test_config(),
+        save_autox_trade_logs_async()
+    ]
+    save_results = await asyncio.gather(*save_data_tasks, return_exceptions=True)
+    for i, res in enumerate(save_results):
+        task_name = getattr(save_data_tasks[i], '__name__', f"保存任务_{i}")
+        if isinstance(res, Exception):
+            logger.error(f"{task_name} 失败: {res}", exc_info=res)
+        else:
+            logger.info(f"{task_name} 完成。")
+    logger.info("所有持久化数据保存尝试完成。")
+
+    # 5. 并发关闭所有客户端WebSocket连接 (UI, AutoX, Status)
+    logger.info("正在并发关闭所有活动的客户端WebSocket连接...")
+    close_client_ws_tasks = []
     
-    # 2. 保存所有持久化数据
-    try:
-        logger.info("正在保存所有持久化数据...")
-        await asyncio.gather(
-            save_live_signals_async(),
-            save_strategy_parameters_to_file(),
-            save_autox_clients_to_file(),
-            save_active_test_config(),
-            save_autox_trade_logs_async() # 新增：保存交易日志
-        )
-        logger.info("所有持久化数据已保存")
-    except Exception as e:
-        logger.error(f"保存持久化数据时出错: {e}")
+    # 为每个管理器收集关闭任务
+    for ws_mgr_name, ws_mgr_instance in [("AutoX客户端", autox_manager), ("UI客户端", manager), ("状态监控客户端", autox_status_manager)]:
+        active_ws_list = list(ws_mgr_instance.active_connections) # 创建副本进行迭代
+        if active_ws_list:
+            logger.info(f"准备关闭 {len(active_ws_list)} 个 {ws_mgr_name} WebSocket连接...")
+            for ws_client_conn in active_ws_list:
+                close_client_ws_tasks.append(ws_client_conn.close(code=1000, reason="服务器正在关闭"))
+        else:
+            logger.info(f"没有活动的 {ws_mgr_name} WebSocket连接需要关闭。")
+
+    if close_client_ws_tasks:
+        close_ws_results = await asyncio.gather(*close_client_ws_tasks, return_exceptions=True)
+        for i, res in enumerate(close_ws_results):
+            if isinstance(res, Exception):
+                logger.error(f"关闭客户端WebSocket连接任务 {i} 失败: {res}", exc_info=res)
+        logger.info("所有客户端WebSocket连接关闭尝试完成。")
+    else:
+        logger.info("没有需要关闭的客户端WebSocket连接。")
     
-    # 3. 关闭所有AutoX客户端连接
-    try:
-        logger.info(f"正在关闭 {len(autox_manager.active_connections)} 个AutoX客户端连接...")
-        for ws in list(autox_manager.active_connections):
-            try:
-                await ws.close(code=1000, reason="服务器正在关闭")
-            except Exception: pass
-        logger.info("所有AutoX客户端连接已关闭")
-    except Exception as e:
-        logger.error(f"关闭AutoX客户端连接时出错: {e}")
-    
-    # 4. 关闭所有UI WebSocket连接
-    try:
-        logger.info(f"正在关闭 {len(manager.active_connections)} 个UI WebSocket连接...")
-        for ws in list(manager.active_connections):
-            try:
-                await ws.close(code=1000, reason="服务器正在关闭")
-            except Exception: pass
-        logger.info("所有UI WebSocket连接已关闭")
-    except Exception as e:
-        logger.error(f"关闭UI WebSocket连接时出错: {e}")
-    
-    # 5. 关闭所有状态监控WebSocket连接
-    try:
-        logger.info(f"正在关闭 {len(autox_status_manager.active_connections)} 个状态监控WebSocket连接...")
-        for ws in list(autox_status_manager.active_connections):
-            try:
-                await ws.close(code=1000, reason="服务器正在关闭")
-            except Exception: pass
-        logger.info("所有状态监控WebSocket连接已关闭")
-    except Exception as e:
-        logger.error(f"关闭状态监控WebSocket连接时出错: {e}")
-    
-    logger.info("服务关闭清理操作完成")
+    # 等待后台任务完成 (给它们一点时间响应 shutdown_event_async)
+    # Uvicorn 的 graceful_shutdown 也会等待后台任务，但这里可以显式等待一小段时间
+    # 确保在Uvicorn强制终止前，我们的任务有机会清理
+    logger.info("等待后台任务响应关闭信号 (最多等待几秒)...")
+    await asyncio.sleep(2) # 短暂等待，让后台任务的循环检测到 shutdown_event_async
+
+    logger.info("服务关闭清理操作全部完成。")
 
 if __name__ == "__main__":
     # 创建启动任务列表
