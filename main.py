@@ -1343,7 +1343,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     else:
                         # 如果 current_balance 存在且是有效数值，确保它是 float 类型以保持一致性
                         restored_config_data['current_balance'] = float(current_balance_val)
-                        logger.info(f"恢复会话 {client_config_id}: 'current_balance' ({current_balance_val}) 已存在且有效。")
+                        # logger.info(f"恢复会话 {client_config_id}: 'current_balance' ({current_balance_val}) 已存在且有效。")
 
                     # 确保 total_profit_loss_amount 也存在且为数值，如果不存在则初始化为 0.0
                     total_pnl_val = restored_config_data.get('total_profit_loss_amount')
@@ -1585,6 +1585,7 @@ async def autox_websocket_endpoint(websocket: WebSocket):
                         "trade_execution_failed",    # JS: 交易执行失败
                         "manual_confirmation_pending", # JS: 脚本已设置好参数，等待人工确认 (自动化流程结束)
                         "internal_error",            # JS: 客户端内部错误
+                        "trade_execution_completed", # 新增：交易执行完成
                         # "trade_execution_succeeded" # 如果JS将来会报告明确的成功，也应加进来
                     }
 
