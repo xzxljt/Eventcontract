@@ -138,61 +138,101 @@ class ConnectionManager:
         await websocket.accept(); self.active_connections.append(websocket)
     def disconnect(self, websocket: WebSocket):
         if websocket in self.active_connections: self.active_connections.remove(websocket)
+    async def _send_to_connection(self, connection: WebSocket, data: dict, client_id: str, timeout_sec: float):
+        """辅助函数：向单个WebSocket连接发送数据并处理异常。"""
+        send_start_time = time.time()
+        try:
+            await asyncio.wait_for(connection.send_json(data), timeout=timeout_sec)
+            send_elapsed = time.time() - send_start_time
+            logger.debug(f"WebSocket广播成功到客户端 {client_id}，耗时: {send_elapsed:.4f}秒")
+            return True
+        except asyncio.TimeoutError:
+            logger.warning(f"WebSocket广播到客户端 {client_id} 超时 (>{timeout_sec}秒)")
+            self.disconnect(connection) # 超时后断开连接
+            return False
+        except WebSocketDisconnect:
+            logger.debug(f"WebSocket广播时发现客户端 {client_id} 已断开连接")
+            self.disconnect(connection)
+            return False
+        except Exception as e:
+            logger.error(f"WebSocket广播到客户端 {client_id} 失败: {e}")
+            # 根据具体错误类型决定是否断开连接，这里暂时不断开，除非是特定IO错误
+            # self.disconnect(connection)
+            return False
+
     async def broadcast_json(self, data: dict, filter_func=None, timeout_sec: float = 5.0):
-        """广播JSON数据到所有活跃的WebSocket连接
+        """异步广播JSON数据到所有活跃的WebSocket连接。
+        为每个客户端的发送操作创建一个独立的asyncio.create_task()。
         
         Args:
             data: 要广播的JSON数据
             filter_func: 可选的过滤函数，决定哪些连接接收广播
             timeout_sec: 每个WebSocket发送操作的超时时间（秒）
         """
-        broadcast_start_time = time.time()
-        logger.debug(f"开始WebSocket广播 - {datetime.now().isoformat()}")
+        broadcast_overall_start_time = time.time()
+        logger.info(f"开始异步WebSocket广播 - 时间: {datetime.now().isoformat()}")
         
         active_connections_copy = list(self.active_connections) # 迭代副本以允许在广播时断开连接
-        total_connections = len(active_connections_copy)
+        
+        tasks = []
+        connections_to_send_to = []
+
+        for idx, connection in enumerate(active_connections_copy):
+            if filter_func is None or filter_func(connection):
+                client_id = getattr(connection, 'client', f'未知客户端-{idx}')
+                connections_to_send_to.append({"conn": connection, "id": client_id})
+
+        if not connections_to_send_to:
+            logger.debug("没有符合条件的WebSocket连接需要广播。")
+            broadcast_overall_elapsed = time.time() - broadcast_overall_start_time
+            logger.info(f"异步WebSocket广播完成 (无连接) - 总耗时: {broadcast_overall_elapsed:.4f}秒")
+            return {"total_targeted": 0, "success": 0, "error": 0}
+
+        logger.debug(f"准备向 {len(connections_to_send_to)} 个客户端创建发送任务...")
+
+        for conn_info in connections_to_send_to:
+            task = asyncio.create_task(
+                self._send_to_connection(conn_info["conn"], data, conn_info["id"], timeout_sec)
+            )
+            tasks.append(task)
+        
+        results = []
+        if tasks:
+            logger.debug(f"等待 {len(tasks)} 个WebSocket发送任务完成...")
+            # 使用 asyncio.gather 等待所有任务完成，return_exceptions=True 使得gather不会因单个任务失败而停止
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            logger.debug(f"所有 {len(tasks)} 个WebSocket发送任务已处理。")
+        
         success_count = 0
         error_count = 0
         
-        for idx, connection in enumerate(active_connections_copy):
-            if filter_func is None or filter_func(connection):
-                conn_start_time = time.time()
-                client_id = getattr(connection, 'client', f'未知客户端-{idx}')
-                
-                try:
-                    # 使用asyncio.wait_for添加超时控制
-                    await asyncio.wait_for(connection.send_json(data), timeout=timeout_sec)
-                    success_count += 1
-                    
-                    # 记录单个连接的发送耗时（仅在调试级别）
-                    conn_elapsed = time.time() - conn_start_time
-                    if conn_elapsed > 0.5:  # 只记录耗时较长的发送
-                        logger.debug(f"WebSocket广播到客户端 {client_id} 耗时: {conn_elapsed:.4f}秒")
-                        
-                except asyncio.TimeoutError:
-                    error_count += 1
-                    logger.warning(f"WebSocket广播到客户端 {client_id} 超时 (>{timeout_sec}秒)")
-                    # 超时后断开连接，避免后续操作继续阻塞
-                    self.disconnect(connection)
-                    
-                except WebSocketDisconnect:
-                    error_count += 1
-                    logger.debug(f"WebSocket广播时发现客户端 {client_id} 已断开连接")
-                    self.disconnect(connection)
-                    
-                except Exception as e:
-                    error_count += 1
-                    logger.error(f"WebSocket广播到客户端 {client_id} 失败: {e}")
+        for i, result in enumerate(results):
+            client_id_for_log = connections_to_send_to[i]["id"] # 获取对应任务的客户端ID
+            if isinstance(result, Exception): # asyncio.gather 中 return_exceptions=True 时，异常会作为结果返回
+                error_count += 1
+                logger.error(f"WebSocket发送任务到客户端 {client_id_for_log} 失败 (异常由gather捕获): {result}")
+            elif result is True:
+                success_count += 1
+            else: # result is False or some other unexpected non-Exception value
+                error_count += 1
+                # _send_to_connection 内部已经记录了具体错误，这里只记录聚合结果
+                logger.warning(f"WebSocket发送任务到客户端 {client_id_for_log} 返回失败状态。")
+
+        total_targeted_connections = len(connections_to_send_to)
         
-        # 记录广播完成信息
-        broadcast_elapsed = time.time() - broadcast_start_time
-        logger.debug(f"WebSocket广播完成 - 总耗时: {broadcast_elapsed:.4f}秒, 成功: {success_count}/{total_connections}, 失败: {error_count}/{total_connections}")
+        broadcast_overall_elapsed = time.time() - broadcast_overall_start_time
+        logger.info(
+            f"异步WebSocket广播完成 - 总耗时: {broadcast_overall_elapsed:.4f}秒, "
+            f"目标客户端数: {total_targeted_connections}, 成功: {success_count}, 失败: {error_count}"
+        )
         
-        # 如果广播耗时过长，记录警告
-        if broadcast_elapsed > 1.0:  # 超过1秒视为较慢的广播
-            logger.warning(f"WebSocket广播耗时较长: {broadcast_elapsed:.4f}秒, 成功/总数: {success_count}/{total_connections}")
+        if broadcast_overall_elapsed > 1.0:
+            logger.warning(
+                f"异步WebSocket广播耗时较长: {broadcast_overall_elapsed:.4f}秒, "
+                f"成功/目标: {success_count}/{total_targeted_connections}"
+            )
         
-        return {"total": total_connections, "success": success_count, "error": error_count}
+        return {"total_targeted": total_targeted_connections, "success": success_count, "error": error_count}
 
 # --- Pydantic 模型定义 (保持不变) ---
 class InvestmentStrategySettings(BaseModel):
@@ -933,7 +973,7 @@ async def handle_kline_data(kline_data: dict):
                 print(f"Config ID {live_test_config_data['_config_id']}: 未找到预测策略 {pred_strat_id}，跳过。")
                 continue
             
-            signal_df = pred_strat_info['class'](params=final_pred_params).generate_signals(df_klines.copy()) # 策略计算通常是CPU密集，但如果涉及IO则需注意
+            signal_df = pred_strat_info['class'](params=final_pred_params).generate_signals(df_klines.copy()) # 策略计算（如 generate_signals）通常是CPU密集型操作。如果耗时较长，建议后续使用 await asyncio.to_thread() 将其移出事件循环执行，以避免阻塞。
             
             if signal_df.empty or 'signal' not in signal_df.columns or 'confidence' not in signal_df.columns:
                 continue 

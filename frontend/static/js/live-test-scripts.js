@@ -298,6 +298,12 @@ const app = createApp({
             return totalProfitLoss;
         });
 
+        const dynamicFilteredBalance = computed(() => {
+            const baseBalance = activeTestConfigDetails.value?.investment_settings?.simulatedBalance ?? monitorSettings.value.investment.simulatedBalance;
+            const profitLoss = filteredTotalProfitLossAmount.value || 0;
+            return parseFloat((baseBalance + profitLoss).toFixed(2));
+        });
+
 
         watch(displayedManagedSignals, (newValue) => {
             console.log("LiveTest: displayedManagedSignals updated:", newValue);
@@ -837,7 +843,7 @@ const app = createApp({
                 strategy_id: selectedInvestmentStrategy.value.id,
                 investment_strategy_specific_params: finalInvestmentSpecificParams,
                 // 确保包含 InvestmentStrategySettings Pydantic 模型的所有字段
-                amount: parseFloat(monitorSettings.value.investment.amount),
+                amount: parseFloat(monitorSettings.value.investment.simulatedBalance),
                 minAmount: parseFloat(monitorSettings.value.investment.minAmount),
                 maxAmount: parseFloat(monitorSettings.value.investment.maxAmount),
                 percentageOfBalance: parseFloat(monitorSettings.value.investment.percentageOfBalance),
@@ -1285,6 +1291,7 @@ const app = createApp({
             displayedManagedSignals,
             filteredWinRateStats, // Add the new computed property here
             filteredTotalProfitLossAmount, // Expose the new computed property
+            dynamicFilteredBalance, // <-- 新增导出
             // +++ START: PAGINATION RETURN +++
             currentPage,
             itemsPerPage,

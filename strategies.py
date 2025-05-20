@@ -87,16 +87,80 @@ class SimpleRSIStrategy(Strategy):
         # print(f"初始化 {self.name}, 参数: {self.params}")
 
     def calculate_all_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
-        df = super().calculate_all_indicators(df)
-        # print(f"({self.name}) 全局计算RSI指标, 数据范围: {df.index[0]} 到 {df.index[-1]}, 共 {len(df)} 条")
-        delta = df['close'].diff()
-        gain = delta.where(delta > 0, 0.0)
-        loss = -delta.where(delta < 0, 0.0)
-        avg_gain = gain.ewm(com=self.params['rsi_period'] - 1, min_periods=self.params['rsi_period']).mean()
-        avg_loss = loss.ewm(com=self.params['rsi_period'] - 1, min_periods=self.params['rsi_period']).mean()
-        rs = avg_gain / avg_loss.replace(0, np.nan) # Avoid division by zero
-        df['rsi'] = 100 - (100 / (1 + rs))
-        df['rsi'] = df['rsi'].fillna(50) # Fill NaNs, e.g., at the beginning
+        try:
+            df = super().calculate_all_indicators(df) # 调用基类方法，可能进行数据类型检查
+
+            # 确保 'close' 列存在且为数值类型
+            if 'close' not in df.columns or not pd.api.types.is_numeric_dtype(df['close']):
+                logger.error(f"({self.name}) 'close' 列不存在或不是数值类型。无法计算RSI。RSI将填充为50。")
+                df['rsi'] = 50.0
+                return df
+
+            close_prices = df['close'].copy() # 使用副本以避免修改原始DataFrame中的 'close' 列
+
+            # 1. 数据清洗: 处理 close_prices 中的 inf 值，将其替换为 NaN
+            #    NaN 值由后续的 pandas 操作自行处理或传播
+            original_inf_count = np.isinf(close_prices).sum()
+            if original_inf_count > 0:
+                logger.warning(f"({self.name}) 'close' 列在RSI计算前包含 {original_inf_count} 个 inf 值，将替换为 NaN。")
+                close_prices = close_prices.replace([np.inf, -np.inf], np.nan)
+
+            # 检查在处理 inf 后，或原本 'close' 列是否所有值都为 NaN
+            if close_prices.isnull().all():
+                logger.warning(f"({self.name}) 'close' 列所有值均为 NaN (可能在替换 inf 后)。RSI 将被设置为 50。")
+                df['rsi'] = 50.0
+                return df
+            
+            # 获取 RSI 周期参数，提供默认值以防参数缺失 (尽管 __init__ 中应已设置)
+            rsi_period = self.params.get('rsi_period', 14)
+
+            # 2. 计算价格变化 (delta)
+            delta = close_prices.diff() # delta 的第一个值是 NaN
+
+            # 3. 分离涨跌
+            # delta > 0 或 delta < 0 对于 NaN 会是 False，所以 .where 的 other 参数 (0.0) 会被使用
+            gain = delta.where(delta > 0, 0.0)
+            loss = -delta.where(delta < 0, 0.0) # loss 定义为正值
+
+            # 4. 计算平均涨跌幅 (Exponential Moving Average)
+            # min_periods=rsi_period 确保在有足够数据之前结果为 NaN
+            avg_gain = gain.ewm(com=rsi_period - 1, min_periods=rsi_period).mean()
+            avg_loss = loss.ewm(com=rsi_period - 1, min_periods=rsi_period).mean()
+            
+            # 5. 防御性处理 avg_gain 和 avg_loss 中的 inf 值 (理论上不应出现)
+            avg_gain = avg_gain.replace([np.inf, -np.inf], np.nan)
+            avg_loss = avg_loss.replace([np.inf, -np.inf], np.nan)
+
+            # 6. 计算 RS (Relative Strength)
+            #    处理 avg_loss 中的 0 (替换为 NaN 以避免除以零错误)
+            #    avg_loss 本身也可能包含 NaN (来自 ewm 的初期或输入数据)
+            avg_loss_safe = avg_loss.replace(0, np.nan)
+            
+            rs = avg_gain / avg_loss_safe
+            
+            # 7. 计算 RSI = 100 - (100 / (1 + RS))
+            #    首先，确保 RS 本身不含 inf (已通过 avg_gain/avg_loss 清洗完成)
+            #    然后，处理 1 + RS 可能为 0 的情况 (即 RS = -1)
+            #    理论上 RS >= 0，但为安全起见，将导致除以零的分母替换为 NaN
+            rs = rs.replace([np.inf, -np.inf], np.nan) # 再次确保 rs 没有 inf
+            denominator = 1 + rs
+            denominator_safe = denominator.replace(0, np.nan) # 若 1+rs=0, 则替换为 NaN
+            
+            rsi_values = 100 - (100 / denominator_safe)
+            
+            # 8. 最终填充 RSI 中的所有 NaN 值 (来自计算过程或原始数据问题)
+            #    使用中性值 50.0 进行填充
+            #    也替换掉任何可能意外产生的 inf 值
+            rsi_values = rsi_values.replace([np.inf, -np.inf], np.nan)
+            df['rsi'] = rsi_values.fillna(50.0)
+            
+            # logger.info(f"({self.name}) RSI calculation successful for period {rsi_period}.")
+
+        except Exception as e:
+            logger.error(f"({self.name}) 在 calculate_all_indicators 中计算RSI时发生严重错误: {e}", exc_info=True)
+            # 发生未知错误时，确保 'rsi' 列存在并填充默认值
+            df['rsi'] = 50.0 # 覆盖或创建 'rsi' 列
+
         return df
 
     def generate_signals_from_indicators_on_window(self, df_window_with_indicators: pd.DataFrame) -> pd.DataFrame:

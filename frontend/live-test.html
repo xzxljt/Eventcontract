@@ -50,7 +50,7 @@
                                 <button type="button" class="btn btn-danger" @click="stopCurrentTest"
                                         :disabled="socketStatus !== 'connected' || !currentConfigId || stoppingTest">
                                      <span v-if="stoppingTest" class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
-                                    {{ stoppingTest ? '停止中...' : '停止当前后台测试' }}
+                                    {{ stoppingTest ? '停止中...' : '停止当前后台监控' }}
                                 </button>
                             </div>
                              <small class="text-muted d-block mb-3 x-small">提示: "应用配置"会启动或更新一个后台测试任务。使用"停止测试"来结束它。</small>
@@ -217,15 +217,6 @@
                                 </div>
                             </div>
                             <!-- 全局投资设置 -->
-                            <div class="mb-2" v-if="selectedInvestmentStrategy && selectedInvestmentStrategy.id !== 'percentage_of_balance'">
-                                <label class="form-label small" for="invAmountLive">基础/固定投资额 (USDT)</label>
-                                <input type="number" class="form-control form-control-sm" id="invAmountLive"
-                                       v-model.number="monitorSettings.investment.amount" min="1" step="0.01"
-                                       :class="{'is-invalid': getValidationError(['investment_settings', 'amount'])}">
-                                <div v-if="getValidationError(['investment_settings', 'amount'])" class="invalid-feedback">
-                                    {{ getValidationError(['investment_settings', 'amount']) }}
-                                </div>
-                            </div>
                              <div class="row mb-2">
                                 <div class="col-6">
                                     <label class="form-label small" for="invProfitRateLive">盈利(%)</label>
@@ -266,8 +257,8 @@
                                     </div>
                                 </div>
                             </div>
-                             <div v-if="selectedInvestmentStrategy && selectedInvestmentStrategy.id === 'percentage_of_balance'" class="mb-2">
-                                <label class="form-label small" for="simulatedBalance">模拟账户总本金 (USDT)</label>
+                             <div v-if="selectedInvestmentStrategy" class="mb-2">
+                                <label class="form-label small" for="simulatedBalance">总本金 (USDT)</label>
                                 <input type="number" class="form-control form-control-sm" id="simulatedBalance"
                                        v-model.number="monitorSettings.investment.simulatedBalance" min="1" step="0.01"
                                        :class="{'is-invalid': getValidationError(['investment_settings', 'simulatedBalance'])}">
@@ -315,8 +306,8 @@
                                     </div>
                                      <div v-if="currentConfigId && activeTestConfigDetails" class="col-md-4 col-6 mb-2"> <!-- 调整 col-md-X 以适应布局 -->
                                         <div class="card bg-success bg-opacity-10 p-1 h-100"> <!-- 使用不同背景强调 -->
-                                            <small class="d-block">当前测试会话余额(USDT)</small>
-                                            <h6 class="mb-0 text-success">{{ activeTestConfigDetails.current_balance.toFixed(2) }}</h6>
+                                            <small class="d-block">余额(USDT)</small>
+                                            <h6 class="mb-0 text-success">{{ dynamicFilteredBalance }}</h6>
                                         </div>
                                     </div>
                                 </div>

@@ -34,6 +34,7 @@ import logging # 导入logging模块
 import threading # 新增
 import websocket # 新增 (确保 websocket-client 已安装)
 from functools import partial # 新增
+import socket # 新增，用于捕获socket.gaierror
 
 # 配置日志记录
 logger = logging.getLogger(__name__)
@@ -79,9 +80,12 @@ class BinanceClient:
         # WebSocket 重连配置和状态
         # 从环境变量读取WebSocket重连设置，如果不存在则使用默认值
         self._max_reconnect_attempts = int(os.getenv("WS_RECONNECT_ATTEMPTS", "10")) # 最大重连尝试次数
+        self._max_dns_reconnect_attempts = int(os.getenv("WS_DNS_RECONNECT_ATTEMPTS", "5")) # DNS错误最大重连尝试次数
         self._reconnect_delay_base = int(os.getenv("WS_RECONNECT_INTERVAL", "5")) # 基础重连延迟 (秒)
+        self._dns_reconnect_delay_base = int(os.getenv("WS_DNS_RECONNECT_INTERVAL", "30")) # DNS错误基础重连延迟 (秒)
         self._reconnect_attempts: Dict[str, int] = {} # 存储每个连接的重连尝试次数
-        
+        self._dns_error_count: Dict[str, int] = {} # 存储每个连接的DNS错误计数
+
         # WebSocket 连接监控和超时设置
         self._ws_monitor_interval = int(os.getenv("WS_MONITOR_INTERVAL", "30")) # WebSocket监控间隔（秒）
         self._ws_connection_timeout = int(os.getenv("WS_CONNECTION_TIMEOUT", "60")) # WebSocket连接超时（秒）
@@ -456,6 +460,7 @@ class BinanceClient:
             if self.ws_connections.get(ws_key) == ws_app_instance:
                 logger.info(f"WebSocket OPENED: key={ws_key}, instance_id={id(ws_app_instance)}, url={ws_app_instance.url}")
                 self._reconnect_attempts[ws_key] = 0 # Reset reconnect attempts on successful open
+                self._dns_error_count.pop(ws_key, None) # Reset DNS error count on successful open
                 self._intentional_stops.pop(ws_key, None) # Clear any stale stop flag
                 # 初始化或更新最后活动时间
                 self._ws_last_activity[ws_key] = time.time()
@@ -564,9 +569,23 @@ class BinanceClient:
                  is_current_instance = True
         
         log_level = logging.ERROR if is_current_instance else logging.WARNING
-        # Show full exc_info for current instance errors, but not for stale ones to reduce noise
-        logger.log(log_level, f"WebSocket ERROR{' (CURRENT)' if is_current_instance else ' (STALE)'}: key={ws_key}, instance_id={id(ws_app_instance)}, symbol={symbol_arg}, interval={interval_arg}, error: {error_msg}", exc_info=is_current_instance)
+        
+        # 检查是否是DNS相关错误
+        is_dns_error = False
+        if isinstance(error_msg, (websocket._exceptions.WebSocketAddressException, socket.gaierror)):
+            is_dns_error = True
+            logger.log(log_level, f"WebSocket DNS ERROR{' (CURRENT)' if is_current_instance else ' (STALE)'}: key={ws_key}, instance_id={id(ws_app_instance)}, symbol={symbol_arg}, interval={interval_arg}, error: {error_msg}", exc_info=is_current_instance)
+            if is_current_instance:
+                with self.ws_management_lock:
+                    self._dns_error_count[ws_key] = self._dns_error_count.get(ws_key, 0) + 1
+        else:
+            # Show full exc_info for current instance errors, but not for stale ones to reduce noise
+            logger.log(log_level, f"WebSocket ERROR{' (CURRENT)' if is_current_instance else ' (STALE)'}: key={ws_key}, instance_id={id(ws_app_instance)}, symbol={symbol_arg}, interval={interval_arg}, error: {error_msg}", exc_info=is_current_instance)
+        
         # Error often (but not always) leads to on_close. Reconnection logic is primarily in on_close.
+        # 如果是当前实例的DNS错误，并且错误导致连接立即关闭（某些情况下会），
+        # on_close 中的重连逻辑会处理。如果错误没有立即关闭连接，
+        # 监控线程最终会因为不活动而超时并尝试重置。
 
     def _on_ws_close(self, ws_app_instance, close_status_code, close_msg, ws_key: str, user_callback: callable, symbol_arg: str, interval_arg: str):
         """处理WebSocket连接关闭事件
@@ -640,40 +659,53 @@ class BinanceClient:
         ws_key = f"{symbol.lower()}_{interval}"
         
         current_attempt = 0
+        is_dns_related_failure = False
+        delay = self._reconnect_delay_base # Default delay
+
         with self.ws_management_lock:
-            # CRITICAL PRE-CHECK: Ensure the connection for this key is indeed gone from tracking.
-            # If _on_ws_close was for the current instance, it should have removed it.
             if ws_key in self.ws_connections:
-                # This state should ideally not be reached if _on_ws_close works as intended.
-                logger.error(f"CRITICAL_RECONNECT_PRECHECK_FAIL: key={ws_key} 仍存在于 ws_connections (inst_id={id(self.ws_connections[ws_key])})！本不应发生。终止重连尝试以防问题扩大。")
+                logger.error(f"CRITICAL_RECONNECT_PRECHECK_FAIL: key={ws_key} 仍存在于 ws_connections (inst_id={id(self.ws_connections[ws_key])})！终止重连。")
                 return
 
-            current_attempt = self._reconnect_attempts.get(ws_key, 0) + 1
-            self._reconnect_attempts[ws_key] = current_attempt
+            # 检查是否是由于DNS错误触发的重连
+            dns_errors_for_key = self._dns_error_count.get(ws_key, 0)
+            if dns_errors_for_key > 0:
+                is_dns_related_failure = True
+                # 使用DNS特定的重连尝试次数和延迟基数
+                current_attempt = dns_errors_for_key # DNS错误计数作为尝试次数
+                if current_attempt > self._max_dns_reconnect_attempts:
+                    logger.warning(f"交易对 {symbol} {interval} (key={ws_key}) 因DNS错误已达到最大重连尝试次数 ({self._max_dns_reconnect_attempts})，停止重连。")
+                    self._dns_error_count.pop(ws_key, None) # 清理DNS错误计数
+                    self._reconnect_attempts.pop(ws_key, None) # 也清理通用重连计数
+                    self._last_kline_log_time.pop(ws_key, None)
+                    return
+                delay = self._dns_reconnect_delay_base * (2 ** (current_attempt - 1)) # DNS错误使用不同的延迟
+                logger.info(f"交易对 {symbol} {interval} (key={ws_key}) 检测到DNS错误，将使用DNS特定重连策略。尝试次数: {current_attempt}/{self._max_dns_reconnect_attempts}。")
+            else:
+                # 非DNS错误的常规重连逻辑
+                current_attempt = self._reconnect_attempts.get(ws_key, 0) + 1
+                self._reconnect_attempts[ws_key] = current_attempt
+                if current_attempt > self._max_reconnect_attempts:
+                    logger.warning(f"交易对 {symbol} {interval} (key={ws_key}) 已达到最大常规重连尝试次数 ({self._max_reconnect_attempts})，停止重连。")
+                    self._reconnect_attempts.pop(ws_key, None)
+                    self._dns_error_count.pop(ws_key, None) # 也清理DNS错误计数
+                    self._last_kline_log_time.pop(ws_key, None)
+                    return
+                delay = self._reconnect_delay_base * (2 ** (current_attempt - 1))
 
-            if current_attempt > self._max_reconnect_attempts:
-                logger.warning(f"交易对 {symbol} {interval} (key={ws_key}) 已达到最大重连尝试次数 ({self._max_reconnect_attempts})，停止重连。")
-                # Clean up states associated with this ws_key as we're giving up
-                self._reconnect_attempts.pop(ws_key, None)
-                self._last_kline_log_time.pop(ws_key, None)
-                # ws_connections and ws_threads for this key should already be None if _on_ws_close worked
-                return
+        logger.info(f"交易对 {symbol} {interval} (key={ws_key}) 将在 {delay:.2f} 秒后尝试第 {current_attempt} 次重连 ({'DNS错误' if is_dns_related_failure else '常规'})...")
         
-        delay = self._reconnect_delay_base * (2 ** (current_attempt - 1))
-        logger.info(f"交易对 {symbol} {interval} (key={ws_key}) 将在 {delay} 秒后尝试第 {current_attempt} 次重连...")
-        
-        # Perform sleep outside the lock to avoid holding it for long
         time.sleep(delay)
 
         logger.info(f"正在尝试重新连接交易对 {symbol} {interval} (key={ws_key}, 第 {current_attempt} 次)...")
         try:
-            # start_kline_websocket will acquire the lock internally
             self.start_kline_websocket(symbol, interval, user_callback)
+            # 如果 start_kline_websocket 成功（即 on_open 被调用），则DNS错误计数应该被重置
+            # on_open 中会重置 _reconnect_attempts，我们也应该在那里重置 _dns_error_count
         except Exception as e_reconnect_start:
             logger.error(f"交易对 {symbol} {interval} (key={ws_key}) 在尝试启动重连 (第 {current_attempt} 次) 时失败: {e_reconnect_start}", exc_info=True)
-            # Consider if a failed start attempt should schedule another _reconnect_websocket,
-            # or rely on a potential subsequent error/close if the library retries internally.
-            # For now, if start_kline_websocket fails catastrophically, this path ends.
+            # 如果启动重连本身失败，可能需要再次调度 _reconnect_websocket，
+            # 但要注意避免无限循环。当前逻辑依赖于下一次的 on_close 或 on_error 来再次触发。
 
     def stop_kline_websocket(self, symbol: str, interval: str):
         ws_key = f"{symbol.lower()}_{interval}"
