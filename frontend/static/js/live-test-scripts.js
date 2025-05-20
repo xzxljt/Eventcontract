@@ -597,10 +597,54 @@ const app = createApp({
             const host = window.location.host;
             const wsUrl = `${protocol}//${host}/ws/live-test`;
 
+            let connectTimeoutId = null;
+            const CONNECTION_TIMEOUT = 15000; // 15 秒连接超时
+            let reconnectAttempts = 0;
+            const MAX_RECONNECT_ATTEMPTS = 5;
+            const RECONNECT_DELAY = 5000; // 5 秒
+
+            const clearConnectTimeout = () => {
+                if (connectTimeoutId) {
+                    clearTimeout(connectTimeoutId);
+                    connectTimeoutId = null;
+                }
+            };
+
+            const attemptReconnect = () => {
+                if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+                    reconnectAttempts++;
+                    showServerMessage(`WebSocket 连接已关闭，将在 ${RECONNECT_DELAY / 1000} 秒后尝试重新连接 (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`, true, RECONNECT_DELAY);
+                    setTimeout(() => {
+                        if (socketStatus.value !== 'connected' && socketStatus.value !== 'connecting') {
+                             connectWebSocket(); // 重新调用自身以尝试连接
+                        }
+                    }, RECONNECT_DELAY);
+                } else {
+                    showServerMessage(`WebSocket 自动重连失败已达上限 (${MAX_RECONNECT_ATTEMPTS} 次)。请手动尝试连接。`, true, 7000);
+                    reconnectAttempts = 0; // 重置尝试次数
+                }
+            };
+
+
             socket.value = new WebSocket(wsUrl);
             socketStatus.value = 'connecting';
+            showServerMessage("WebSocket 正在连接...", false, CONNECTION_TIMEOUT + 1000); // 显示连接中消息
+
+            connectTimeoutId = setTimeout(() => {
+                if (socket.value && socket.value.readyState !== WebSocket.OPEN) {
+                    console.error(`LiveTest: WebSocket connection timed out after ${CONNECTION_TIMEOUT / 1000} seconds.`);
+                    showServerMessage(`WebSocket 连接超时 (${CONNECTION_TIMEOUT / 1000}秒)。请检查网络或服务器状态。`, true, 7000);
+                    socketStatus.value = 'error';
+                    if (socket.value) {
+                        socket.value.close(1000, "Connection timeout"); // 主动关闭
+                    }
+                    // onclose 会被触发，可以在那里处理重连逻辑
+                }
+            }, CONNECTION_TIMEOUT);
 
             socket.value.onopen = () => {
+                clearConnectTimeout();
+                reconnectAttempts = 0; // 连接成功，重置重连尝试次数
                 socketStatus.value = 'connected';
                 showServerMessage("WebSocket 连接成功。", false, 3000);
                 const localConfigId = localStorage.getItem('liveTestConfigId');
@@ -612,183 +656,209 @@ const app = createApp({
                 }
             };
 
-        socket.value.onmessage = (event) => {
-            try {
-                const message = JSON.parse(event.data);
-                console.log("LiveTest: Received WebSocket message:", message);
-                applyingConfig.value = false; stoppingTest.value = false;
+            socket.value.onmessage = (event) => {
+                try {
+                    const message = JSON.parse(event.data);
+                    console.log("LiveTest: Received WebSocket message:", message);
+                    applyingConfig.value = false; stoppingTest.value = false;
 
-                switch (message.type) {
-                    case "initial_signals": handleInitialSignals(message.data); break;
-                    case "initial_stats": 
-                    case "stats_update": 
-                        stats.value = { ...stats.value, ...message.data }; 
-                        break;
-                    case "new_signal":
-                        handleNewSignal(message.data);
-                        if (monitorSettings.value.enableSound) playSound();
-                        break;
-                    case "verified_signal": handleVerifiedSignal(message.data); break;
-                    
-                    // +++ START: MODIFIED CASES +++
-                    case "config_set_confirmation":
-                        if (message.data.success) {
-                            currentConfigId.value = message.data.config_id;
-                            localStorage.setItem('liveTestConfigId', currentConfigId.value);
-                            showServerMessage(message.data.message || '配置已成功应用！', false, 5000);
-                            if(message.data.applied_config) {
-                                console.log("LiveTest: Received applied_config:", message.data.applied_config);
-                                populateUiFromConfigDetails(message.data.applied_config);
-                                // 更新活动配置细节
-                                activeTestConfigDetails.value = message.data.applied_config;
-                                console.log("LiveTest: activeTestConfigDetails after config_set_confirmation:", activeTestConfigDetails.value);
-                            } else {
-                                console.log("LiveTest: config_set_confirmation received, but no applied_config in message.data");
-                            }
-                        } else {
-                            showServerMessage(message.data.message || '配置应用失败。', true, 5000);
-                            activeTestConfigDetails.value = null; // 清理
-                        }
-                        break;
-                    case "session_restored":
-                        console.log("LiveTest: Received session_recovered message:", message.data);
-                        if (message.data && message.data.config_id) {
-                            currentConfigId.value = message.data.config_id;
-                            localStorage.setItem('liveTestConfigId', currentConfigId.value);
-                            if (message.data.config_details) {
-                                populateUiFromConfigDetails(message.data.config_details);
-                                // 使用扩展运算符创建新对象以确保响应性
-                                activeTestConfigDetails.value = { ...message.data.config_details };
-                                console.log("LiveTest: activeTestConfigDetails after session_restored (new object):", activeTestConfigDetails.value);
-                                // 进一步确认关键字段是否已正确设置在 activeTestConfigDetails.value 中
-                                if (activeTestConfigDetails.value) {
-                                    console.log("LiveTest: activeTestConfigDetails.value.current_balance:", activeTestConfigDetails.value.current_balance);
-                                    console.log("LiveTest: activeTestConfigDetails.value.total_profit_loss_amount:", activeTestConfigDetails.value.total_profit_loss_amount);
-                                }
-                            }
-                            showServerMessage(`会话已恢复 (ID: ${currentConfigId.value.substring(0,8)}...)`, false, 4000);
-                        } else {
-                            showServerMessage('会话恢复失败：无效的配置信息', true, 4000);
-                        }
-                        break;
-                    case "session_not_found":
-                        showServerMessage(`未能恢复会话 (ID: ${message.data.config_id ? message.data.config_id.substring(0,8) : 'N/A'}...)，请重新应用配置。`, true, 6000);
-                        currentConfigId.value = null;
-                        localStorage.removeItem('liveTestConfigId');
-                        activeTestConfigDetails.value = null; // 清理
-                        break;
-                    case "test_stopped_confirmation":
-                        if (message.data.success) {
-                            showServerMessage(`测试 (ID: ${message.data.stopped_config_id ? message.data.stopped_config_id.substring(0,8) : 'N/A'}...) 已成功停止。`, false, 5000);
-                            currentConfigId.value = null;
-                            localStorage.removeItem('liveTestConfigId');
-                            // 清理活动配置细节
-                            activeTestConfigDetails.value = null;
-                        } else {
-                            showServerMessage(message.data.message || '停止测试失败。', true, 5000);
-                        }
-                        break;
-                    // +++ END: MODIFIED CASES +++
-                    
-                    // 处理活动配置通知 - 新增处理
-                    case "active_config_notification":
-                        console.log("LiveTest: Received active_config_notification message:", message.data);
-                        if (message.data && message.data.config_id && message.data.config) {
-                            // 只有当前没有活动配置时才应用收到的配置
-                            if (!currentConfigId.value) {
+                    switch (message.type) {
+                        case "initial_signals": handleInitialSignals(message.data); break;
+                        case "initial_stats":
+                        case "stats_update":
+                            stats.value = { ...stats.value, ...message.data };
+                            break;
+                        case "new_signal":
+                            handleNewSignal(message.data);
+                            if (monitorSettings.value.enableSound) playSound();
+                            break;
+                        case "verified_signal": handleVerifiedSignal(message.data); break;
+
+                        // +++ START: MODIFIED CASES +++
+                        case "config_set_confirmation":
+                            if (message.data.success) {
                                 currentConfigId.value = message.data.config_id;
                                 localStorage.setItem('liveTestConfigId', currentConfigId.value);
-                                populateUiFromConfigDetails(message.data.config);
-                                // 更新活动配置细节
-                                activeTestConfigDetails.value = message.data.config;
-                                console.log("LiveTest: activeTestConfigDetails after active_config_notification:", activeTestConfigDetails.value);
-                                showServerMessage(message.data.message || '已连接到活动测试配置', false, 4000);
-                            } else {
-                                console.log("LiveTest: 已有活动配置，忽略活动配置通知");
-                            }
-                        }
-                        break;
-                    
-                    // +++ START: NEW CASE HANDLER +++
-                    case "config_specific_balance_update":
-                        console.log("LiveTest: Received config_specific_balance_update message:", message.data);
-                        console.log("LiveTest: Current config ID:", currentConfigId.value);
-                        if (message.data && message.data.config_id === currentConfigId.value) {
-                            console.log("LiveTest: Config ID matches. Updating balance and PnL.");
-                            if (activeTestConfigDetails.value) {
-                                console.log("LiveTest: activeTestConfigDetails exists.");
-                                if (message.data.new_balance !== undefined) {
-                                    activeTestConfigDetails.value.current_balance = message.data.new_balance;
-                                    console.log("LiveTest: Updated current_balance to:", activeTestConfigDetails.value.current_balance);
-                                }
-                                if (message.data.total_profit_loss_amount !== undefined) {
-                                    activeTestConfigDetails.value.total_profit_loss_amount = message.data.total_profit_loss_amount; // Corrected field name
-                                    console.log("LiveTest: Updated total_profit_loss_amount to:", activeTestConfigDetails.value.total_profit_loss_amount);
+                                showServerMessage(message.data.message || '配置已成功应用！', false, 5000);
+                                if(message.data.applied_config) {
+                                    console.log("LiveTest: Received applied_config:", message.data.applied_config);
+                                    populateUiFromConfigDetails(message.data.applied_config);
+                                    // 更新活动配置细节
+                                    activeTestConfigDetails.value = message.data.applied_config;
+                                    console.log("LiveTest: activeTestConfigDetails after config_set_confirmation:", activeTestConfigDetails.value);
                                 } else {
-                                     console.log("LiveTest: message.data.total_profit_loss_amount is undefined.");
+                                    console.log("LiveTest: config_set_confirmation received, but no applied_config in message.data");
                                 }
-                                console.log("LiveTest: activeTestConfigDetails after balance update:", activeTestConfigDetails.value); // Added log
                             } else {
-                                console.log("LiveTest: activeTestConfigDetails is null.");
+                                showServerMessage(message.data.message || '配置应用失败。', true, 5000);
+                                activeTestConfigDetails.value = null; // 清理
                             }
-                            // 可选: 短暂显示余额更新消息
-                            // showServerMessage(`当前测试余额更新为: ${message.data.new_balance.toFixed(2)} USDT (本次盈亏: ${message.data.last_pnl_amount.toFixed(2)})`, false, 3000);
-                        } else {
-                             console.log("LiveTest: Config ID does NOT match or message.data is invalid.");
-                        }
-                        break;
-                    // +++ END: NEW CASE HANDLER +++
+                            break;
+                        case "session_restored":
+                            console.log("LiveTest: Received session_recovered message:", message.data);
+                            if (message.data && message.data.config_id) {
+                                currentConfigId.value = message.data.config_id;
+                                localStorage.setItem('liveTestConfigId', currentConfigId.value);
+                                if (message.data.config_details) {
+                                    populateUiFromConfigDetails(message.data.config_details);
+                                    // 使用扩展运算符创建新对象以确保响应性
+                                    activeTestConfigDetails.value = { ...message.data.config_details };
+                                    console.log("LiveTest: activeTestConfigDetails after session_restored (new object):", activeTestConfigDetails.value);
+                                    // 进一步确认关键字段是否已正确设置在 activeTestConfigDetails.value 中
+                                    if (activeTestConfigDetails.value) {
+                                        console.log("LiveTest: activeTestConfigDetails.value.current_balance:", activeTestConfigDetails.value.current_balance);
+                                        console.log("LiveTest: activeTestConfigDetails.value.total_profit_loss_amount:", activeTestConfigDetails.value.total_profit_loss_amount);
+                                    }
+                                }
+                                showServerMessage(`会话已恢复 (ID: ${currentConfigId.value.substring(0,8)}...)`, false, 4000);
+                            } else {
+                                showServerMessage('会话恢复失败：无效的配置信息', true, 4000);
+                            }
+                            break;
+                        case "session_not_found":
+                            showServerMessage(`未能恢复会话 (ID: ${message.data.config_id ? message.data.config_id.substring(0,8) : 'N/A'}...)，请重新应用配置。`, true, 6000);
+                            currentConfigId.value = null;
+                            localStorage.removeItem('liveTestConfigId');
+                            activeTestConfigDetails.value = null; // 清理
+                            break;
+                        case "test_stopped_confirmation":
+                            if (message.data.success) {
+                                showServerMessage(`测试 (ID: ${message.data.stopped_config_id ? message.data.stopped_config_id.substring(0,8) : 'N/A'}...) 已成功停止。`, false, 5000);
+                                currentConfigId.value = null;
+                                localStorage.removeItem('liveTestConfigId');
+                                // 清理活动配置细节
+                                activeTestConfigDetails.value = null;
+                            } else {
+                                showServerMessage(message.data.message || '停止测试失败。', true, 5000);
+                            }
+                            break;
+                        // +++ END: MODIFIED CASES +++
 
-                    case "signals_deleted_notification": 
-                        if (message.data && Array.isArray(message.data.deleted_ids)) {
-                            liveSignals.value = liveSignals.value.filter(s => !message.data.deleted_ids.includes(s.id));
-                            selectedSignalIds.value = selectedSignalIds.value.filter(id => !message.data.deleted_ids.includes(id));
-                            showServerMessage(message.data.message || `${message.data.deleted_ids.length} 个信号已被其他操作删除。`, false, 4000);
-                        }
-                        break;
-                    case "error":
-                        // 处理后端返回的结构化错误信息
-                        if (message.data && message.data.details && Array.isArray(message.data.details)) {
-                            validationErrors.value = message.data.details; // 存储详细错误列表
-                            // 清除通用的错误和消息，因为我们将使用字段级别的提示
-                            serverMessage.value = '';
-                            error.value = null;
-                            console.error("LiveTest: Received validation errors:", validationErrors.value);
-                            // 可以选择在这里显示一个通用的“请检查表单中的错误”消息
-                            // showServerMessage("请检查表单中的错误。", true, 5000);
-                        } else {
-                            // 原始的非结构化错误处理
-                            validationErrors.value = []; // 清空字段级别错误
-                            showServerMessage(message.data?.message || "收到来自服务器的 WebSocket 错误", true, 6000);
-                            console.error("LiveTest: Received generic error:", message.data);
-                        }
-                        break;
-                    default: console.warn("LiveTest: Received unknown message type:", message.type);
+                        // 处理活动配置通知 - 新增处理
+                        case "active_config_notification":
+                            console.log("LiveTest: Received active_config_notification message:", message.data);
+                            if (message.data && message.data.config_id && message.data.config) {
+                                // 只有当前没有活动配置时才应用收到的配置
+                                if (!currentConfigId.value) {
+                                    currentConfigId.value = message.data.config_id;
+                                    localStorage.setItem('liveTestConfigId', currentConfigId.value);
+                                    populateUiFromConfigDetails(message.data.config);
+                                    // 更新活动配置细节
+                                    activeTestConfigDetails.value = message.data.config;
+                                    console.log("LiveTest: activeTestConfigDetails after active_config_notification:", activeTestConfigDetails.value);
+                                    showServerMessage(message.data.message || '已连接到活动测试配置', false, 4000);
+                                } else {
+                                    console.log("LiveTest: 已有活动配置，忽略活动配置通知");
+                                }
+                            }
+                            break;
+
+                        // +++ START: NEW CASE HANDLER +++
+                        case "config_specific_balance_update":
+                            console.log("LiveTest: Received config_specific_balance_update message:", message.data);
+                            console.log("LiveTest: Current config ID:", currentConfigId.value);
+                            if (message.data && message.data.config_id === currentConfigId.value) {
+                                console.log("LiveTest: Config ID matches. Updating balance and PnL.");
+                                if (activeTestConfigDetails.value) {
+                                    console.log("LiveTest: activeTestConfigDetails exists.");
+                                    if (message.data.new_balance !== undefined) {
+                                        activeTestConfigDetails.value.current_balance = message.data.new_balance;
+                                        console.log("LiveTest: Updated current_balance to:", activeTestConfigDetails.value.current_balance);
+                                    }
+                                    if (message.data.total_profit_loss_amount !== undefined) {
+                                        activeTestConfigDetails.value.total_profit_loss_amount = message.data.total_profit_loss_amount; // Corrected field name
+                                        console.log("LiveTest: Updated total_profit_loss_amount to:", activeTestConfigDetails.value.total_profit_loss_amount);
+                                    } else {
+                                         console.log("LiveTest: message.data.total_profit_loss_amount is undefined.");
+                                    }
+                                    console.log("LiveTest: activeTestConfigDetails after balance update:", activeTestConfigDetails.value); // Added log
+                                } else {
+                                    console.log("LiveTest: activeTestConfigDetails is null.");
+                                }
+                                // 可选: 短暂显示余额更新消息
+                                // showServerMessage(`当前测试余额更新为: ${message.data.new_balance.toFixed(2)} USDT (本次盈亏: ${message.data.last_pnl_amount.toFixed(2)})`, false, 3000);
+                            } else {
+                                 console.log("LiveTest: Config ID does NOT match or message.data is invalid.");
+                            }
+                            break;
+                        // +++ END: NEW CASE HANDLER +++
+
+                        case "signals_deleted_notification":
+                            if (message.data && Array.isArray(message.data.deleted_ids)) {
+                                liveSignals.value = liveSignals.value.filter(s => !message.data.deleted_ids.includes(s.id));
+                                selectedSignalIds.value = selectedSignalIds.value.filter(id => !message.data.deleted_ids.includes(id));
+                                showServerMessage(message.data.message || `${message.data.deleted_ids.length} 个信号已被其他操作删除。`, false, 4000);
+                            }
+                            break;
+                        case "error":
+                            // 处理后端返回的结构化错误信息
+                            if (message.data && message.data.details && Array.isArray(message.data.details)) {
+                                validationErrors.value = message.data.details; // 存储详细错误列表
+                                // 清除通用的错误和消息，因为我们将使用字段级别的提示
+                                serverMessage.value = '';
+                                error.value = null;
+                                console.error("LiveTest: Received validation errors:", validationErrors.value);
+                                // 可以选择在这里显示一个通用的“请检查表单中的错误”消息
+                                // showServerMessage("请检查表单中的错误。", true, 5000);
+                            } else {
+                                // 原始的非结构化错误处理
+                                validationErrors.value = []; // 清空字段级别错误
+                                showServerMessage(message.data?.message || "收到来自服务器的 WebSocket 错误", true, 6000);
+                                console.error("LiveTest: Received generic error:", message.data);
+                            }
+                            break;
+                        default: console.warn("LiveTest: Received unknown message type:", message.type);
+                    }
+                } catch (e) {
+                    console.error("LiveTest: Failed to parse message or handle it:", e, event.data);
+                    showServerMessage("处理服务器消息失败: " + e.message, true);
+                } finally {
+                     applyingConfig.value = false; stoppingTest.value = false;
                 }
-            } catch (e) {
-                console.error("LiveTest: Failed to parse message or handle it:", e, event.data);
-                showServerMessage("处理服务器消息失败: " + e.message, true);
-            } finally {
-                 applyingConfig.value = false; stoppingTest.value = false;
-            }
-        };
+            };
 
             socket.value.onclose = (event) => {
+                clearConnectTimeout(); // 清除连接超时计时器
                 socketStatus.value = 'disconnected';
                 socket.value = null;
                 applyingConfig.value = false; stoppingTest.value = false;
-                if (!event.wasClean) {
-                    showServerMessage("WebSocket 连接意外断开。如果后台有测试在运行，它仍将继续。", true, 7000);
+
+                let closeReason = `代码: ${event.code}, 原因: ${event.reason || '无'}`;
+                if (event.code === 1000 && event.reason === "Connection timeout") {
+                     // 这是我们自己触发的超时关闭，已经在 connectTimeoutId 中处理了消息
+                } else if (!event.wasClean) {
+                    console.warn(`LiveTest: WebSocket connection closed unexpectedly. ${closeReason}`);
+                    showServerMessage(`WebSocket 连接意外断开 (${closeReason})。如果后台有测试在运行，它仍将继续。`, true, 7000);
+                    // 尝试重连，除非是用户主动关闭或达到最大尝试次数
+                    if (event.code !== 1000 && event.code !== 1001 && event.code !== 1005) { // 1000=Normal, 1001=Going Away, 1005=No Status Rcvd (often client-side close)
+                        attemptReconnect();
+                    } else {
+                        reconnectAttempts = 0; // 重置，因为这是预期的关闭
+                    }
                 } else {
-                     showServerMessage("WebSocket 连接已关闭。", false, 3000);
+                    showServerMessage(`WebSocket 连接已关闭 (${closeReason})。`, false, 3000);
+                    reconnectAttempts = 0; // 正常关闭，重置重连尝试
                 }
             };
+
             socket.value.onerror = (errEvent) => {
+                clearConnectTimeout(); // 清除连接超时计时器
                 console.error("LiveTest: WebSocket error: ", errEvent);
+                // 尝试获取更详细的错误信息
+                let errorDetails = "未知错误";
+                if (errEvent.message) errorDetails = errEvent.message;
+                else if (errEvent.type) errorDetails = `类型: ${errEvent.type}`;
+                
                 socketStatus.value = 'error';
                 applyingConfig.value = false; stoppingTest.value = false;
-                showServerMessage("WebSocket 连接错误。请检查服务是否运行或网络连接。", true, 7000);
-                if (socket.value) { socket.value.close(); socket.value = null; }
+                showServerMessage(`WebSocket 连接错误: ${errorDetails}。请检查服务是否运行或网络连接。`, true, 7000);
+                
+                // onerror 之后通常会触发 onclose，所以重连逻辑主要放在 onclose 中
+                // 但如果 socket 仍然存在，确保它被关闭
+                if (socket.value && socket.value.readyState !== WebSocket.CLOSED) {
+                    socket.value.close(1011, "WebSocket error occurred"); // 1011 = Internal Error
+                }
+                socket.value = null; // 确保引用被清除
             };
         };
 

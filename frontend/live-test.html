@@ -38,14 +38,14 @@
                                     断开WebSocket连接
                                 </button>
                             </div>
-                            <small class="text-muted d-block mb-3 x-small">提示: "断开WebSocket连接" 不会停止后台已运行的测试任务。</small>
+                            <small class="text-muted d-block mb-3 x-small">提示: "断开WebSocket连接" 不会停止后台已运行的监控任务。</small>
 
                             <!-- 后台测试任务控制 -->
                             <div class="d-grid gap-2 mb-2">
                                 <button type="button" class="btn btn-info" @click="sendRuntimeConfig"
                                         :disabled="socketStatus !== 'connected' || !selectedPredictionStrategy || !selectedInvestmentStrategy || applyingConfig">
                                     <span v-if="applyingConfig" class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
-                                    {{ applyingConfig ? '应用中...' : (currentConfigId ? '更新后台配置' : '启动新后台测试') }}
+                                    {{ applyingConfig ? '应用中...' : (currentConfigId ? '更新后台配置' : '启动新后台监控') }}
                                 </button>
                                 <button type="button" class="btn btn-danger" @click="stopCurrentTest"
                                         :disabled="socketStatus !== 'connected' || !currentConfigId || stoppingTest">
@@ -53,7 +53,7 @@
                                     {{ stoppingTest ? '停止中...' : '停止当前后台监控' }}
                                 </button>
                             </div>
-                             <small class="text-muted d-block mb-3 x-small">提示: "应用配置"会启动或更新一个后台测试任务。使用"停止测试"来结束它。</small>
+                             <small class="text-muted d-block mb-3 x-small">提示: 该按钮会启动或更新一个后台监控任务。使用"停止当前后台监控"来结束它。</small>
                             
                             <!-- 参数保存 -->
                              <div class="d-grid">
@@ -398,7 +398,7 @@
                              </div>
 
                                 <div v-if="loadingInitialData && socketStatus === 'connecting'" class="text-center py-3"> <div class="spinner-border spinner-border-sm"></div> 正在连接并加载初始配置...</div>
-                                <div v-else-if="liveSignals.length === 0 && !currentConfigId && socketStatus === 'connected'" class="text-center text-muted py-3">请应用配置以启动后台测试并接收相关信号。</div>
+                                <div v-else-if="liveSignals.length === 0 && !currentConfigId && socketStatus === 'connected'" class="text-center text-muted py-3">请应用配置以启动后监控并接收相关信号。</div>
                                 <div v-else-if="liveSignals.length === 0 && socketStatus !== 'connected'" class="text-center text-muted py-3">请先连接服务。</div>
                                 <div v-else-if="displayedManagedSignals.length === 0 && liveSignals.length > 0" class="text-center text-muted py-3">无信号符合当前筛选条件。</div>
                                 <div v-else-if="liveSignals.length === 0" class="text-center text-muted py-3">暂无实时信号。</div>

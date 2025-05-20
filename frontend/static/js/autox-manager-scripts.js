@@ -50,18 +50,53 @@ const app = Vue.createApp({
     },
     methods: {
         connectWebSocket() {
+            if (this.websocket && (this.websocket.readyState === WebSocket.OPEN || this.websocket.readyState === WebSocket.CONNECTING)) {
+                this.showToast('连接提示', 'WebSocket 已经连接或正在连接中。', 'info');
+                return;
+            }
+
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             const url = `${protocol}//${window.location.host}/ws/autox_status`;
+            
+            this.loadingClients = true; // Set loading true when attempting to connect
+            this.showToast('连接中...', '正在尝试连接到 AutoX 状态服务器...', 'info');
+
+            let connectTimeoutId = null;
+            const CONNECTION_TIMEOUT = 15000; // 15 秒连接超时
+
+            // Clear any existing reconnect interval before starting a new connection attempt
+            if (this.reconnectInterval) {
+                clearInterval(this.reconnectInterval);
+                this.reconnectInterval = null;
+            }
+
             this.websocket = new WebSocket(url);
 
-            this.websocket.onopen = () => {
-                console.log('AutoX Status WebSocket 连接成功:', url);
-                // loadingClients will be set to false once the first client update is received
-                this.showToast('连接成功', '已连接到 AutoX 状态服务器。', 'success');
-                if (this.reconnectInterval) {
-                    clearInterval(this.reconnectInterval);
-                    this.reconnectInterval = null;
+            connectTimeoutId = setTimeout(() => {
+                if (this.websocket && this.websocket.readyState !== WebSocket.OPEN) {
+                    console.error(`AutoX Status WebSocket: Connection timed out after ${CONNECTION_TIMEOUT / 1000} seconds.`);
+                    this.showToast('连接超时', `WebSocket 连接超时 (${CONNECTION_TIMEOUT / 1000}秒)。请检查网络或服务器状态。`, 'danger');
+                    if (this.websocket) {
+                        this.websocket.close(1000, "Connection timeout"); // Actively close
+                    }
+                    // onclose will be triggered, which can schedule a reconnect
                 }
+            }, CONNECTION_TIMEOUT);
+
+            const clearConnectTimeout = () => {
+                if (connectTimeoutId) {
+                    clearTimeout(connectTimeoutId);
+                    connectTimeoutId = null;
+                }
+            };
+
+            this.websocket.onopen = () => {
+                clearConnectTimeout();
+                console.log('AutoX Status WebSocket 连接成功:', url);
+                this.showToast('连接成功', '已连接到 AutoX 状态服务器。', 'success');
+                // loadingClients will be set to false once the first client update is received
+                // Reset reconnect attempts if any were made by scheduleReconnect
+                if (this.reconnectAttempts) this.reconnectAttempts = 0;
             };
 
             this.websocket.onmessage = (event) => {
@@ -71,12 +106,10 @@ const app = Vue.createApp({
                         console.log('收到客户端列表更新:', message.data);
                         
                         const newClientsData = message.data.map(client => {
-                            // Find existing client to preserve notes_edit if user was editing
                             const existingClient = this.clients.find(c => c.client_id === client.client_id);
                             return {
-                                ...client, // Data from server
+                                ...client,
                                 notes_edit: existingClient ? existingClient.notes_edit : (client.notes || ''),
-                                // showPayload is for logs, not relevant here directly unless client data has expandable parts
                             };
                         });
                         this.clients = newClientsData;
@@ -89,32 +122,81 @@ const app = Vue.createApp({
                 }
             };
 
-            this.websocket.onerror = (error) => {
-                console.error('WebSocket错误:', error);
-                this.loadingClients = true; // Keep loading true as connection failed
-                this.showToast('连接错误', 'WebSocket 连接发生错误。尝试自动重连...', 'danger');
-                // onclose will handle scheduling reconnect if not clean
+            this.websocket.onerror = (errorEvent) => {
+                clearConnectTimeout();
+                console.error('AutoX Status WebSocket 错误:', errorEvent);
+                // this.loadingClients remains true or is set true in onclose
+                let errorMsg = 'WebSocket 连接发生错误。';
+                // Try to get more specific error if possible, though onerror often gives generic events
+                if (errorEvent && errorEvent.message) { errorMsg += ` 详情: ${errorEvent.message}`; }
+                else if (errorEvent && errorEvent.type) { errorMsg += ` 类型: ${errorEvent.type}`; }
+                
+                this.showToast('连接错误', `${errorMsg} 将尝试自动重连...`, 'danger');
+                // onerror is usually followed by onclose. Reconnect logic is primarily in onclose.
+                // Ensure socket is nulled if it exists and isn't closed, to allow scheduleReconnect to work.
+                if (this.websocket && this.websocket.readyState !== WebSocket.CLOSED) {
+                    this.websocket.close(1011, "WebSocket error occurred"); // 1011 = Internal Error
+                }
+                this.websocket = null;
             };
 
             this.websocket.onclose = (event) => {
-                console.log('WebSocket连接关闭:', event.code, event.reason);
+                clearConnectTimeout();
+                console.log('AutoX Status WebSocket 连接关闭:', event.code, event.reason);
                 this.loadingClients = true; // Show loading as we are disconnected
-                if (!event.wasClean) { // e.g. server process killed or network error
-                    this.showToast('连接断开', 'WebSocket 连接已断开。尝试自动重连...', 'warning');
-                    this.scheduleReconnect();
-                } else { // Normal closure
-                    this.showToast('连接已关闭', 'WebSocket 连接已正常关闭。', 'info');
+                this.websocket = null; // Clear the instance
+
+                let closeReasonMsg = `代码: ${event.code}, 原因: ${event.reason || '无'}`;
+                if (event.code === 1000 && event.reason === "Connection timeout") {
+                    // This was a client-side timeout, message already shown.
+                    // Proceed to scheduleReconnect.
+                } else if (!event.wasClean) {
+                    this.showToast('连接断开', `WebSocket 连接已断开 (${closeReasonMsg})。尝试自动重连...`, 'warning');
+                } else {
+                    this.showToast('连接已关闭', `WebSocket 连接已正常关闭 (${closeReasonMsg})。`, 'info');
+                    // If it was a clean closure initiated by client (e.g. unmount), don't auto-reconnect.
+                    // However, if it's a server-initiated clean close (e.g. server restart), we might still want to.
+                    // For simplicity, we'll attempt reconnect unless it's a specific "unmounting" reason.
+                    if (event.reason === "Vue component unmounting") {
+                        return; // Do not reconnect if unmounting
+                    }
+                }
+                // Schedule reconnect for most close events, except specific client-initiated ones.
+                if (event.code !== 1000 || (event.reason && event.reason !== "Vue component unmounting")) {
+                     this.scheduleReconnect();
                 }
             };
         },
         scheduleReconnect() {
+            const MAX_RECONNECT_ATTEMPTS = 5;
+            const RECONNECT_DELAY = 5000; // 5 seconds
+
             if (this.reconnectInterval) return; // Already scheduled
+
+            if (!this.reconnectAttempts) this.reconnectAttempts = 0;
+
             this.reconnectInterval = setInterval(() => {
                 if (!this.websocket || this.websocket.readyState === WebSocket.CLOSED) {
-                    console.log('尝试重新连接WebSocket...');
-                    this.connectWebSocket(); // Attempt to reconnect
+                    if (this.reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+                        this.reconnectAttempts++;
+                        console.log(`尝试重新连接WebSocket... (尝试 ${this.reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
+                        this.showToast('重连中...', `尝试重新连接 (${this.reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`, 'info');
+                        this.connectWebSocket(); // Attempt to reconnect
+                    } else {
+                        console.log('已达到最大重连次数。停止自动重连。');
+                        this.showToast('重连失败', `已达到最大重连次数 (${MAX_RECONNECT_ATTEMPTS})。请手动刷新或检查服务。`, 'danger');
+                        clearInterval(this.reconnectInterval);
+                        this.reconnectInterval = null;
+                        this.reconnectAttempts = 0; // Reset for future manual attempts
+                    }
+                } else {
+                    // If socket exists and is not closed (e.g. OPEN or CONNECTING), clear interval.
+                    // This case should ideally be handled by onopen clearing the interval.
+                    clearInterval(this.reconnectInterval);
+                    this.reconnectInterval = null;
+                    this.reconnectAttempts = 0;
                 }
-            }, 5000); // every 5 seconds
+            }, RECONNECT_DELAY);
         },
         async fetchTradeLogs(forceRefresh = false, userInitiated = false) {
             if (forceRefresh || this.tradeLogs.length === 0) {
