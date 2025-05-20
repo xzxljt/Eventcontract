@@ -34,7 +34,6 @@ test.py
 live_signals.json
 GRACEFUL_SHUTDOWN_README.md
 service.log.2025-05-17
-autoxjs/autox_binance_executor.js
 config/
 
 eventcontract.service.example

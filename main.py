@@ -2486,6 +2486,64 @@ async def shutdown_event():
         except Exception as e:
             logger.error(f"等待取消的 broadcast_autox_clients_status 防抖任务时发生错误: {e}", exc_info=True)
 
+    # 新增：向活动的 AutoX 客户端发送关闭通知
+    logger.info("准备向活动的 AutoX 客户端发送关闭通知...")
+    shutdown_notification_tasks = []
+    notification_message = {
+        "type": "server_shutting_down",
+        "payload": {
+            "message": "服务器正在关闭，请在约60秒后尝试重连。",
+            "reconnect_delay_seconds": 60
+        }
+    }
+
+    active_ws_to_notify_with_ids = []
+    # 使用 active_autox_clients 来获取 WebSocket 对象和 client_id
+    # 需要 autox_clients_lock 来确保线程安全
+    with autox_clients_lock:
+        for ws_client, client_info in active_autox_clients.items():
+            # client_info 是一个字典，例如 {'client_id': 'some_id', ...}
+            client_id_for_log = client_info.get('client_id', '未知')
+            active_ws_to_notify_with_ids.append({"ws": ws_client, "id": client_id_for_log})
+
+    if active_ws_to_notify_with_ids:
+        logger.info(f"将向 {len(active_ws_to_notify_with_ids)} 个 AutoX 客户端发送关闭通知。")
+        for client_data in active_ws_to_notify_with_ids:
+            ws_client_conn = client_data["ws"]
+            client_id_for_log = client_data["id"]
+            
+            async def send_notification_wrapper(ws, msg, cid):
+                try:
+                    # 直接使用 ws.send_json() 并设置超时
+                    await asyncio.wait_for(ws.send_json(msg), timeout=3.0) # 3秒超时
+                    logger.info(f"已向 AutoX 客户端 {cid} 发送关闭通知。")
+                except asyncio.TimeoutError:
+                    logger.warning(f"向 AutoX 客户端 {cid} 发送关闭通知超时。")
+                except WebSocketDisconnect: # WebSocketDisconnect 已在文件顶部导入
+                    logger.warning(f"向 AutoX 客户端 {cid} 发送关闭通知时发现连接已断开。")
+                except Exception as e_send_notify:
+                    logger.error(f"向 AutoX 客户端 {cid} 发送关闭通知失败: {e_send_notify}")
+
+            shutdown_notification_tasks.append(send_notification_wrapper(ws_client_conn, notification_message, client_id_for_log))
+    
+        if shutdown_notification_tasks:
+            # return_exceptions=True 确保一个任务的失败不会中止其他任务
+            results = await asyncio.gather(*shutdown_notification_tasks, return_exceptions=True)
+            successful_sends = 0
+            failed_sends = 0
+            for res_idx, res_item in enumerate(results):
+                cid_log = active_ws_to_notify_with_ids[res_idx]["id"]
+                if isinstance(res_item, Exception):
+                    failed_sends +=1
+                    # 错误已经在 wrapper 中记录，这里可以记录一个聚合信息
+                    logger.debug(f"发送关闭通知给 {cid_log} 的任务返回异常: {res_item}")
+                else:
+                    successful_sends +=1
+            logger.info(f"所有 AutoX 客户端关闭通知发送尝试完成。成功: {successful_sends}, 失败: {failed_sends} (总计: {len(results)})")
+    else:
+        logger.info("没有活动的 AutoX 客户端需要发送关闭通知。")
+    # --- 结束新增 ---
+
     # 3. 停止币安WebSocket连接 (BinanceClient.stop_all_websockets 是同步的)
     # 这个操作应该相对较快，或者其内部有自己的超时和线程管理
     try:
