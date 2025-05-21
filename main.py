@@ -1450,18 +1450,55 @@ async def websocket_endpoint(websocket: WebSocket):
                 # 构造完整配置，保留当前余额和盈亏（如果已有配置）
                 with running_live_test_configs_lock:
                     old_config = running_live_test_configs.get(new_config_id)
+                    
+                    # config_payload_data["investment_settings"] 已经被 validated_investment_settings (Pydantic model_dump) 替换
+                    # validated_investment_settings 在大约 line 1415 定义并赋值给 config_payload_data["investment_settings"]
+                    current_payload_investment_settings = config_payload_data["investment_settings"].copy() # 使用副本
+                    newly_input_simulated_balance = current_payload_investment_settings.get("simulatedBalance")
+
+                    final_current_balance: float
+                    final_total_profit_loss_amount: float
+                    # final_investment_settings_to_store 将是 current_payload_investment_settings，因为它已包含最新的 simulatedBalance
+                    final_investment_settings_to_store: dict = current_payload_investment_settings
+                    created_at_to_use: str
+
+                    if old_config: # 配置已存在
+                        existing_total_profit_loss = old_config.get('total_profit_loss_amount', 0.0)
+                        
+                        # 使用新输入的 simulatedBalance (可能为None) 进行计算，如果为 None，则计算 current_balance 时视为 0.0
+                        simulated_balance_for_calc = newly_input_simulated_balance if newly_input_simulated_balance is not None else 0.0
+                        
+                        final_current_balance = simulated_balance_for_calc + existing_total_profit_loss
+                        final_total_profit_loss_amount = existing_total_profit_loss # PnL 保持不变
+                        
+                        # final_investment_settings_to_store 已经包含了来自 payload 的 investment_settings,
+                        # 其中 simulatedBalance 就是 newly_input_simulated_balance (用户新输入的值).
+                        
+                        created_at_to_use = old_config.get("created_at", format_for_display(now_utc()))
+                        logger.info(f"Updating existing config {new_config_id}. New simulatedBalance: {newly_input_simulated_balance}, existing PnL: {existing_total_profit_loss}, new current_balance: {final_current_balance}")
+
+                    else: # 新配置
+                        # initial_current_balance (在前面约 line 1448 定义)
+                        # 已经是基于 newly_input_simulated_balance (即 initial_simulated_balance from payload) 或默认值1000.0计算的
+                        final_current_balance = initial_current_balance
+                        final_total_profit_loss_amount = 0.0
+                        # final_investment_settings_to_store 已经包含了来自 payload 的 investment_settings.
+                        
+                        created_at_to_use = format_for_display(now_utc())
+                        logger.info(f"Creating new config {new_config_id}. Initial/New simulatedBalance: {newly_input_simulated_balance}, initial current_balance: {final_current_balance}")
+
                     full_config_to_store = {
-                        "symbol": new_symbol,
+                        "symbol": new_symbol, # new_symbol, new_interval 在前面约 line 1445-1446 定义
                         "interval": new_interval,
                         "prediction_strategy_id": config_payload_data["prediction_strategy_id"],
                         "prediction_strategy_params": config_payload_data.get("prediction_strategy_params"),
                         "confidence_threshold": config_payload_data["confidence_threshold"],
                         "event_period": config_payload_data["event_period"],
-                        "investment_settings": config_payload_data["investment_settings"],
+                        "investment_settings": final_investment_settings_to_store,
                         "autox_enabled": config_payload_data.get("autox_enabled", True),
-                        "current_balance": old_config["current_balance"] if old_config and "current_balance" in old_config else initial_current_balance,
-                        "total_profit_loss_amount": old_config["total_profit_loss_amount"] if old_config and "total_profit_loss_amount" in old_config else 0.0,
-                        "created_at": old_config["created_at"] if old_config and "created_at" in old_config else format_for_display(now_utc())
+                        "current_balance": round(final_current_balance, 2),
+                        "total_profit_loss_amount": round(final_total_profit_loss_amount, 2),
+                        "created_at": created_at_to_use
                     }
                     running_live_test_configs[new_config_id] = full_config_to_store
 
@@ -2232,8 +2269,10 @@ async def update_client_notes_endpoint(client_id: str, notes_payload: ClientNote
 
 @app.post("/api/live-signals/delete-batch", response_model=Dict[str, Any])
 async def delete_live_signals_batch(request: DeleteSignalsRequest):
-    """异步批量删除实时信号。"""
-    global live_signals
+    """异步批量删除实时信号，并在删除前调整相关配置的余额和盈亏。"""
+    global live_signals, running_live_test_configs, active_live_test_config_id, websocket_to_config_id_map, global_running_balance, global_running_balance_lock
+    # logger 实例应该在模块级别可用
+    
     deleted_count = 0
     
     if not request.signal_ids:
@@ -2241,29 +2280,129 @@ async def delete_live_signals_batch(request: DeleteSignalsRequest):
 
     ids_to_delete_set = set(request.signal_ids)
     
-    # 在锁外准备新的列表，减少锁的持有时间
     signals_to_keep = []
-    current_signals_copy = []
-    with live_signals_lock: # 获取锁以安全地复制数据
-        current_signals_copy = [s.copy() for s in live_signals]
-
-    for signal in current_signals_copy:
-        if signal.get('id') in ids_to_delete_set:
-            deleted_count += 1
-        else:
-            signals_to_keep.append(signal)
+    deleted_signals_info = [] # 存储被删除信号的完整信息以进行后续处理
     
+    # 步骤1: 识别要删除的信号并收集其信息
+    with live_signals_lock:
+        current_live_signals_copy = [s.copy() for s in live_signals]
+        
+    for signal_in_copy in current_live_signals_copy:
+        if signal_in_copy.get('id') in ids_to_delete_set:
+            deleted_signals_info.append(signal_in_copy)
+
+    if not deleted_signals_info:
+        not_found_count_initial = len(request.signal_ids)
+        return {"status": "warning", "message": f"请求删除的 {not_found_count_initial} 个信号均未找到。", "deleted_count": 0, "not_found_count": not_found_count_initial}
+
+    # 步骤2: 处理余额和利润损失调整
+    configs_to_update_broadcast: Dict[str, Dict[str, Any]] = {}
+
+    for signal_data in deleted_signals_info:
+        config_id = signal_data.get('origin_config_id')
+        if not config_id:
+            logger.warning(f"Signal {signal_data.get('id')} missing origin_config_id for deletion balance adjustment.")
+            continue
+
+        investment_amount = signal_data.get('investment_amount', 0.0)
+        if not isinstance(investment_amount, (int, float)):
+            try:
+                investment_amount = float(investment_amount)
+            except (ValueError, TypeError):
+                logger.warning(f"Signal {signal_data.get('id')} has invalid investment_amount '{investment_amount}', using 0.")
+                investment_amount = 0.0
+        
+        actual_profit_loss = signal_data.get('actual_profit_loss_amount')
+        if actual_profit_loss is not None and not isinstance(actual_profit_loss, (int, float)):
+             try:
+                actual_profit_loss = float(actual_profit_loss)
+             except (ValueError, TypeError):
+                logger.warning(f"Signal {signal_data.get('id')} has invalid actual_profit_loss_amount '{actual_profit_loss}', treating as None.")
+                actual_profit_loss = None
+
+        is_verified_and_has_result = signal_data.get('verified', False) and signal_data.get('result') is not None
+
+        with running_live_test_configs_lock:
+            if config_id in running_live_test_configs:
+                config_entry = running_live_test_configs[config_id]
+                original_balance = config_entry.get('current_balance', 0.0)
+                original_pnl = config_entry.get('total_profit_loss_amount', 0.0)
+                balance_change_for_this_signal_net = 0.0
+
+                if is_verified_and_has_result and actual_profit_loss is not None:
+                    logger.info(f"Processing validated signal {signal_data.get('id')} for deletion (Config: {config_id}). Investment: {investment_amount}, PnL: {actual_profit_loss}.")
+                    
+                    config_entry['total_profit_loss_amount'] -= actual_profit_loss
+                    config_entry['current_balance'] -= actual_profit_loss
+                    balance_change_for_this_signal_net -= actual_profit_loss
+                    
+                    config_entry['current_balance'] += investment_amount
+                    balance_change_for_this_signal_net += investment_amount
+                    
+                    logger.info(f"Config {config_id} balance update (validated signal {signal_data.get('id')} deleted). Original Balance: {original_balance:.2f}, Original Total PnL: {original_pnl:.2f}. New Balance: {config_entry['current_balance']:.2f}, New Total PnL: {config_entry['total_profit_loss_amount']:.2f}. Net balance change from this signal: {balance_change_for_this_signal_net:.2f}")
+
+                elif not is_verified_and_has_result and investment_amount > 0: # Unverified but investment was deducted
+                    logger.info(f"Processing unvalidated signal {signal_data.get('id')} for deletion (Config: {config_id}). Refunding investment: {investment_amount}.")
+                    
+                    config_entry['current_balance'] += investment_amount
+                    balance_change_for_this_signal_net += investment_amount
+
+                    logger.info(f"Config {config_id} balance update (unvalidated signal {signal_data.get('id')} deleted). Original Balance: {original_balance:.2f}. New Balance: {config_entry['current_balance']:.2f}. Net balance change from this signal: {balance_change_for_this_signal_net:.2f}")
+                else:
+                    logger.info(f"Signal {signal_data.get('id')} (Config: {config_id}) requires no balance adjustment on deletion. Verified: {is_verified_and_has_result}, PnL: {actual_profit_loss}, Investment: {investment_amount}")
+
+                if balance_change_for_this_signal_net != 0 or (is_verified_and_has_result and actual_profit_loss is not None):
+                    if config_id not in configs_to_update_broadcast:
+                        configs_to_update_broadcast[config_id] = {
+                            "new_balance": config_entry['current_balance'],
+                            "total_profit_loss_amount": config_entry['total_profit_loss_amount'],
+                            "accumulated_balance_change_from_delete": 0.0
+                        }
+                    configs_to_update_broadcast[config_id]["new_balance"] = config_entry['current_balance']
+                    configs_to_update_broadcast[config_id]["total_profit_loss_amount"] = config_entry['total_profit_loss_amount']
+                    configs_to_update_broadcast[config_id]["accumulated_balance_change_from_delete"] += balance_change_for_this_signal_net
+            else:
+                logger.warning(f"Config ID {config_id} not found when trying to adjust balance for signal {signal_data.get('id')}.")
+    
+    current_active_config_id_local = None
+    with active_live_test_config_lock:
+        current_active_config_id_local = active_live_test_config_id
+    
+    if current_active_config_id_local and current_active_config_id_local in configs_to_update_broadcast:
+        logger.info(f"Active config {current_active_config_id_local} balance/PnL updated due to signal deletion, saving.")
+        await save_active_test_config()
+
+    for signal_item in current_live_signals_copy:
+        if signal_item.get('id') not in ids_to_delete_set:
+            signals_to_keep.append(signal_item)
+        else:
+            deleted_count +=1
+
     not_found_count = len(request.signal_ids) - deleted_count
-    if not_found_count < 0: not_found_count = 0 
+    if not_found_count < 0: not_found_count = 0
 
     if deleted_count > 0:
-        with live_signals_lock: # 获取锁以更新全局 live_signals
+        with live_signals_lock:
             live_signals = signals_to_keep
         
-        await save_live_signals_async() # 调用已修改的异步保存函数
+        await save_live_signals_async()
             
-        # 准备广播统计数据
-        # 再次获取锁和副本以确保统计数据的准确性
+        for config_id_to_bc, update_data in configs_to_update_broadcast.items():
+            balance_payload = {
+                "type": "config_specific_balance_update",
+                "data": {
+                    "config_id": config_id_to_bc,
+                    "new_balance": round(update_data["new_balance"], 2),
+                    "last_pnl_amount": round(update_data["accumulated_balance_change_from_delete"], 2),
+                    "total_profit_loss_amount": round(update_data["total_profit_loss_amount"], 2)
+                }
+            }
+            logger.info(f"Broadcasting balance update for config {config_id_to_bc} due to signal deletion: {balance_payload['data']}")
+            await manager.broadcast_json(
+                balance_payload,
+                filter_func=lambda c: websocket_to_config_id_map.get(c) == config_id_to_bc
+            )
+
         stats_payload_data_for_broadcast = []
         with live_signals_lock:
             stats_payload_data_for_broadcast = [s.copy() for s in live_signals]
@@ -2271,26 +2410,43 @@ async def delete_live_signals_batch(request: DeleteSignalsRequest):
         verified_list_global = [s for s in stats_payload_data_for_broadcast if s.get('verified')]
         total_verified_global = len(verified_list_global)
         total_correct_global = sum(1 for s in verified_list_global if s.get('result'))
-        total_actual_profit_loss_amount_global = sum(s.get('actual_profit_loss_amount', 0.0) for s in verified_list_global if s.get('actual_profit_loss_amount') is not None)
-        total_pnl_pct_sum_global = sum(s.get('pnl_pct', 0.0) for s in verified_list_global if s.get('pnl_pct') is not None)
-        average_pnl_pct_global = total_pnl_pct_sum_global / total_verified_global if total_verified_global > 0 else 0
+        
+        current_total_actual_profit_loss_amount_global = 0.0
+        if verified_list_global:
+            valid_pnl_amounts = [s.get('actual_profit_loss_amount', 0.0) for s in verified_list_global if s.get('actual_profit_loss_amount') is not None]
+            if valid_pnl_amounts:
+                 current_total_actual_profit_loss_amount_global = sum(valid_pnl_amounts)
+
+        current_total_pnl_pct_sum_global = 0.0
+        if verified_list_global:
+            valid_pnl_pcts = [s.get('pnl_pct', 0.0) for s in verified_list_global if s.get('pnl_pct') is not None]
+            if valid_pnl_pcts:
+                current_total_pnl_pct_sum_global = sum(valid_pnl_pcts)
+        
+        average_pnl_pct_global = current_total_pnl_pct_sum_global / total_verified_global if total_verified_global > 0 else 0
+        
+        current_global_balance_val = 0.0
+        with global_running_balance_lock:
+             current_global_balance_val = global_running_balance
+
         stats_payload = {
-            "total_signals": len(stats_payload_data_for_broadcast), 
+            "total_signals": len(stats_payload_data_for_broadcast),
             "total_verified": total_verified_global,
             "total_correct": total_correct_global,
             "win_rate": round(total_correct_global / total_verified_global * 100 if total_verified_global > 0 else 0, 2),
-            "total_pnl_pct": round(total_pnl_pct_sum_global, 2),
+            "total_pnl_pct": round(current_total_pnl_pct_sum_global, 2),
             "average_pnl_pct": round(average_pnl_pct_global, 2),
-            "total_profit_amount": round(total_actual_profit_loss_amount_global, 2)
+            "total_profit_amount": round(current_total_actual_profit_loss_amount_global, 2),
+            "current_balance": round(current_global_balance_val, 2)
         }
         await manager.broadcast_json({"type": "stats_update", "data": stats_payload})
         await manager.broadcast_json({"type": "signals_deleted_notification", "data": {"deleted_ids": list(ids_to_delete_set), "message": f"部分信号已删除。"}})
 
         return {"status": "success", "message": f"成功删除 {deleted_count} 个信号。" + (f" {not_found_count} 个请求的信号未找到。" if not_found_count > 0 else ""), "deleted_count": deleted_count, "not_found_count": not_found_count}
     
-    elif not_found_count > 0 : # 没有删除，但有未找到的
+    elif not_found_count > 0 :
          return {"status": "warning", "message": f"请求删除的 {len(request.signal_ids)} 个信号均未找到。", "deleted_count": 0, "not_found_count": not_found_count}
-    else: # deleted_count == 0 and not_found_count == 0 (例如空列表请求，已被前面拦截)
+    else:
         return {"status": "info", "message": "没有信号被删除（可能请求的ID列表为空或所有ID均未找到）。", "deleted_count": 0, "not_found_count": 0}
  
 @app.get("/api/test-signal-enhanced", tags=["Testing"]) # 可以用新名字或修改原有的
