@@ -172,6 +172,70 @@ class PercentageOfBalanceStrategy(BaseInvestmentStrategy):
         
         return self._apply_bounds(amount)
 
+class PercentageStreakMultiplierStrategy(BaseInvestmentStrategy):
+    """
+    百分比连赢/连亏乘数策略。
+    基于账户余额百分比投资，并在连续胜利或失败达到阈值时应用乘数。
+    """
+    def __init__(self, params: Dict[str, Any], **kwargs):
+        super().__init__(params, **kwargs)
+        self.name = "百分比连赢/连亏乘数策略"
+        self.description = "基于账户余额百分比投资，并在连续胜利或失败达到指定次数后调整投资额。"
+        
+        self.percentage = float(params.get('percentageOfBalance', 10.0))
+        if not (0 < self.percentage <= 100):
+            raise ValueError("'percentageOfBalance' 参数必须在 (0, 100] 之间。")
+
+        self.streak_threshold_win = int(params.get('streak_threshold_win', 3))
+        self.streak_multiplier_win = float(params.get('streak_multiplier_win', 1.5))
+        self.streak_threshold_loss = int(params.get('streak_threshold_loss', 3))
+        self.streak_multiplier_loss = float(params.get('streak_multiplier_loss', 0.8))
+
+        if self.streak_threshold_win < 1:
+            raise ValueError("'streak_threshold_win' 必须至少为 1。")
+        if self.streak_multiplier_win <= 0:
+            raise ValueError("'streak_multiplier_win' 必须为正数。")
+        if self.streak_threshold_loss < 1:
+            raise ValueError("'streak_threshold_loss' 必须至少为 1。")
+        if self.streak_multiplier_loss <= 0:
+            raise ValueError("'streak_multiplier_loss' 必须为正数。")
+
+        self.win_streak = 0
+        self.loss_streak = 0
+
+    def calculate_investment(
+        self,
+        current_balance: float,
+        previous_trade_result: Optional[bool] = None,
+        base_investment_from_settings: float = 20.0 
+    ) -> float:
+        if previous_trade_result is True:
+            self.win_streak += 1
+            self.loss_streak = 0
+        elif previous_trade_result is False:
+            self.loss_streak += 1
+            self.win_streak = 0
+        elif previous_trade_result is None: # 首次交易或状态重置后
+            self.win_streak = 0
+            self.loss_streak = 0
+
+        if current_balance <= 0:
+            base_investment = 0.0
+        else:
+            base_investment = current_balance * (self.percentage / 100.0)
+        
+        current_investment = base_investment
+
+        if self.win_streak >= self.streak_threshold_win:
+            current_investment *= self.streak_multiplier_win
+        elif self.loss_streak >= self.streak_threshold_loss: # 使用 elif 确保只有一个乘数生效
+            current_investment *= self.streak_multiplier_loss
+            
+        return self._apply_bounds(current_investment)
+
+    def reset_state(self):
+        self.win_streak = 0
+        self.loss_streak = 0
 
 def get_available_investment_strategies() -> List[Dict[str, Any]]:
     """获取所有可用投资策略的列表及其元数据"""
@@ -233,6 +297,19 @@ def get_available_investment_strategies() -> List[Dict[str, Any]]:
             'description': '投资当前账户余额的一定百分比。',
             'parameters': [
                 {'name': 'percentageOfBalance', 'type': 'float', 'default': 10.0, 'min': 0.1, 'max': 50.0, 'step': 0.1, 'description': '投资账户余额的百分比 (%)'},
+            ]
+        },
+        {
+            'id': 'percentage_streak_multiplier',
+            'name': '百分比连赢/连亏乘数',
+            'class': PercentageStreakMultiplierStrategy,
+            'description': '基于账户余额百分比投资，并在连胜/连败达到指定次数后调整投资额。',
+            'parameters': [
+                {'name': 'percentageOfBalance', 'type': 'float', 'default': 10.0, 'min': 0.1, 'max': 50.0, 'step': 0.1, 'description': '基础投资占账户余额的百分比 (%)'},
+                {'name': 'streak_threshold_win', 'type': 'int', 'default': 3, 'min': 1, 'max': 10, 'description': '触发连胜乘数的连胜次数'},
+                {'name': 'streak_multiplier_win', 'type': 'float', 'default': 1.5, 'min': 0.1, 'max': 5.0, 'step': 0.1, 'description': '连胜时的投资乘数'},
+                {'name': 'streak_threshold_loss', 'type': 'int', 'default': 3, 'min': 1, 'max': 10, 'description': '触发连败乘数的连败次数'},
+                {'name': 'streak_multiplier_loss', 'type': 'float', 'default': 0.8, 'min': 0.1, 'max': 5.0, 'step': 0.1, 'description': '连败时的投资乘数 (例如0.8减少风险, 1.2增加风险)'},
             ]
         },
     ]
@@ -298,10 +375,66 @@ if __name__ == '__main__':
     print(f"  余额2000, 投资: {percentage_strategy.calculate_investment(2000)}") 
     print(f"  余额100 (计算结果5 < minAmount 10), 投资: {percentage_strategy.calculate_investment(100)}") 
     print(f"  余额5000 (计算结果250 > maxAmount 200), 投资: {percentage_strategy.calculate_investment(5000)}") 
-    print(f"  余额0, 投资: {percentage_strategy.calculate_investment(0)}")  # 0 * % = 0. _apply_bounds(0) => max(10, min(200,0)) = 10.
+    print(f"  余额0, 投资: {percentage_strategy.calculate_investment(0)}")
 
 
     print("\n--- 获取可用策略 ---")
     available_strats = get_available_investment_strategies()
     for s in available_strats:
         print(f"ID: {s['id']}, Name: {s['name']}, Class: {s['class'].__name__}")
+
+    print("\n--- 测试百分比连赢/连亏乘数策略 ---")
+    streak_params_global = {'minAmount': 5, 'maxAmount': 500}
+    streak_params_specific = {
+        'percentageOfBalance': 10.0, # 10%
+        'streak_threshold_win': 2,    # 2连胜触发
+        'streak_multiplier_win': 1.5, # 赢则投资 *1.5
+        'streak_threshold_loss': 3,   # 3连败触发
+        'streak_multiplier_loss': 0.7 # 输则投资 *0.7
+    }
+    merged_streak_params = {**streak_params_global, **streak_params_specific}
+    streak_strategy = PercentageStreakMultiplierStrategy(params=merged_streak_params)
+    
+    print(f"策略参数: perc={streak_strategy.percentage}%, win_thresh={streak_strategy.streak_threshold_win}, win_mult={streak_strategy.streak_multiplier_win}, loss_thresh={streak_strategy.streak_threshold_loss}, loss_mult={streak_strategy.streak_multiplier_loss}, min={streak_strategy.min_amount}, max={streak_strategy.max_amount}")
+
+    balance = 1000.0
+    print(f"初始余额: {balance}")
+
+    # 首次交易
+    inv = streak_strategy.calculate_investment(balance, None)
+    print(f"  首次交易 (余额 {balance:.2f}), 投资: {inv:.2f} (预期: 1000 * 10% = 100)") # 100
+    balance -= inv # 假设亏损以便测试连败
+
+    # 第一次失败
+    inv = streak_strategy.calculate_investment(balance, False) # loss_streak = 1
+    print(f"  上次输 (余额 {balance:.2f}), 投资: {inv:.2f} (预期: 900 * 10% = 90)") # 90
+    balance -= inv
+
+    # 第二次失败
+    inv = streak_strategy.calculate_investment(balance, False) # loss_streak = 2
+    print(f"  上次输 (余额 {balance:.2f}), 投资: {inv:.2f} (预期: 810 * 10% = 81)") # 81
+    balance -= inv
+
+    # 第三次失败 (触发连败乘数)
+    inv = streak_strategy.calculate_investment(balance, False) # loss_streak = 3
+    print(f"  上次输 (余额 {balance:.2f}), 投资: {inv:.2f} (预期: (729 * 10%) * 0.7 = 72.9 * 0.7 = 51.03 -> 51)") # 51
+    balance += inv # 假设这次赢了
+
+    # 第一次胜利 (重置连败，win_streak = 1)
+    inv = streak_strategy.calculate_investment(balance, True) # win_streak = 1, loss_streak = 0
+    print(f"  上次赢 (余额 {balance:.2f}), 投资: {inv:.2f} (预期: (729+51) * 10% = 780 * 10% = 78)") # 78
+    balance += inv # 假设又赢了
+
+    # 第二次胜利 (触发连胜乘数)
+    inv = streak_strategy.calculate_investment(balance, True) # win_streak = 2
+    print(f"  上次赢 (余额 {balance:.2f}), 投资: {inv:.2f} (预期: ((780+78) * 10%) * 1.5 = (858 * 10%) * 1.5 = 85.8 * 1.5 = 128.7 -> 129)") # 129
+    balance -= inv # 假设这次输了
+
+    # 再次失败 (重置连胜, loss_streak = 1)
+    inv = streak_strategy.calculate_investment(balance, False) # loss_streak = 1, win_streak = 0
+    print(f"  上次输 (余额 {balance:.2f}), 投资: {inv:.2f} (预期: (858-129) * 10% = 729 * 10% = 72.9 -> 73)") # 73
+
+    streak_strategy.reset_state()
+    print(f"  状态重置后, win_streak={streak_strategy.win_streak}, loss_streak={streak_strategy.loss_streak}")
+    inv = streak_strategy.calculate_investment(balance, None)
+    print(f"  重置后首次交易 (余额 {balance:.2f}), 投资: {inv:.2f} (预期: 729 * 10% = 72.9 -> 73)")

@@ -1,6 +1,6 @@
 // autox_binance_executor.js (Aggressive Mode v3 - Integrated Optimized Find Logic & Delays)
 // -------------------- 可配置参数 --------------------
-var SERVER_WS_URL = "ws://192.168.1.2::8000/ws/autox_control";
+var SERVER_WS_URL = "ws://192.168.1.2:8000/ws/autox_control";
 var CLIENT_ID = "";
 var SUPPORTED_SYMBOLS = ["ETHUSDT"]; // 您可以根据需要添加更多交易对
 
