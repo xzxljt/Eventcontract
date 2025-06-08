@@ -487,6 +487,12 @@ async def load_active_test_config():
 
         with running_live_test_configs_lock:
             running_live_test_configs[active_config_id] = config_data
+            # 从文件加载配置后，重新创建策略实例
+            # 注意：这里需要确保 _create_and_store_investment_strategy_instance 函数已经被定义
+            # 我们将把它的定义放在 handle_kline_data 之前
+            inv_instance = _create_and_store_investment_strategy_instance(config_data)
+            if inv_instance:
+                running_live_test_configs[active_config_id]['investment_strategy_instance'] = inv_instance
 
         print(f"成功从 {ACTIVE_TEST_CONFIG_FILE} 加载活动测试配置 (ID: {active_config_id})。") # 修改日志
         # 可以选择在这里打印加载的配置数据，但可能比较冗长
@@ -533,6 +539,8 @@ async def save_active_test_config():
         with running_live_test_configs_lock:
             if config_id in running_live_test_configs:
                 config_data = running_live_test_configs[config_id].copy()
+                # 在保存到文件前，移除不可被JSON序列化的策略实例
+                config_data.pop('investment_strategy_instance', None)
                 config_to_save["active_config_id"] = config_id
                 config_to_save["config_data"] = config_data
     
@@ -913,6 +921,39 @@ async def _send_autox_command(client_ws: WebSocket, command: Dict[str, Any]): # 
         print(f"向AutoX客户端发送指令失败: {e}")
 
 
+def _create_and_store_investment_strategy_instance(config_data: Dict[str, Any]) -> Optional[BaseInvestmentStrategy]:
+    """
+    根据配置数据创建投资策略实例。
+    这个函数是同步的，因为它主要处理字典操作和对象实例化，不涉及IO。
+    """
+    config_id_for_log = config_data.get('_config_id', 'N/A')
+    try:
+        inv_settings = config_data.get("investment_settings", {})
+        inv_strat_id = inv_settings.get("strategy_id")
+        if not inv_strat_id:
+            logger.warning(f"配置 {config_id_for_log} 中缺少 investment_settings.strategy_id，无法创建策略实例。")
+            return None
+
+        inv_strat_def = next((s for s in get_available_investment_strategies() if s['id'] == inv_strat_id), None)
+        if not inv_strat_def:
+            logger.error(f"创建投资策略实例失败 (Config: {config_id_for_log}): 未找到策略定义 {inv_strat_id}")
+            return None
+
+        # 整合参数 (运行时特定配置 > 全局保存 > 策略定义默认)
+        default_params = {p['name']: p['default'] for p in inv_strat_def.get('parameters', []) if not p.get('readonly')}
+        global_params = strategy_parameters_config.get("investment_strategies", {}).get(inv_strat_id, {})
+        
+        # inv_settings 包含了所有运行时配置，包括 minAmount, maxAmount, percentageOfBalance 等
+        final_params = {**default_params, **global_params, **inv_settings}
+        
+        instance = inv_strat_def['class'](params=final_params)
+        logger.info(f"为配置 {config_id_for_log} 成功创建了投资策略实例: {instance.name}")
+        return instance
+    except Exception as e:
+        logger.error(f"为配置 {config_id_for_log} 创建投资策略实例时出错: {e}\n{traceback.format_exc()}")
+        return None
+
+
 async def handle_kline_data(kline_data: dict):
     global live_signals, strategy_parameters_config, running_live_test_configs, active_autox_clients, binance_client
     try:
@@ -1030,34 +1071,48 @@ async def handle_kline_data(kline_data: dict):
                         })
                         
                         if inv_strat_def_cfg:
-                            inv_instance = inv_strat_def_cfg['class'](params=strategy_specific_params_for_instance)
-                            
-                            # --- MODIFICATION FOR CURRENT BALANCE ---
-                            # 使用 live_test_config_data 中存储的 current_balance (这是副本中的)
-                            current_balance_for_calc = live_test_config_data.get('current_balance')
-                            
-                            # 如果 current_balance 由于某种原因没有在 live_test_config_data 中
-                            # (理论上应该有，因为上面在创建副本时已确保其存在)
-                            # 则回退到 investment_settings 中的 simulatedBalance (初始值)
-                            if current_balance_for_calc is None:
-                                current_balance_for_calc = live_inv_model.simulatedBalance
-                            
-                            # 最终回退，主要针对百分比策略，确保它有余额可用
-                            if current_balance_for_calc is None:
-                                if inv_strat_id_cfg == 'percentage_of_balance':
-                                    print(f"警告 (Config ID: {live_test_config_data['_config_id']}): 百分比投资策略缺少 current_balance 和 simulatedBalance，将使用默认1000。")
-                                    current_balance_for_calc = 1000.0 
-                                else: 
-                                    # 其他策略可能不直接依赖此余额，或使用 live_inv_model.amount
-                                    current_balance_for_calc = live_inv_model.amount 
-                            # --- END MODIFICATION FOR CURRENT BALANCE ---
-                            
-                            inv_amount = inv_instance.calculate_investment( 
-                                current_balance=current_balance_for_calc, 
-                                previous_trade_result=None, 
-                                base_investment_from_settings=live_inv_model.amount # 传递Pydantic模型中的基础投资额
-                            )
-                            inv_amount = max(live_inv_model.minAmount, min(live_inv_model.maxAmount, inv_amount))
+                            # inv_instance = inv_strat_def_cfg['class'](params=strategy_specific_params_for_instance)
+                            inv_instance = live_test_config_data.get('investment_strategy_instance')
+
+                            if not inv_instance:
+                                logger.error(f"Config ID {live_test_config_data['_config_id']}: 未找到预先创建的投资策略实例，将使用默认投资额。")
+                                inv_amount = max(live_inv_model.minAmount, min(live_inv_model.maxAmount, live_inv_model.amount))
+                            else:
+                                # --- 核心状态管理修改：获取上一次交易结果 ---
+                                last_verified_signal = None
+                                with live_signals_lock:
+                                    # 筛选出属于此配置、且已验证的信号
+                                    config_signals = [
+                                        s for s in live_signals
+                                        if s.get('origin_config_id') == live_test_config_data['_config_id'] and s.get('verified')
+                                    ]
+                                    if config_signals:
+                                        # 按验证时间（如果不存在则按信号时间）降序排序，找到最新的一个
+                                        last_verified_signal = max(config_signals, key=lambda s: s.get('verify_time') or s.get('signal_time'))
+                                
+                                prev_trade_result = last_verified_signal.get('result') if last_verified_signal else None
+                                if last_verified_signal:
+                                    logger.info(f"Config ID {live_test_config_data['_config_id']}: 找到上一个已验证信号 {last_verified_signal.get('id')}, 结果: {prev_trade_result}")
+                                # --- 结束核心状态管理修改 ---
+
+                                # --- MODIFICATION FOR CURRENT BALANCE ---
+                                current_balance_for_calc = live_test_config_data.get('current_balance')
+                                if current_balance_for_calc is None:
+                                    current_balance_for_calc = live_inv_model.simulatedBalance
+                                if current_balance_for_calc is None:
+                                    if 'percentage' in inv_instance.name.lower():
+                                        logger.warning(f"Config ID {live_test_config_data['_config_id']}: 百分比策略缺少余额，将使用默认1000。")
+                                        current_balance_for_calc = 1000.0
+                                    else:
+                                        current_balance_for_calc = live_inv_model.amount
+                                # --- END MODIFICATION FOR CURRENT BALANCE ---
+                                
+                                inv_amount = inv_instance.calculate_investment(
+                                    current_balance=current_balance_for_calc,
+                                    previous_trade_result=prev_trade_result, # 传递真实的上一次交易结果
+                                    base_investment_from_settings=live_inv_model.amount
+                                )
+                                inv_amount = max(live_inv_model.minAmount, min(live_inv_model.maxAmount, inv_amount))
                         else: 
                             inv_amount = max(live_inv_model.minAmount, min(live_inv_model.maxAmount, live_inv_model.amount)) # Fallback
                     except Exception as e_inv_calc: 
@@ -1337,12 +1392,15 @@ async def websocket_endpoint(websocket: WebSocket):
         if current_active_config:
             # 将当前WebSocket关联到活动配置ID
             websocket_to_config_id_map[websocket] = current_active_config_id
+            # 在通过WebSocket发送前，移除不可序列化的策略实例
+            config_for_broadcast = current_active_config.copy()
+            config_for_broadcast.pop('investment_strategy_instance', None)
             # 发送活动配置信息给新连接的客户端
             await websocket.send_json({
                 "type": "active_config_notification",
                 "data": {
                     "config_id": current_active_config_id,
-                    "config": current_active_config,
+                    "config": config_for_broadcast,
                     "message": "当前有活动的测试配置"
                 }
             })
@@ -1397,8 +1455,11 @@ async def websocket_endpoint(websocket: WebSocket):
                         restored_config_data['total_profit_loss_amount'] = float(total_pnl_val)
                     
                     websocket_to_config_id_map[websocket] = client_config_id
-                    # 发送给客户端的 restored_config_data 将包含 current_balance 和 total_profit_loss_amount
-                    await websocket.send_json({"type": "session_restored", "data": {"config_id": client_config_id, "config_details": restored_config_data}})
+                    # 在通过WebSocket发送前，移除不可序列化的策略实例
+                    config_for_broadcast = restored_config_data.copy()
+                    config_for_broadcast.pop('investment_strategy_instance', None)
+                    # 发送给客户端的 config_for_broadcast 不再包含实例
+                    await websocket.send_json({"type": "session_restored", "data": {"config_id": client_config_id, "config_details": config_for_broadcast}})
                     # logger.info(f"会话已恢复 {client_config_id}，发送的 config_details: {json.dumps(ensure_json_serializable(restored_config_data), indent=2)}")
                 else:
                     await websocket.send_json({"type": "session_not_found", "data": {"config_id": client_config_id}})
@@ -1501,6 +1562,14 @@ async def websocket_endpoint(websocket: WebSocket):
                         "created_at": created_at_to_use
                     }
                     running_live_test_configs[new_config_id] = full_config_to_store
+                    
+                    # 创建并存储投资策略实例
+                    inv_instance = _create_and_store_investment_strategy_instance(full_config_to_store)
+                    if inv_instance:
+                        # 将实例直接添加到内存中的配置字典里
+                        running_live_test_configs[new_config_id]['investment_strategy_instance'] = inv_instance
+                    else:
+                        logger.error(f"未能为新配置 {new_config_id} 创建投资策略实例。")
 
                 websocket_to_config_id_map[websocket] = new_config_id
 
@@ -1509,8 +1578,11 @@ async def websocket_endpoint(websocket: WebSocket):
                         await start_kline_websocket_if_needed(new_symbol, new_interval)
                     # 保存活动配置到文件
                     await save_active_test_config()
-                    # 发送给客户端的 full_config_to_store 将包含 current_balance
-                    await websocket.send_json({"type": "config_set_confirmation", "data": {"success": True, "message": "运行时配置已应用。", "config_id": new_config_id, "applied_config": full_config_to_store}})
+                    # 在通过WebSocket发送前，移除不可序列化的策略实例
+                    config_for_broadcast = full_config_to_store.copy()
+                    config_for_broadcast.pop('investment_strategy_instance', None)
+                    # 发送给客户端的 config_for_broadcast 不再包含实例
+                    await websocket.send_json({"type": "config_set_confirmation", "data": {"success": True, "message": "运行时配置已应用。", "config_id": new_config_id, "applied_config": config_for_broadcast}})
                 except Exception as e_start_stream:
                     await websocket.send_json({"type": "error", "data": {"message": f"应用配置时启动K线流失败: {str(e_start_stream)}"}})
                     with running_live_test_configs_lock:

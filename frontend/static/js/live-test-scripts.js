@@ -663,12 +663,15 @@ const app = createApp({
                     applyingConfig.value = false; stoppingTest.value = false;
 
                     switch (message.type) {
-                        case "initial_signals": handleInitialSignals(message.data); break;
+                        case "initial_signals":
+                            console.log('Received initial_signals count:', message.data ? message.data.length : 'N/A (message.data is undefined)');
+                            handleInitialSignals(message.data); break;
                         case "initial_stats":
                         case "stats_update":
                             stats.value = { ...stats.value, ...message.data };
                             break;
                         case "new_signal":
+                            console.log('Received new_signal:', message.data);
                             handleNewSignal(message.data);
                             if (monitorSettings.value.enableSound) playSound();
                             break;
@@ -1069,6 +1072,7 @@ const app = createApp({
         };
         
         const handleInitialSignals = (signalsArray) => { // 修改: 不再预排序和切片
+            console.log('handleInitialSignals received signals count:', signalsArray ? signalsArray.length : 'N/A (signalsArray is undefined)');
             if (!Array.isArray(signalsArray)) {
                 liveSignals.value = []; return;
             }
@@ -1100,6 +1104,7 @@ const app = createApp({
         };
         
         const handleNewSignal = (signalData) => {
+            console.log('handleNewSignal received signal:', signalData);
             console.log("LiveTest: Raw signal data received:", signalData); // Add this line
             const newSignal = sanitizeSignal(signalData);
             console.log("LiveTest: Sanitized signal data:", newSignal); // Add this line
