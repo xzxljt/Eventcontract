@@ -47,10 +47,6 @@
                                     <span v-if="applyingConfig" class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
                                     {{ applyingConfig ? '应用中...' : (currentConfigId ? '更新后台配置' : '启动新后台监控') }}
                                 </button>
-                                <button class="btn btn-warning" @click="triggerTestSignal" :disabled="!currentConfigId || isSendingTestSignal">
-                                    <span v-if="isSendingTestSignal" class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
-                                    <i class="bi bi-lightning-charge-fill"></i> 触发测试信号
-                                </button>
                                 <button type="button" class="btn btn-danger" @click="stopCurrentTest"
                                         :disabled="socketStatus !== 'connected' || !currentConfigId || stoppingTest">
                                      <span v-if="stoppingTest" class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
