@@ -353,6 +353,12 @@
                                                      :class="['pnl-value', getPnlClass(dayObj.pnl)]">
                                                     {{ dayObj.pnl?.toFixed(2) }}
                                                 </div>
+
+                                                <!-- 新增：显示每日回报率 -->
+                                                <div v-if="dayObj.daily_return_pct !== undefined"
+                                                     :class="['daily-return-pct', getPnlClass(dayObj.daily_return_pct)]"> <!-- 复用 getPnlClass 来决定颜色 -->
+                                                    {{ dayObj.daily_return_pct > 0 ? '+' : '' }}{{ dayObj.daily_return_pct?.toFixed(2) }}%
+                                                </div>
                                                 <!-- 显示交易笔数，仅当大于0时 -->
                                                 <div v-if="dayObj.trades !== undefined && dayObj.trades > 0"
                                                      class="trades-count">

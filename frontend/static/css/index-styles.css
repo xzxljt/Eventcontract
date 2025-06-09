@@ -168,3 +168,9 @@
     background-color: #F8F9FA !important; /* Consistent light bg */
     border-radius: var(--border-radius-base);
 }
+.daily-return-pct {
+    font-size: 0.7rem;
+    font-weight: normal;
+    line-height: 1.1;
+    margin-top: 2px;
+}

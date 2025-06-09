@@ -315,7 +315,8 @@ class Backtester:
                             daily_pnl_summary[current_event_date.strftime('%Y-%m-%d')] = {
                                 'pnl': 0.0,
                                 'trades': 0,
-                                'balance': round(self.initial_balance, 2) # 如果没有交易，每日余额设为初始余额
+                                'balance': round(self.initial_balance, 2), # 如果没有交易，每日余额设为初始余额
+                                'daily_return_pct': 0.0
                             }
                             current_event_date += timedelta(days=1)
                 except Exception as e:
@@ -442,12 +443,23 @@ class Backtester:
                     # 向前填充以处理可能因其他原因（理论上不应发生）导致的中间NaN
                     daily_summary_reindexed['balance'] = daily_summary_reindexed['balance'].ffill()
 
+                    # 计算前一天的余额
+                    previous_day_balance = daily_summary_reindexed['balance'].shift(1).fillna(self.initial_balance)
+
+                    # 计算每日回报率百分比，避免除以零的错误
+                    daily_summary_reindexed['daily_return_pct'] = np.where(
+                        previous_day_balance > 0,
+                        ((daily_summary_reindexed['balance'] - previous_day_balance) / previous_day_balance) * 100,
+                        0.0 # 如果前一天余额为0，则回报率为0
+                    )
+
                     # 将处理后的每日摘要存入 daily_pnl_summary 字典
                     for date_index, row_data in daily_summary_reindexed.iterrows():
                         daily_pnl_summary[date_index.strftime('%Y-%m-%d')] = {
                             'pnl': round(row_data['pnl'], 2),
                             'trades': int(row_data['trades']),
-                            'balance': round(row_data['balance'], 2) if pd.notna(row_data['balance']) else round(self.initial_balance, 2) # 添加余额，如果仍为NaN则用初始余额
+                            'balance': round(row_data['balance'], 2) if pd.notna(row_data['balance']) else round(self.initial_balance, 2), # 添加余额，如果仍为NaN则用初始余额
+                            'daily_return_pct': round(row_data['daily_return_pct'], 2) if pd.notna(row_data['daily_return_pct']) else 0.0
                         }
                 else: # 如果 'predictions' 列表为空或不包含有效日期 (理论上不太可能在此阶段进入)
                     for date_index, row_data in daily_summary_raw.iterrows(): # 直接使用原始的每日摘要

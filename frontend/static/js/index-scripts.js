@@ -560,7 +560,7 @@ const app = createApp({
 
             const weeksArray = []; let currentWeek = [];
             // 用空白对象填充月初的空白单元格
-            for (let i = 0; i < startDayOfWeek; i++) currentWeek.push({ day: '', pnl: undefined, trades: undefined, balance: undefined, isCurrentMonth: false }); // 修改：确保 pnl, trades, balance 为 undefined
+            for (let i = 0; i < startDayOfWeek; i++) currentWeek.push({ day: '', pnl: undefined, trades: undefined, balance: undefined, daily_return_pct: undefined, isCurrentMonth: false }); // 修改：确保 pnl, trades, balance 为 undefined
             
             const todayDate = new Date();
             const todayStr = `${todayDate.getFullYear()}-${String(todayDate.getMonth() + 1).padStart(2, '0')}-${String(todayDate.getDate()).padStart(2, '0')}`;
@@ -569,11 +569,12 @@ const app = createApp({
                 const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
                 const pnlData = dailyPnl[dateStr];
                 currentWeek.push({
-                    day: day, 
-                    pnl: pnlData?.pnl, 
+                    day: day,
+                    pnl: pnlData?.pnl,
                     trades: pnlData?.trades,
                     balance: pnlData?.balance, // <--- 新增：获取每日余额
-                    isCurrentMonth: true, 
+                    daily_return_pct: pnlData?.daily_return_pct,
+                    isCurrentMonth: true,
                     dateString: dateStr,
                     isToday: dateStr === todayStr
                 });
@@ -581,7 +582,7 @@ const app = createApp({
             }
             if (currentWeek.length > 0) {
                 // 用空白对象填充月末的空白单元格
-                while (currentWeek.length < 7) currentWeek.push({ day: '', pnl: undefined, trades: undefined, balance: undefined, isCurrentMonth: false }); // 修改：确保 pnl, trades, balance 为 undefined
+                while (currentWeek.length < 7) currentWeek.push({ day: '', pnl: undefined, trades: undefined, balance: undefined, daily_return_pct: undefined, isCurrentMonth: false }); // 修改：确保 pnl, trades, balance 为 undefined
                 weeksArray.push(currentWeek);
             }
             calendarView.value.weeks = weeksArray;
