@@ -1660,7 +1660,10 @@ async def websocket_endpoint(websocket: WebSocket):
 # --- WebSocket 端点 for AutoX Clients (/ws/autox_control) (确保保存操作是异步的) ---
 @app.websocket("/ws/autox_control")
 async def autox_websocket_endpoint(websocket: WebSocket):
+    # 在 accept 之前，我们不能确定这个连接的身份
+    logger.info(f"新的 AutoX WebSocket 连接请求进入，等待 accept... (Client: {websocket.client.host}:{websocket.client.port})")
     await autox_manager.connect(websocket)
+    logger.info(f"AutoX WebSocket 连接已 accept。 (Client: {websocket.client.host}:{websocket.client.port})")
     client_id_local: Optional[str] = None # 用于在 finally 中记录
     
     try:
@@ -1693,16 +1696,17 @@ async def autox_websocket_endpoint(websocket: WebSocket):
                                 old_ws_to_close = None
                                 for ws_iter, active_info_iter in active_autox_clients.items():
                                     if active_info_iter.get('client_id') == client_id_local and ws_iter != websocket:
-                                        print(f"AutoX客户端 {client_id_local} 重复连接 (不同WebSocket)，准备关闭旧连接。")
+                                        logger.warning(f"AutoX客户端 {client_id_local} 重复连接 (不同WebSocket)，准备关闭旧连接。")
                                         old_ws_to_close = ws_iter
                                         break
                                 
                                 if old_ws_to_close:
-                                    try:
-                                        await old_ws_to_close.close(code=1000, reason="New connection for this client_id")
-                                    except Exception: pass
+                                    logger.info(f"开始处理旧连接的关闭流程 for client {client_id_local}...")
+                                    # 不直接调用 close()，因为它可能在另一个任务中已经被关闭
+                                    # 而是从我们的管理器中移除它，让 FastAPI/Starlette 的底层来处理物理关闭
                                     autox_manager.disconnect(old_ws_to_close)
                                     active_autox_clients.pop(old_ws_to_close, None)
+                                    logger.info(f"旧的 WebSocket 对象 for client {client_id_local} 已从 active_autox_clients 和 autox_manager 中移除。")
 
                                 if existing_persistent_info:
                                     final_notes = client_notes_from_payload if client_notes_from_payload is not None else existing_persistent_info.get('notes')
@@ -1879,24 +1883,29 @@ async def autox_websocket_endpoint(websocket: WebSocket):
                 except: pass # Ignore errors sending error message
                 break # Exit the loop on other exceptions
     finally:
-        autox_manager.disconnect(websocket) 
-        disconnected_client_id = None
-        with autox_clients_lock: 
-            client_info_at_disconnect = active_autox_clients.pop(websocket, None) 
-            if client_info_at_disconnect:
-                disconnected_client_id = client_info_at_disconnect.get('client_id')
-                print(f"AutoX客户端 {disconnected_client_id or '未知'} 已从活动列表移除。")
-                
-                if disconnected_client_id and disconnected_client_id in persistent_autox_clients_data:
-                    # 当客户端断开连接时，我们将其在持久化存储中的状态标记为'offline'
-                    # 这样UI可以明确显示其离线，并且派单逻辑也不会选择它。
-                    # last_signal_id 在这里通常不清除，以便查看它离线前处理的最后一个信号。
-                    persistent_autox_clients_data[disconnected_client_id]['status'] = 'offline' 
-                    persistent_autox_clients_data[disconnected_client_id]['last_seen'] = now_utc().isoformat() 
-        
-        if disconnected_client_id: 
-            await debounced_broadcast_autox_clients_status()
-            await save_autox_clients_to_file()
+       logger.info(f"进入 autox_websocket_endpoint 的 finally 块 (Client: {client_id_local or f'{websocket.client.host}:{websocket.client.port}'})")
+       autox_manager.disconnect(websocket)
+       disconnected_client_id = None
+       with autox_clients_lock:
+           client_info_at_disconnect = active_autox_clients.pop(websocket, None)
+           if client_info_at_disconnect:
+               disconnected_client_id = client_info_at_disconnect.get('client_id')
+               logger.info(f"AutoX客户端 {disconnected_client_id or '未知'} 已从活动列表移除。")
+               
+               if disconnected_client_id and disconnected_client_id in persistent_autox_clients_data:
+                   # 当客户端断开连接时，我们将其在持久化存储中的状态标记为'offline'
+                   # 这样UI可以明确显示其离线，并且派单逻辑也不会选择它。
+                   # last_signal_id 在这里通常不清除，以便查看它离线前处理的最后一个信号。
+                   persistent_autox_clients_data[disconnected_client_id]['status'] = 'offline'
+                   persistent_autox_clients_data[disconnected_client_id]['last_seen'] = now_utc().isoformat()
+           else:
+               logger.warning(f"在 finally 块中，未在 active_autox_clients 中找到当前 websocket (Client: {client_id_local or 'N/A'})")
+
+       
+       if disconnected_client_id:
+           await debounced_broadcast_autox_clients_status()
+           await save_autox_clients_to_file()
+       logger.info(f"autox_websocket_endpoint 的 finally 块执行完毕 (Client: {client_id_local or 'N/A'})")
  
  
   
