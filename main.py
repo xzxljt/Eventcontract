@@ -245,6 +245,7 @@ class InvestmentStrategySettings(BaseModel):
     profitRate: float = Field(80.0, description="事件合约获胜收益率 (%)")
     lossRate: float = Field(100.0, description="事件合约失败损失率 (%)")
     simulatedBalance: Optional[float] = Field(None, description="模拟账户总资金 (用于百分比投资策略计算)")
+    min_trade_interval_minutes: Optional[float] = Field(0, description="最小开单间隔（分钟），0表示不限制")
 
 
 class BacktestInvestmentSettings(BaseModel):
@@ -256,6 +257,7 @@ class BacktestInvestmentSettings(BaseModel):
     max_investment_amount: float = Field(250.0, description="单次最大投资额")
     profit_rate_pct: float = Field(80.0, description="事件合约盈利百分比 (%)")
     loss_rate_pct: float = Field(100.0, description="事件合约亏损百分比 (%)")
+    min_trade_interval_minutes: Optional[float] = Field(0, description="最小开单间隔（分钟），0表示不限制")
 
 class BacktestRequest(BaseModel):
     model_config = {'arbitrary_types_allowed': True} # 允许任意类型
@@ -1002,7 +1004,7 @@ async def handle_kline_data(kline_data: dict):
                 binance_client.get_historical_klines,
                 live_test_config_data['symbol'],
                 live_test_config_data['interval'],
-                None, None, 100 
+                None, None, 100
             )
             
             if df_klines.empty:
@@ -1017,7 +1019,7 @@ async def handle_kline_data(kline_data: dict):
             signal_df = pred_strat_info['class'](params=final_pred_params).generate_signals(df_klines.copy()) # 策略计算（如 generate_signals）通常是CPU密集型操作。如果耗时较长，建议后续使用 await asyncio.to_thread() 将其移出事件循环执行，以避免阻塞。
             
             if signal_df.empty or 'signal' not in signal_df.columns or 'confidence' not in signal_df.columns:
-                continue 
+                continue
             
             latest_sig_data = signal_df.iloc[-1]
             sig_val = int(latest_sig_data.get('signal', 0))
@@ -1025,13 +1027,31 @@ async def handle_kline_data(kline_data: dict):
             current_confidence_threshold = live_test_config_data.get('confidence_threshold', 0)
 
             if sig_val != 0 and conf_val >= current_confidence_threshold:
+                sig_time_dt = now_utc()
+                
+                # --- 新增：最小开单间隔检查 ---
+                min_interval_minutes = live_test_config_data.get("investment_settings", {}).get("min_trade_interval_minutes", 0)
+                if min_interval_minutes > 0:
+                    last_actual_trade_time = None
+                    with live_signals_lock:
+                        # 倒序查找属于同一个配置的、投资额大于0的最近一笔信号
+                        for s in reversed(live_signals):
+                            if s.get('origin_config_id') == live_test_config_data['_config_id'] and s.get('investment_amount', 0) > 0:
+                                last_actual_trade_time = parse_frontend_datetime(s.get('signal_time'))
+                                break
+                    
+                    if last_actual_trade_time:
+                        time_diff_minutes = (sig_time_dt - last_actual_trade_time).total_seconds() / 60
+                        if time_diff_minutes < min_interval_minutes:
+                            logger.info(f"信号 (Config: {live_test_config_data['_config_id']}) 被最小开单间隔规则跳过。间隔: {time_diff_minutes:.2f} < {min_interval_minutes} 分钟。")
+                            return # 直接返回，彻底忽略此信号
+
                 event_period_minutes = {'10m': 10, '30m': 30, '1h': 60, '1d': 1440}.get(
                     live_test_config_data.get("event_period", "10m"), 10
                 )
                 
-                sig_time_dt = now_utc() 
                 exp_end_time_dt = sig_time_dt + timedelta(minutes=event_period_minutes)
-                sig_price = float(latest_sig_data['close']) 
+                sig_price = float(latest_sig_data['close'])
                 
                 inv_amount = 20.0; profit_pct = 80.0; loss_pct = 100.0
                 inv_settings_from_config = live_test_config_data.get("investment_settings")
@@ -1046,9 +1066,9 @@ async def handle_kline_data(kline_data: dict):
                         inv_strat_def_cfg = next((s for s in get_available_investment_strategies() if s['id'] == inv_strat_id_cfg), None)
                         default_inv_params_from_def = {}
                         if inv_strat_def_cfg and 'parameters' in inv_strat_def_cfg:
-                            default_inv_params_from_def = { 
-                                p['name']: p['default'] for p in inv_strat_def_cfg['parameters'] 
-                                if not p.get('readonly') and p.get('name') not in ['amount', 'minAmount', 'maxAmount'] 
+                            default_inv_params_from_def = {
+                                p['name']: p['default'] for p in inv_strat_def_cfg['parameters']
+                                if not p.get('readonly') and p.get('name') not in ['amount', 'minAmount', 'maxAmount']
                             }
                         # 2. 全局保存的该投资策略参数
                         final_inv_calc_params_from_global = strategy_parameters_config.get("investment_strategies", {}).get(inv_strat_id_cfg, {})
@@ -1113,9 +1133,9 @@ async def handle_kline_data(kline_data: dict):
                                     base_investment_from_settings=live_inv_model.amount
                                 )
                                 inv_amount = max(live_inv_model.minAmount, min(live_inv_model.maxAmount, inv_amount))
-                        else: 
+                        else:
                             inv_amount = max(live_inv_model.minAmount, min(live_inv_model.maxAmount, live_inv_model.amount)) # Fallback
-                    except Exception as e_inv_calc: 
+                    except Exception as e_inv_calc:
                         print(f"实时信号投资金额计算错误 (Config ID: {live_test_config_data['_config_id']}): {e_inv_calc}\n{traceback.format_exc()}")
                         inv_amount = live_test_config_data.get("investment_settings", {}).get("amount", 20.0)
 
@@ -1123,11 +1143,11 @@ async def handle_kline_data(kline_data: dict):
                 
                 new_live_signal = {
                     'id': signal_id_str,
-                    'symbol': live_test_config_data['symbol'], 'interval': live_test_config_data['interval'], 
-                    'prediction_strategy_id': pred_strat_id, 
-                    'prediction_strategy_params': final_pred_params, 
+                    'symbol': live_test_config_data['symbol'], 'interval': live_test_config_data['interval'],
+                    'prediction_strategy_id': pred_strat_id,
+                    'prediction_strategy_params': final_pred_params,
                     'signal_time': format_for_display(sig_time_dt),
-                    'signal': sig_val, 'confidence': round(conf_val, 2), 
+                    'signal': sig_val, 'confidence': round(conf_val, 2),
                     'signal_price': sig_price, 'event_period': live_test_config_data.get("event_period", "10m"),
                     'expected_end_time': format_for_display(exp_end_time_dt),
                     'investment_amount': round(inv_amount, 2),
@@ -1172,18 +1192,18 @@ async def handle_kline_data(kline_data: dict):
                 AUTOX_GLOBAL_ENABLED = True
 
                 if should_trigger_autox and AUTOX_GLOBAL_ENABLED:
-                    clients_to_send_command_to = [] 
-                    with autox_clients_lock: 
+                    clients_to_send_command_to = []
+                    with autox_clients_lock:
                         for ws_client, client_info_dict in active_autox_clients.items():
                             if client_info_dict.get('status') == 'idle' and \
                                new_live_signal['symbol'] in client_info_dict.get('supported_symbols', []):
-                                client_info_dict['status'] = 'processing_trade' 
+                                client_info_dict['status'] = 'processing_trade'
                                 client_info_dict['last_signal_id'] = new_live_signal['id']
                                 target_client_id = client_info_dict.get('client_id')
                                 trade_command_payload = {
                                     "signal_id": new_live_signal['id'], "symbol": new_live_signal['symbol'],
                                     "direction": "up" if new_live_signal['signal'] == 1 else "down",
-                                    "amount": str(new_live_signal['investment_amount']), 
+                                    "amount": str(new_live_signal['investment_amount']),
                                     "timestamp": new_live_signal['signal_time']
                                 }
                                 command_to_send = {"type": "execute_trade", "payload": trade_command_payload}
@@ -1197,7 +1217,7 @@ async def handle_kline_data(kline_data: dict):
                                 _send_autox_command(client_trigger_details["ws"], client_trigger_details["command"])
                             )
                             new_live_signal['autox_triggered_info'].append({
-                                "client_id": client_trigger_details["client_id"], 
+                                "client_id": client_trigger_details["client_id"],
                                 "sent_at": format_for_display(now_utc()), "status": "command_sent"
                             })
                         if tasks_for_sending:
@@ -1209,10 +1229,10 @@ async def handle_kline_data(kline_data: dict):
                         new_live_signal['autox_triggered_info'] = {"status": "no_available_client_for_broadcast"}
 
                 with live_signals_lock: live_signals.append(new_live_signal)
-                await save_live_signals_async() 
+                await save_live_signals_async()
                 
                 num_triggered = 0
-                if isinstance(new_live_signal.get('autox_triggered_info'), list): 
+                if isinstance(new_live_signal.get('autox_triggered_info'), list):
                     num_triggered = len(new_live_signal['autox_triggered_info'])
                 
                 print(f"有效交易信号 (Config ID: {live_test_config_data['_config_id']}): ID={new_live_signal['id']}, 交易对={new_live_signal['symbol']}_{new_live_signal['interval']}, 方向={'上涨' if new_live_signal['signal'] == 1 else '下跌'}, 置信度={new_live_signal['confidence']:.2f}, 投资额={new_live_signal['investment_amount']:.2f}, AutoX触发客户端数: {num_triggered}")
@@ -2096,32 +2116,28 @@ async def run_backtest_endpoint(request: BacktestRequest):
             if inv_def_info and 'parameters' in inv_def_info: 
                 final_inv_params = {p['name']: p['default'] for p in inv_def_info['parameters'] if not p.get('readonly')}
 
-        investment_args_dict = request.investment.model_dump(exclude={'investment_strategy_id', 'investment_strategy_specific_params'})
+        # investment_args_dict = request.investment.model_dump(exclude={'investment_strategy_id', 'investment_strategy_specific_params'})
 
         # --- 修改：将 Backtester 实例化和 run() 移至线程池 ---
-        # 需要一个辅助函数来执行这部分，因为它涉及多个步骤
-        def _run_backtest_blocking(df, strategy_instance, event_period, confidence_threshold, inv_strategy_id, inv_strategy_params, **inv_args_dict):
-            backtester_instance = Backtester(
-                df=df, 
-                strategy=strategy_instance, 
-                event_period=event_period, 
-                confidence_threshold=confidence_threshold, 
-                investment_strategy_id=inv_strategy_id, 
-                investment_strategy_params=inv_strategy_params or {}, 
-                **inv_args_dict
+        def _run_backtest_in_thread():
+            """在单独的线程中运行回测以避免阻塞事件循环。"""
+            backtester = Backtester(
+                df=df_klines.copy(),
+                strategy=prediction_instance,
+                event_period=request.event_period,
+                confidence_threshold=request.confidence_threshold,
+                investment_strategy_id=inv_id,
+                investment_strategy_params=final_inv_params or {},
+                initial_balance=request.investment.initial_balance,
+                profit_rate_pct=request.investment.profit_rate_pct,
+                loss_rate_pct=request.investment.loss_rate_pct,
+                min_investment_amount=request.investment.min_investment_amount,
+                max_investment_amount=request.investment.max_investment_amount,
+                min_trade_interval_minutes=request.investment.min_trade_interval_minutes
             )
-            return backtester_instance.run()
+            return backtester.run()
 
-        results_data = await asyncio.to_thread(
-            _run_backtest_blocking,
-            df_klines.copy(), # 传递DataFrame副本
-            prediction_instance, # 策略实例已创建
-            request.event_period,
-            request.confidence_threshold,
-            inv_id,
-            final_inv_params or {},
-            **investment_args_dict
-        )
+        results_data = await asyncio.to_thread(_run_backtest_in_thread)
         # --- 结束修改 ---
 
         # 结果处理（同步，但通常很快）

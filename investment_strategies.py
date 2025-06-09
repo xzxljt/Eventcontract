@@ -209,15 +209,14 @@ class PercentageStreakMultiplierStrategy(BaseInvestmentStrategy):
         previous_trade_result: Optional[bool] = None,
         base_investment_from_settings: float = 20.0 
     ) -> float:
-        if previous_trade_result is True:
+        if previous_trade_result == True:
             self.win_streak += 1
             self.loss_streak = 0
-        elif previous_trade_result is False:
+        elif previous_trade_result == False:
             self.loss_streak += 1
             self.win_streak = 0
         elif previous_trade_result is None: # 首次交易或状态重置后
-            self.win_streak = 0
-            self.loss_streak = 0
+            pass # 保持当前的连胜/连败计数
 
         if current_balance <= 0:
             base_investment = 0.0

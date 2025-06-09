@@ -22,7 +22,8 @@ class Backtester:
                  max_investment_amount: float = 250.0,
                  kline_fetch_limit_for_signal: int = 100,
                  use_close_for_end_price: bool = True,
-                 slippage_pct: float = 0.000002 # 默认滑点比例 (0.002%)
+                 slippage_pct: float = 0.000002, # 默认滑点比例 (0.002%)
+                 min_trade_interval_minutes: float = 0
                 ):
         self.df = df.copy() # 原始数据副本
         self.strategy = strategy
@@ -34,6 +35,7 @@ class Backtester:
         self.kline_fetch_limit_for_signal = kline_fetch_limit_for_signal
         self.use_close_for_end_price = use_close_for_end_price
         self.slippage_pct = slippage_pct
+        self.min_trade_interval_minutes = min_trade_interval_minutes
 
         available_inv_strategies = get_available_investment_strategies()
         inv_strategy_info = next((s for s in available_inv_strategies if s['id'] == investment_strategy_id), None)
@@ -81,224 +83,211 @@ class Backtester:
             print("错误: DataFrame 为空，无法运行回测。")
             return self._calculate_statistics([], 0.0, 0, 0)
 
-        # 确保索引是 DatetimeIndex 并且是单调递增的
         if not isinstance(self.df.index, pd.DatetimeIndex):
             try:
                 self.df.index = pd.to_datetime(self.df.index)
                 print("DataFrame 索引已转换为 DatetimeIndex。")
             except Exception as e:
                 print(f"错误: DataFrame 索引无法转换为 DatetimeIndex: {e}")
-                return self._calculate_statistics([], 0.0, 0, 0) # 如果转换失败，返回空统计
+                return self._calculate_statistics([], 0.0, 0, 0)
 
         if not self.df.index.is_monotonic_increasing:
             print("警告: DataFrame 索引未排序，正在排序...")
             self.df.sort_index(inplace=True)
 
-        # --- 性能优化：一次性计算所有指标 ---
-        # 某些策略可能需要基于整个历史数据集来计算指标（例如某些类型的趋势线）
-        # 而另一些策略可能只关心当前窗口。这里的 calculate_all_indicators 应该能处理这两种情况。
-        # 如果策略的指标计算不依赖于“未来”数据（即只用当前及之前的数据），这是安全的。
         print(f"Backtester: 开始全局计算指标 (策略: {self.strategy.name})...")
         try:
-            # 传递 df 的副本以避免策略内部修改原始数据
             self.df_with_indicators = self.strategy.calculate_all_indicators(self.df.copy())
-            print(f"Backtester: 全局指标计算完成。DataFrame列: {self.df_with_indicators.columns.tolist()}")
+            print(f"Backtester: 全局指标计算完成。")
         except Exception as e_calc_all:
             print(f"错误: 全局计算指标时失败: {e_calc_all}")
             import traceback
             traceback.print_exc()
             return self._calculate_statistics([], 0.0, 0, 0)
 
+        # 初始化状态变量
+        predictions = []
+        pending_trades = []
+        current_balance = self.initial_balance
+        peak_balance = self.initial_balance
+        max_drawdown = 0.0
+        self.investment_strategy.reset_state()
+        last_trade_result: Optional[bool] = None
+        consecutive_wins = 0
+        max_consecutive_wins = 0
+        consecutive_losses = 0
+        max_consecutive_losses = 0
+        last_actual_trade_time: Optional[datetime] = None
 
-        predictions = [] # 存储所有预测和交易结果的列表
-        current_balance = self.initial_balance # 当前账户余额
-        peak_balance = self.initial_balance # 用于计算最大回撤的峰值余额
-        max_drawdown = 0.0 # 最大回撤比例
-
-        self.investment_strategy.reset_state() # 重置投资策略的内部状态（例如马丁格尔序列）
-        last_trade_result: Optional[bool] = None # 上一次交易的结果 (True for win, False for loss)
-        consecutive_wins = 0; max_consecutive_wins = 0 # 连胜统计
-        consecutive_losses = 0; max_consecutive_losses = 0 # 连败统计
-
-        # 策略生成信号所需的最小历史K线条数，减去1是因为窗口本身包含当前K线
-        min_data_for_signal_logic = getattr(self.strategy, 'min_history_periods', 2) # 策略可以定义这个值，默认为2
-        # 确定回测开始的索引位置。需要足够的历史数据来填充第一个信号生成窗口。
-        # self.kline_fetch_limit_for_signal 是模拟实时获取K线时，每次用于生成信号的窗口大小。
-        start_index = self.kline_fetch_limit_for_signal -1
+        min_data_for_signal_logic = getattr(self.strategy, 'min_history_periods', 2)
+        start_index = self.kline_fetch_limit_for_signal - 1
 
         if start_index >= len(self.df_with_indicators):
             print(f"错误: 数据量 ({len(self.df_with_indicators)}) 不足以形成一个大小为 {self.kline_fetch_limit_for_signal} 的信号生成窗口。")
             return self._calculate_statistics([], 0.0, 0, 0)
 
         print(f"Backtester: 开始逐K线评估信号 (窗口大小: {self.kline_fetch_limit_for_signal}). 将从索引 {start_index} 开始评估。")
-        num_signals_evaluated = 0 # 评估了多少个K线（时间点）
-        num_valid_signals_found = 0 # 找到了多少个满足置信度的有效预测
+        num_signals_evaluated = 0
+        num_valid_signals_found = 0
 
-        # 从 start_index 开始遍历整个带有指标的 DataFrame
+        # 主循环
         for i in range(start_index, len(self.df_with_indicators)):
-            num_signals_evaluated += 1
-            current_kline_time = self.df_with_indicators.index[i] # 当前K线的时间戳（通常是K线开始时间）
+            current_kline_time = self.df_with_indicators.index[i]
+            state_updated_this_step = False # 标记本轮K线中，投资策略的状态是否已被更新
+            
+            # 1. 处理已结算的交易
+            settled_trades_this_step = []
+            remaining_pending_trades = []
+            
+            # 按预期结束时间排序，确保按时序处理
+            pending_trades.sort(key=lambda x: x['end_time_expected'])
 
-            # 构建当前用于生成信号的K线窗口
-            # 窗口的起始位置是 i - self.kline_fetch_limit_for_signal + 1
-            # 窗口的结束位置是 i (包含当前K线)
+            for trade in pending_trades:
+                if trade['end_time_expected'] <= current_kline_time:
+                    # 查找结算价格
+                    future_kline_index_pos = self.df_with_indicators.index.searchsorted(trade['end_time_expected'], side='left')
+                    
+                    if future_kline_index_pos < len(self.df_with_indicators):
+                        actual_end_kline_row = self.df_with_indicators.iloc[future_kline_index_pos]
+                        end_price = actual_end_kline_row['close'] if self.use_close_for_end_price else actual_end_kline_row['open']
+                        actual_end_time_obj = self.df_with_indicators.index[future_kline_index_pos]
+                        
+                        price_change_pct = (end_price - trade['effective_signal_price_for_calc']) / trade['effective_signal_price_for_calc'] * 100 if trade['effective_signal_price_for_calc'] != 0 else 0
+                        
+                        prediction_correct = (trade['signal'] == 1 and price_change_pct > 0) or \
+                                             (trade['signal'] == -1 and price_change_pct < 0)
+                        
+                        pnl_amount = 0.0
+                        if prediction_correct:
+                            pnl_amount = trade['investment_amount'] * self.profit_rate
+                            consecutive_wins += 1
+                            consecutive_losses = 0
+                            max_consecutive_wins = max(max_consecutive_wins, consecutive_wins)
+                        else:
+                            pnl_amount = - (trade['investment_amount'] * self.loss_rate)
+                            consecutive_losses += 1
+                            consecutive_wins = 0
+                            max_consecutive_losses = max(max_consecutive_losses, consecutive_losses)
+                        
+                        current_balance += pnl_amount
+                        last_trade_result = prediction_correct
+                        state_updated_this_step = True
+
+                        # 立即通知投资策略以更新其内部状态（例如，连胜/连败计数）。
+                        # 我们调用此方法主要是为了其更新状态的副作用，而非获取返回值。
+                        self.investment_strategy.calculate_investment(
+                            current_balance=current_balance,
+                            previous_trade_result=last_trade_result
+                        )
+
+                        if current_balance > peak_balance: peak_balance = current_balance
+                        drawdown = (peak_balance - current_balance) / peak_balance if peak_balance > 0 else 0.0
+                        if drawdown > max_drawdown: max_drawdown = drawdown
+
+                        trade.update({
+                            'end_time_actual': actual_end_time_obj,
+                            'end_price': float(end_price),
+                            'price_change_pct': float(price_change_pct),
+                            'result': prediction_correct,
+                            'pnl_amount': float(round(pnl_amount, 2)),
+                            'balance_after_trade': float(round(current_balance, 2)),
+                        })
+                        predictions.append(trade)
+                    else:
+                        # 无法结算，保留在待处理列表或单独处理
+                        trade.update({'result': None, 'pnl_amount': 0.0, 'balance_after_trade': current_balance})
+                        predictions.append(trade) # 添加到最终结果，但标记为未验证
+                else:
+                    remaining_pending_trades.append(trade)
+
+            pending_trades = remaining_pending_trades
+
+            # 如果余额耗尽，提前结束
+            if current_balance <= 0 and self.initial_balance > 0:
+                print(f"余额耗尽在 {current_kline_time.strftime('%Y-%m-%d %H:%M:%S')}。停止回测。")
+                break
+
+            # 2. 生成新信号
+            num_signals_evaluated += 1
             window_start_iloc = i - self.kline_fetch_limit_for_signal + 1
             df_window = self.df_with_indicators.iloc[window_start_iloc : i + 1]
 
-            # 确保窗口数据量满足策略的最小需求
-            if len(df_window) < min_data_for_signal_logic:
-                continue # 跳过这个时间点，因为数据不足
+            if len(df_window) < min_data_for_signal_logic: continue
 
-            # 使用策略在当前窗口上生成信号
-            # generate_signals_from_indicators_on_window 是一个优化方法，
-            # 它假设指标已在 df_with_indicators 中，只在小窗口上应用信号逻辑。
             try:
                 temp_signal_df_window = self.strategy.generate_signals_from_indicators_on_window(df_window.copy())
             except Exception as e_strat_win:
-                print(f"警告: 在 {current_kline_time} 为窗口数据生成信号时策略出错 (优化路径): {e_strat_win}")
-                continue # 如果策略出错，跳过这个时间点
-
-            # 检查策略返回的信号DataFrame是否有效
-            if temp_signal_df_window.empty or \
-               'signal' not in temp_signal_df_window.columns or \
-               'confidence' not in temp_signal_df_window.columns:
-                continue # 如果没有信号或置信度列，跳过
-
-            # 确保策略返回的DataFrame长度与输入窗口一致
-            if len(temp_signal_df_window) != len(df_window):
-                # 这是一个潜在问题，因为我们期望信号是针对窗口中的每一条K线（尤其是最后一条）
-                print(f"警告: 策略 {self.strategy.name} 的 generate_signals_from_indicators_on_window 返回的DataFrame长度 ({len(temp_signal_df_window)}) 与输入窗口 ({len(df_window)}) 不匹配。")
+                print(f"警告: 在 {current_kline_time} 为窗口数据生成信号时策略出错: {e_strat_win}")
                 continue
 
-            # 获取当前K线（即窗口的最后一条K线）的信号数据
-            signal_data_for_current_kline = temp_signal_df_window.iloc[-1]
-            signal_val = int(signal_data_for_current_kline.get('signal', 0)) # 信号方向: 1 (做多), -1 (做空), 0 (无信号)
-            confidence_val = float(signal_data_for_current_kline.get('confidence', 0.0)) # 信号置信度
+            if temp_signal_df_window.empty or 'signal' not in temp_signal_df_window.columns or 'confidence' not in temp_signal_df_window.columns:
+                continue
+            
+            if len(temp_signal_df_window) != len(df_window):
+                print(f"警告: 策略 {self.strategy.name} 返回的DataFrame长度与输入窗口不匹配。")
+                continue
 
-            # 如果没有信号或置信度低于阈值，则忽略
+            signal_data = temp_signal_df_window.iloc[-1]
+            signal_val = int(signal_data.get('signal', 0))
+            confidence_val = float(signal_data.get('confidence', 0.0))
+
             if signal_val == 0 or confidence_val < self.confidence_threshold:
                 continue
 
-            num_valid_signals_found += 1 # 有效预测信号计数增加
-            current_kline_data_row = self.df_with_indicators.iloc[i] # 获取当前K线的完整数据行
+            # 3. 创建新交易并添加到待处理列表
+            num_valid_signals_found += 1
 
-            signal_time_obj = current_kline_time # 信号发生时间
-            signal_price_original = current_kline_data_row['close'] # 信号发生时的价格（使用收盘价）
+            # --- 新增：最小开单间隔检查 ---
+            if self.min_trade_interval_minutes > 0 and last_actual_trade_time is not None:
+                time_diff = (current_kline_time - last_actual_trade_time).total_seconds() / 60
+                if time_diff < self.min_trade_interval_minutes:
+                    # print(f"DEBUG: Skipping signal at {current_kline_time} due to min interval. Last trade at {last_actual_trade_time}. Diff: {time_diff:.2f}m")
+                    continue # 跳过此信号
 
-            # 计算考虑滑点后的实际信号价格 (用于盈亏计算)
-            effective_signal_price = signal_price_original
-            if self.slippage_pct > 0:
-                if signal_val == 1: # 做多时，成交价比信号价高
-                    effective_signal_price = signal_price_original * (1 + self.slippage_pct)
-                elif signal_val == -1: # 做空时，成交价比信号价低
-                    effective_signal_price = signal_price_original * (1 - self.slippage_pct)
+            signal_price = self.df_with_indicators.iloc[i]['close']
+            effective_signal_price = signal_price * (1 + self.slippage_pct) if signal_val == 1 else signal_price * (1 - self.slippage_pct)
+            
+            # 如果投资策略的状态在本轮K线中已经被结算的交易更新过，
+            # 我们传递 None 以避免重复计算最后一次的交易结果。
+            # 否则，我们传递上一次（在之前K线中）的交易结果。
+            result_for_calc = None if state_updated_this_step else last_trade_result
+            investment_amount = self.investment_strategy.calculate_investment(
+                current_balance=current_balance,
+                previous_trade_result=result_for_calc
+            )
 
-            # 计算事件合约的预期结束时间
-            end_time_dt_expected = signal_time_obj + timedelta(minutes=self.period_minutes)
-            # 在DataFrame中查找预期结束时间对应的K线索引位置
-            # 'left' 表示如果精确时间点不存在，则取其右侧（之后）的第一个K线
-            future_kline_index_pos = self.df_with_indicators.index.searchsorted(end_time_dt_expected, side='left')
+            # 投资金额调整逻辑
+            if current_balance < self.investment_strategy.min_amount:
+                investment_amount = 0.0
+            elif current_balance < investment_amount:
+                investment_amount = min(current_balance, self.investment_strategy.max_amount)
+                investment_amount = max(self.investment_strategy.min_amount, investment_amount)
+                investment_amount = min(current_balance, investment_amount)
+            
+            investment_amount = min(current_balance, investment_amount)
+            if investment_amount < self.investment_strategy.min_amount:
+                investment_amount = 0.0
 
-            trade_occurred_successfully = False # 标记本次信号是否成功执行了交易
-            current_investment_this_trade = 0.0 # 本次交易的投资额
-            pnl_amount = 0.0 # 本次交易的盈亏金额
-            prediction_correct_for_trade: Optional[bool] = None # 预测方向是否正确
-
-            # 检查是否能找到未来的K线来确定事件结果
-            if future_kline_index_pos < len(self.df_with_indicators):
-                actual_end_kline_row = self.df_with_indicators.iloc[future_kline_index_pos] # 获取事件结束时的K线数据
-                # 根据配置决定使用收盘价还是开盘价作为事件结束价格
-                end_price = actual_end_kline_row['close'] if self.use_close_for_end_price else actual_end_kline_row['open']
-                actual_end_time_obj = self.df_with_indicators.index[future_kline_index_pos] # 实际的事件结束时间
-
-                # 计算价格变化百分比 (基于考虑滑点后的信号价格)
-                price_change_pct = (end_price - effective_signal_price) / effective_signal_price * 100 if effective_signal_price != 0 else 0
-
-                # 判断预测方向是否正确
-                if signal_val == 1 and price_change_pct > 0: prediction_correct_for_trade = True
-                elif signal_val == -1 and price_change_pct < 0: prediction_correct_for_trade = True
-                else: prediction_correct_for_trade = False
-
-                # 使用投资策略计算本次的投资金额
-                calculated_investment_by_strategy = self.investment_strategy.calculate_investment(
-                    current_balance=current_balance,
-                    previous_trade_result=last_trade_result # 将上次交易结果传递给策略
-                )
-
-                # 投资金额的调整逻辑
-                if current_balance < self.investment_strategy.min_amount: # 如果余额连最小投资额都不到
-                    current_investment_this_trade = 0.0 # 则不投资
-                elif current_balance < calculated_investment_by_strategy: # 如果余额不足以支持策略计算的投资额
-                    # 则投资金额调整为：min(当前余额, 策略允许的最大投资额)，但不能低于策略允许的最小投资额
-                    current_investment_this_trade = min(current_balance, self.investment_strategy.max_amount)
-                    current_investment_this_trade = max(self.investment_strategy.min_amount, current_investment_this_trade)
-                    # 再次确保调整后的投资额不超过当前余额（处理 minAmount > current_balance 的极端情况）
-                    current_investment_this_trade = min(current_balance, current_investment_this_trade)
-                else: # 余额充足
-                    current_investment_this_trade = calculated_investment_by_strategy
-
-                # 应用全局的最小/最大投资限制（这些是硬性限制，策略内部的min/max是建议）
-                current_investment_this_trade = max(self.investment_strategy.min_amount, min(self.investment_strategy.max_amount, current_investment_this_trade))
-                # 再次确保投资额不超过当前余额
-                current_investment_this_trade = min(current_balance, current_investment_this_trade)
-
-                # 如果最终确定的投资额仍然低于策略的最小允许投资额（例如余额过少），则不进行此交易
-                if current_investment_this_trade < self.investment_strategy.min_amount:
-                    current_investment_this_trade = 0.0
-
-                # 如果确定要投资 (投资额 > 0)
-                if current_investment_this_trade > 0:
-                    trade_occurred_successfully = True # 标记交易成功发生
-                    if prediction_correct_for_trade: # 如果预测正确
-                        pnl_amount = current_investment_this_trade * self.profit_rate # 计算盈利
-                        consecutive_wins += 1; consecutive_losses = 0 # 更新连胜/连败计数
-                        max_consecutive_wins = max(max_consecutive_wins, consecutive_wins)
-                    else: # 如果预测错误
-                        pnl_amount = - (current_investment_this_trade * self.loss_rate) # 计算亏损
-                        consecutive_losses += 1; consecutive_wins = 0 # 更新连胜/连败计数
-                        max_consecutive_losses = max(max_consecutive_losses, consecutive_losses)
-                    current_balance += pnl_amount # 更新账户余额
-
-                if trade_occurred_successfully: # 如果交易发生了，更新上次交易结果
-                    last_trade_result = prediction_correct_for_trade
-
-                # 更新峰值余额和最大回撤
-                if current_balance > peak_balance: peak_balance = current_balance
-                drawdown = (peak_balance - current_balance) / peak_balance if peak_balance > 0 else 0.0
-                if drawdown > max_drawdown: max_drawdown = drawdown
-
-                # 记录本次预测/交易的详细信息
-                predictions.append({
-                    'signal_time': signal_time_obj, # 信号时间
-                    'signal_price': float(signal_price_original), # 原始信号价格
-                    'effective_signal_price_for_calc': float(effective_signal_price), # 计算滑点后的价格
-                    'signal': signal_val, 'confidence': confidence_val, # 信号方向和置信度
-                    'end_time_expected': end_time_dt_expected, # 预期结束时间
-                    'end_time_actual': actual_end_time_obj, 'end_price': float(end_price), # 实际结束时间和价格
-                    'price_change_pct': float(price_change_pct), # 价格变化百分比
-                    'result': prediction_correct_for_trade if trade_occurred_successfully else None, # 交易结果
-                    'investment_amount': float(round(current_investment_this_trade, 2)), # 投资额
-                    'pnl_amount': float(round(pnl_amount, 2)), # 盈亏金额
-                    'balance_after_trade': float(round(current_balance, 2)), # 交易后余额
-                })
-            else: # 如果找不到未来的K线来确定事件结果 (例如回测数据在此结束)
-                predictions.append({
-                    'signal_time': signal_time_obj,
-                    'signal_price': float(signal_price_original),
+            if investment_amount > 0:
+                new_trade = {
+                    'signal_time': current_kline_time,
+                    'signal_price': float(signal_price),
                     'effective_signal_price_for_calc': float(effective_signal_price),
-                    'signal': signal_val, 'confidence': confidence_val,
-                    'end_time_expected': end_time_dt_expected,
-                    'end_time_actual': None, 'end_price': None, 'price_change_pct': None,
-                    'result': None, 'investment_amount': 0.0, 'pnl_amount': 0.0, # 未能验证，无投资和盈亏
-                    'balance_after_trade': float(round(current_balance, 2)), # 余额保持不变
-                })
+                    'signal': signal_val,
+                    'confidence': confidence_val,
+                    'end_time_expected': current_kline_time + timedelta(minutes=self.period_minutes),
+                    'investment_amount': float(round(investment_amount, 2)),
+                    'actual_trade_time': current_kline_time, # 记录实际交易时间
+                }
+                pending_trades.append(new_trade)
+                last_actual_trade_time = current_kline_time # 更新上一笔实际交易时间
 
-            # 如果余额耗尽，提前结束回测
-            if current_balance <= 0 and self.initial_balance > 0 : # 检查 initial_balance > 0 防止初始就为0时误判
-                print(f"余额耗尽在 {signal_time_obj.strftime('%Y-%m-%d %H:%M:%S')}。停止回测。")
-                break # 跳出主循环
+        # 循环结束后，处理所有剩余的待处理交易（标记为未验证）
+        for trade in pending_trades:
+            trade.update({'result': None, 'pnl_amount': 0.0, 'balance_after_trade': current_balance})
+            predictions.append(trade)
 
-        print(f"回测循环优化版结束。总共评估 {num_signals_evaluated} 个K线时间点，找到 {num_valid_signals_found} 个有效预测信号，生成 {len(predictions)} 条交易记录。")
+        print(f"回测循环结束。总共评估 {num_signals_evaluated} 个K线时间点，找到 {num_valid_signals_found} 个有效预测信号，生成 {len(predictions)} 条交易记录。")
         self.results = self._calculate_statistics(predictions, max_drawdown, max_consecutive_wins, max_consecutive_losses)
         return self.results
 

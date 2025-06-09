@@ -84,6 +84,7 @@ const app = createApp({
                 profitRate: 80.0,
                 lossRate: 100.0,
                 simulatedBalance: 1000.0, // 这个是用户在UI上设置的初始模拟本金
+                min_trade_interval_minutes: 0,
             }
         });
         
@@ -663,15 +664,12 @@ const app = createApp({
                     applyingConfig.value = false; stoppingTest.value = false;
 
                     switch (message.type) {
-                        case "initial_signals":
-                            console.log('Received initial_signals count:', message.data ? message.data.length : 'N/A (message.data is undefined)');
-                            handleInitialSignals(message.data); break;
+                        case "initial_signals": handleInitialSignals(message.data); break;
                         case "initial_stats":
                         case "stats_update":
                             stats.value = { ...stats.value, ...message.data };
                             break;
                         case "new_signal":
-                            console.log('Received new_signal:', message.data);
                             handleNewSignal(message.data);
                             if (monitorSettings.value.enableSound) playSound();
                             break;
@@ -923,6 +921,7 @@ const app = createApp({
                 profitRate: parseFloat(monitorSettings.value.investment.profitRate),
                 lossRate: parseFloat(monitorSettings.value.investment.lossRate),
                 simulatedBalance: parseFloat(monitorSettings.value.investment.simulatedBalance),
+                min_trade_interval_minutes: parseFloat(monitorSettings.value.investment.min_trade_interval_minutes) || 0,
             };
 
             // 在发送新配置之前，清除当前的 configId，以便后端生成新的测试 ID
@@ -1072,7 +1071,6 @@ const app = createApp({
         };
         
         const handleInitialSignals = (signalsArray) => { // 修改: 不再预排序和切片
-            console.log('handleInitialSignals received signals count:', signalsArray ? signalsArray.length : 'N/A (signalsArray is undefined)');
             if (!Array.isArray(signalsArray)) {
                 liveSignals.value = []; return;
             }
@@ -1104,7 +1102,6 @@ const app = createApp({
         };
         
         const handleNewSignal = (signalData) => {
-            console.log('handleNewSignal received signal:', signalData);
             console.log("LiveTest: Raw signal data received:", signalData); // Add this line
             const newSignal = sanitizeSignal(signalData);
             console.log("LiveTest: Sanitized signal data:", newSignal); // Add this line

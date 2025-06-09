@@ -196,6 +196,16 @@
                                 </div>
 
                                 <div class="mb-3">
+                                    <label for="min_trade_interval_minutes" class="form-label">最小开单间隔 (分钟)</label>
+                                    <input type="number" class="form-control" id="min_trade_interval_minutes" v-model.number="backtestParams.investment.min_trade_interval_minutes" min="0" step="1"
+                                           :class="{'is-invalid': fieldErrors['investment.min_trade_interval_minutes']}">
+                                    <div v-if="fieldErrors['investment.min_trade_interval_minutes']" class="invalid-feedback">
+                                        {{ fieldErrors['investment.min_trade_interval_minutes'] }}
+                                    </div>
+                                    <small class="text-muted x-small">0 表示不限制。如果新信号与上一笔实际交易的间隔小于此值，则跳过该信号。</small>
+                                </div>
+
+                                <div class="mb-3">
                                     <label for="investmentStrategySelect" class="form-label">投资策略</label>
                                     <select class="form-select" id="investmentStrategySelect" v-model="selectedInvestmentStrategy" required
                                             :class="{'is-invalid': fieldErrors.investmentStrategy}">

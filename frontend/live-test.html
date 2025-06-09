@@ -47,6 +47,10 @@
                                     <span v-if="applyingConfig" class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
                                     {{ applyingConfig ? '应用中...' : (currentConfigId ? '更新后台配置' : '启动新后台监控') }}
                                 </button>
+                                <button class="btn btn-warning" @click="triggerTestSignal" :disabled="!currentConfigId || isSendingTestSignal">
+                                    <span v-if="isSendingTestSignal" class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                                    <i class="bi bi-lightning-charge-fill"></i> 触发测试信号
+                                </button>
                                 <button type="button" class="btn btn-danger" @click="stopCurrentTest"
                                         :disabled="socketStatus !== 'connected' || !currentConfigId || stoppingTest">
                                      <span v-if="stoppingTest" class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
@@ -256,6 +260,11 @@
                                         {{ getValidationError(['investment_settings', 'maxAmount']) }}
                                     </div>
                                 </div>
+                            </div>
+                            <div class="mb-3">
+                                <label for="min_trade_interval_minutes_live" class="form-label small">最小开单间隔 (分钟)</label>
+                                <input type="number" class="form-control form-control-sm" id="min_trade_interval_minutes_live" v-model.number="monitorSettings.investment.min_trade_interval_minutes" min="0" step="1">
+                                <small class="text-muted x-small">0 表示不限制。如果新信号与上一笔实际交易的间隔小于此值，则跳过该信号。</small>
                             </div>
                              <div v-if="selectedInvestmentStrategy" class="mb-2">
                                 <label class="form-label small" for="simulatedBalance">总本金 (USDT)</label>

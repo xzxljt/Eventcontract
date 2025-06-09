@@ -53,7 +53,8 @@ const app = createApp({
                 min_investment_amount: 5.0,
                 max_investment_amount: 250.0,
                 profit_rate_pct: 80.0,
-                loss_rate_pct: 100.0
+                loss_rate_pct: 100.0,
+                min_trade_interval_minutes: 0
             }
         });
 
