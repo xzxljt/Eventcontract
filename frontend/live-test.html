@@ -181,7 +181,7 @@
                             </div>
                             <div v-if="selectedInvestmentStrategy && selectedInvestmentStrategy.parameters && Object.keys(investmentStrategyParams).length > 0" class="mb-2 border p-2 rounded-1 bg-light"> <!-- 添加 bg-light -->
                                 <label class="form-label small text-muted">投资策略特定参数 ({{selectedInvestmentStrategy.name}}):</label>
-                                 <div v-for="paramDef in selectedInvestmentStrategy.parameters.filter(p => !p.advanced && !p.readonly && p.name !== 'minAmount' && p.name !== 'maxAmount' && p.name !== 'amount')" :key="paramDef.name" class="mb-1">
+                                 <div v-for="paramDef in selectedInvestmentStrategy.parameters.filter(p => !p.advanced && !p.readonly && p.name !== 'minAmount' && p.name !== 'maxAmount')" :key="paramDef.name" class="mb-1">
                                     <label :for="'inv_param_live_' + paramDef.name" class="form-label x-small">{{ paramDef.description || paramDef.name }}</label>
                                      <input
                                         v-if="paramDef.type !== 'boolean' && paramDef.editor !== 'text_list' && paramDef.type !== 'list_float'"
