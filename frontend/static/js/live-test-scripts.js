@@ -917,7 +917,7 @@ const app = createApp({
                 amount: parseFloat(monitorSettings.value.investment.simulatedBalance),
                 minAmount: parseFloat(monitorSettings.value.investment.minAmount),
                 maxAmount: parseFloat(monitorSettings.value.investment.maxAmount),
-                percentageOfBalance: parseFloat(monitorSettings.value.investment.percentageOfBalance),
+                percentageOfBalance: parseFloat(finalInvestmentSpecificParams.percentageOfBalance ?? monitorSettings.value.investment.percentageOfBalance),
                 profitRate: parseFloat(monitorSettings.value.investment.profitRate),
                 lossRate: parseFloat(monitorSettings.value.investment.lossRate),
                 simulatedBalance: parseFloat(monitorSettings.value.investment.simulatedBalance),
