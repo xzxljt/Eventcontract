@@ -166,30 +166,27 @@ const app = createApp({
             } catch (err) { console.error('获取投资策略失败:', err); error.value = '获取投资策略失败'; }
         };
 
-        // --- Watchers for Strategy Selection and Parameter Population (待提取到 useStrategyManagement) ---
-        watch(selectedPredictionStrategy, (newStrategy) => {
+        // --- Strategy Parameter Management ---
+        const updatePredictionStrategyParams = (newStrategy) => {
             if (newStrategy && newStrategy.id) {
                 backtestParams.value.prediction_strategy_id = newStrategy.id;
                 const savedGlobalParams = allSavedParams.value.prediction_strategies?.[newStrategy.id] || {};
                 const defaultParams = {};
                 if (newStrategy.parameters) {
                     newStrategy.parameters.forEach(param => {
-                        // 只处理非高级参数的默认值
                         if (!param.advanced) {
-                            // 对于布尔类型，确保即使默认值是 false 也能正确设置
                             defaultParams[param.name] = param.type === 'boolean' ? (param.default === true) : param.default;
                         }
                     });
                 }
-                // 合并：默认参数 -> 已保存的全局参数 (已保存的覆盖默认的)
                 predictionStrategyParams.value = { ...defaultParams, ...savedGlobalParams };
             } else {
                 backtestParams.value.prediction_strategy_id = '';
                 predictionStrategyParams.value = {};
             }
-        });
+        };
 
-        watch(selectedInvestmentStrategy, (newStrategy) => {
+        const updateInvestmentStrategyParams = (newStrategy) => {
             if (newStrategy && newStrategy.id) {
                 backtestParams.value.investment.investment_strategy_id = newStrategy.id;
                 const savedGlobalParams = allSavedParams.value.investment_strategies?.[newStrategy.id] || {};
@@ -197,13 +194,12 @@ const app = createApp({
 
                 if (newStrategy.parameters) {
                     newStrategy.parameters.forEach(param => {
-                        if (!param.advanced && !param.readonly) { // 非高级且非只读
+                        if (!param.advanced && !param.readonly) {
                             if (param.editor === 'text_list' && Array.isArray(param.default)) {
-                                defaultParams[param.name] = param.default.join(','); // 列表转字符串
+                                defaultParams[param.name] = param.default.join(',');
                             } else if (param.type === 'boolean') {
                                 defaultParams[param.name] = (param.default === true);
-                            }
-                            else {
+                            } else {
                                 defaultParams[param.name] = param.default;
                             }
                         }
@@ -212,7 +208,6 @@ const app = createApp({
                 
                 let mergedParams = { ...defaultParams, ...savedGlobalParams };
                 
-                // 特殊处理：如果martingale序列是从服务器加载的数组，转为逗号分隔字符串供UI显示
                 if (newStrategy.id === 'martingale_user_defined' && mergedParams.sequence && Array.isArray(mergedParams.sequence)) {
                     mergedParams.sequence = mergedParams.sequence.join(',');
                 }
@@ -221,7 +216,12 @@ const app = createApp({
                 backtestParams.value.investment.investment_strategy_id = '';
                 investmentStrategyParams.value = {};
             }
-        });
+        };
+
+        // --- Watchers for Strategy Selection and Parameter Population ---
+        watch(selectedPredictionStrategy, updatePredictionStrategyParams, { immediate: true });
+
+        watch(selectedInvestmentStrategy, updateInvestmentStrategyParams, { immediate: true });
         
         // 当UI上的投资策略参数变化时，同步到 backtestParams.investment.investment_strategy_specific_params
         watch(investmentStrategyParams, (newSpecificParams) => {
