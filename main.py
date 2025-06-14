@@ -856,6 +856,9 @@ async def background_signal_verifier():
                             )
                     # --- END MODIFICATION ---
                     
+                    # Broadcast the next investment amount after state change
+                    await broadcast_next_investment_amount(config_id_of_signal)
+                    
                     await manager.broadcast_json(
                         {"type": "verified_signal", "data": signal_copy_to_verify},
                         filter_func=lambda c: websocket_to_config_id_map.get(c) == signal_copy_to_verify.get('origin_config_id')
@@ -954,6 +957,63 @@ def _create_and_store_investment_strategy_instance(config_data: Dict[str, Any]) 
     except Exception as e:
         logger.error(f"为配置 {config_id_for_log} 创建投资策略实例时出错: {e}\n{traceback.format_exc()}")
         return None
+
+
+async def broadcast_next_investment_amount(config_id: str):
+    """
+    Calculates and broadcasts the next potential investment amount for a given config.
+    """
+    if not config_id:
+        return
+
+    with running_live_test_configs_lock:
+        config_data = running_live_test_configs.get(config_id)
+        if not config_data:
+            return
+        
+        inv_instance = config_data.get('investment_strategy_instance')
+        if not inv_instance:
+            logger.warning(f"Config ID {config_id}: No investment strategy instance found for broadcasting next investment amount.")
+            return
+
+        # Get the latest trade result for this config
+        last_verified_signal = None
+        with live_signals_lock:
+            config_signals = [s for s in live_signals if s.get('origin_config_id') == config_id and s.get('verified')]
+            if config_signals:
+                last_verified_signal = max(config_signals, key=lambda s: s.get('verify_time') or s.get('signal_time'))
+        
+        previous_trade_result = last_verified_signal.get('result') if last_verified_signal else None
+        
+        current_balance = config_data.get('current_balance', 0.0)
+        
+        # Get base investment from settings for the calculate_investment call
+        base_investment_from_settings = config_data.get('investment_settings', {}).get('amount', 20.0)
+
+        next_amount = inv_instance.calculate_investment(
+            current_balance=current_balance,
+            previous_trade_result=previous_trade_result,
+            base_investment_from_settings=base_investment_from_settings
+        )
+        
+        # Apply min/max bounds from the config
+        min_amount = config_data.get('investment_settings', {}).get('minAmount', 5.0)
+        max_amount = config_data.get('investment_settings', {}).get('maxAmount', 250.0)
+        next_amount = max(min_amount, min(max_amount, next_amount))
+
+    payload = {
+        "type": "next_investment_update",
+        "data": {
+            "config_id": config_id,
+            "next_amount": round(next_amount, 2)
+        }
+    }
+    
+    await manager.broadcast_json(
+        payload,
+        filter_func=lambda c: websocket_to_config_id_map.get(c) == config_id
+    )
+    logger.info(f"Broadcasted next investment amount for config {config_id}: {next_amount:.2f}")
 
 
 async def handle_kline_data(kline_data: dict):
@@ -1187,6 +1247,9 @@ async def handle_kline_data(kline_data: dict):
                             filter_func=lambda c: websocket_to_config_id_map.get(c) == config_id_for_balance_update
                         )
                 # --- END MODIFICATION ---
+
+                # After deducting, calculate and broadcast the *next* investment amount
+                await broadcast_next_investment_amount(config_id_for_balance_update)
 
                 should_trigger_autox = live_test_config_data.get('_should_autox_trigger', False)
                 AUTOX_GLOBAL_ENABLED = True
@@ -1480,6 +1543,8 @@ async def websocket_endpoint(websocket: WebSocket):
                     config_for_broadcast.pop('investment_strategy_instance', None)
                     # 发送给客户端的 config_for_broadcast 不再包含实例
                     await websocket.send_json({"type": "session_restored", "data": {"config_id": client_config_id, "config_details": config_for_broadcast}})
+                    # After restoring session, immediately calculate and send the next investment amount
+                    await broadcast_next_investment_amount(client_config_id)
                     # logger.info(f"会话已恢复 {client_config_id}，发送的 config_details: {json.dumps(ensure_json_serializable(restored_config_data), indent=2)}")
                 else:
                     await websocket.send_json({"type": "session_not_found", "data": {"config_id": client_config_id}})
@@ -1603,6 +1668,9 @@ async def websocket_endpoint(websocket: WebSocket):
                     config_for_broadcast.pop('investment_strategy_instance', None)
                     # 发送给客户端的 config_for_broadcast 不再包含实例
                     await websocket.send_json({"type": "config_set_confirmation", "data": {"success": True, "message": "运行时配置已应用。", "config_id": new_config_id, "applied_config": config_for_broadcast}})
+                    
+                    # After setting/updating config, broadcast the initial next investment amount
+                    await broadcast_next_investment_amount(new_config_id)
                 except Exception as e_start_stream:
                     await websocket.send_json({"type": "error", "data": {"message": f"应用配置时启动K线流失败: {str(e_start_stream)}"}})
                     with running_live_test_configs_lock:

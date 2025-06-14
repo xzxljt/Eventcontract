@@ -91,6 +91,7 @@ const app = createApp({
         // +++ START: ADDED/MODIFIED STATE +++
         // 用于存储当前活动配置的完整细节，包括余额和盈亏
         const activeTestConfigDetails = ref(null);
+        const nextInvestmentAmount = ref(null);
         // +++ END: ADDED/MODIFIED STATE +++
 
         const selectedSignalIds = ref([]); 
@@ -782,6 +783,12 @@ const app = createApp({
                             }
                             break;
                         // +++ END: NEW CASE HANDLER +++
+                        
+                        case "next_investment_update":
+                            if (message.data && message.data.config_id === currentConfigId.value) {
+                                nextInvestmentAmount.value = message.data.next_amount;
+                            }
+                            break;
 
                         case "signals_deleted_notification":
                             if (message.data && Array.isArray(message.data.deleted_ids)) {
@@ -1360,6 +1367,7 @@ const app = createApp({
             // +++ START: ADDED TO RETURN +++
             activeTestConfigDetails,
             signalDisplayMode, // Add the new state variable
+            nextInvestmentAmount,
             // +++ END: ADDED TO RETURN +++
 
             // Computed
