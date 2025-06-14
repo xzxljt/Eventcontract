@@ -915,7 +915,9 @@ const app = createApp({
                 // 确保包含 InvestmentStrategySettings Pydantic 模型的所有字段
                 amount: selectedInvestmentStrategy.value.id === 'fixed'
                     ? parseFloat(finalInvestmentSpecificParams.amount)
-                    : parseFloat(monitorSettings.value.investment.simulatedBalance),
+                    : (selectedInvestmentStrategy.value.id === 'anti_martingale'
+                        ? parseFloat(finalInvestmentSpecificParams.base_amount)
+                        : parseFloat(monitorSettings.value.investment.simulatedBalance)),
                 minAmount: parseFloat(monitorSettings.value.investment.minAmount),
                 maxAmount: parseFloat(monitorSettings.value.investment.maxAmount),
                 percentageOfBalance: parseFloat(finalInvestmentSpecificParams.percentageOfBalance ?? monitorSettings.value.investment.percentageOfBalance),
