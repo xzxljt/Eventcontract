@@ -502,32 +502,11 @@ const app = createApp({
                 const invStrategy = investmentStrategies.value.find(s => s.id === invSettingsFromServer.strategy_id);
                 if (invStrategy) {
                     selectedInvestmentStrategy.value = invStrategy;
-                    // Start of new logic: Properly merge default and server params
-                    const defaultParams = {};
-                    if (invStrategy.parameters) {
-                        invStrategy.parameters.forEach(param => {
-                            if (!param.advanced && !param.readonly &&
-                                param.name !== 'minAmount' && param.name !== 'maxAmount' && param.name !== 'amount') {
-                                if (param.editor === 'text_list' && Array.isArray(param.default)) {
-                                    defaultParams[param.name] = param.default.join(',');
-                                } else if (param.type === 'boolean') {
-                                    defaultParams[param.name] = (param.default === true);
-                                } else {
-                                    defaultParams[param.name] = param.default;
-                                }
-                            }
-                        });
-                    }
-
-                    const paramsFromServer = invSettingsFromServer.investment_strategy_specific_params || {};
-                    let mergedParams = { ...defaultParams, ...paramsFromServer };
-
-                    if (invStrategy.id === 'martingale_user_defined' && mergedParams.sequence && Array.isArray(mergedParams.sequence)) {
-                        mergedParams.sequence = mergedParams.sequence.join(',');
-                    }
+                    updateInvestmentStrategyParams(invStrategy); // Use the new reusable function
                     
-                    investmentStrategyParams.value = mergedParams;
-                    // End of new logic
+                    // Now, override with any specific params from the server config
+                    const paramsFromServer = invSettingsFromServer.investment_strategy_specific_params || {};
+                    investmentStrategyParams.value = { ...investmentStrategyParams.value, ...paramsFromServer };
                 } else {
                     selectedInvestmentStrategy.value = null;
                 }
@@ -553,39 +532,43 @@ const app = createApp({
                     predictionStrategyParams.value = {};
                 }
             }
-        });
+        }, { deep: true });
+
+        const updateInvestmentStrategyParams = (newStrategy) => {
+            if (newStrategy && newStrategy.id) {
+                const savedGlobalParams = allSavedParams.value.investment_strategies?.[newStrategy.id] || {};
+                const defaultParams = {};
+                if (newStrategy.parameters) {
+                    newStrategy.parameters.forEach(param => {
+                        if (!param.advanced && !param.readonly) {
+                            if (param.editor === 'text_list' && Array.isArray(param.default)) {
+                                defaultParams[param.name] = param.default.join(',');
+                            } else if (param.type === 'boolean') {
+                                defaultParams[param.name] = (param.default === true);
+                            } else {
+                                defaultParams[param.name] = param.default;
+                            }
+                        }
+                    });
+                }
+                let mergedParams = { ...defaultParams, ...savedGlobalParams };
+                if (newStrategy.id === 'martingale_user_defined' && mergedParams.sequence && Array.isArray(mergedParams.sequence)) {
+                    mergedParams.sequence = mergedParams.sequence.join(',');
+                }
+                investmentStrategyParams.value = mergedParams;
+                if (newStrategy.id === 'fixed') {
+                     monitorSettings.value.investment.amount = mergedParams?.amount || savedGlobalParams?.amount || defaultParams?.amount || monitorSettings.value.investment.amount;
+                }
+            } else {
+                investmentStrategyParams.value = {};
+            }
+        };
 
         watch(selectedInvestmentStrategy, (newStrategy, oldStrategy) => {
             if (newStrategy?.id !== oldStrategy?.id) {
-                if (newStrategy && newStrategy.id) {
-                    const savedGlobalParams = allSavedParams.value.investment_strategies?.[newStrategy.id] || {};
-                    const defaultParams = {};
-                    if (newStrategy.parameters) {
-                        newStrategy.parameters.forEach(param => {
-                            if (!param.advanced && !param.readonly) {
-                                if (param.editor === 'text_list' && Array.isArray(param.default)) {
-                                    defaultParams[param.name] = param.default.join(',');
-                                } else if (param.type === 'boolean') {
-                                    defaultParams[param.name] = (param.default === true);
-                                } else {
-                                    defaultParams[param.name] = param.default;
-                                }
-                            }
-                        });
-                    }
-                    let mergedParams = { ...defaultParams, ...savedGlobalParams };
-                    if (newStrategy.id === 'martingale_user_defined' && mergedParams.sequence && Array.isArray(mergedParams.sequence)) {
-                        mergedParams.sequence = mergedParams.sequence.join(',');
-                    }
-                    investmentStrategyParams.value = mergedParams;
-                    if (newStrategy.id === 'fixed') {
-                         monitorSettings.value.investment.amount = mergedParams?.amount || savedGlobalParams?.amount || defaultParams?.amount || monitorSettings.value.investment.amount;
-                    }
-                } else {
-                    investmentStrategyParams.value = {};
-                }
+                updateInvestmentStrategyParams(newStrategy);
             }
-        });
+        }, { immediate: true, deep: true });
 
 
         // --- WebSocket Logic ---
