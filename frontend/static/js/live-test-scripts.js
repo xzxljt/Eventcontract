@@ -474,23 +474,16 @@ const app = createApp({
             const predStrategy = predictionStrategies.value.find(s => s.id === configDetails.prediction_strategy_id);
             if (predStrategy) {
                 selectedPredictionStrategy.value = predStrategy;
-                if (configDetails.prediction_strategy_params) {
-                    const paramsFromServer = { ...configDetails.prediction_strategy_params };
-                    const currentDefaultsAndSaved = { ...predictionStrategyParams.value };
-                    const finalParams = { ...currentDefaultsAndSaved };
-                    if (predStrategy.parameters) {
-                        predStrategy.parameters.forEach(pDef => {
-                            if (!pDef.advanced && paramsFromServer.hasOwnProperty(pDef.name)) {
-                                let val = paramsFromServer[pDef.name];
-                                if (pDef.type === 'int') val = parseInt(val, 10);
-                                else if (pDef.type === 'float') val = parseFloat(val);
-                                else if (pDef.type === 'boolean') val = (val === true || String(val).toLowerCase() === 'true');
-                                finalParams[pDef.name] = val;
-                            }
-                        });
-                    }
-                    predictionStrategyParams.value = finalParams;
+                const defaultParams = {};
+                if (predStrategy.parameters) {
+                    predStrategy.parameters.forEach(param => {
+                        if (!param.advanced) {
+                            defaultParams[param.name] = param.type === 'boolean' ? (param.default === true) : param.default;
+                        }
+                    });
                 }
+                const paramsFromServer = configDetails.prediction_strategy_params || {};
+                predictionStrategyParams.value = { ...defaultParams, ...paramsFromServer };
             } else {
                 selectedPredictionStrategy.value = null;
             }
@@ -508,25 +501,32 @@ const app = createApp({
                 const invStrategy = investmentStrategies.value.find(s => s.id === invSettingsFromServer.strategy_id);
                 if (invStrategy) {
                     selectedInvestmentStrategy.value = invStrategy;
-                    if (invSettingsFromServer.investment_strategy_specific_params) {
-                        let specificParamsFromServer = { ...invSettingsFromServer.investment_strategy_specific_params };
-                        if (invStrategy.id === 'martingale_user_defined' && Array.isArray(specificParamsFromServer.sequence)) {
-                            specificParamsFromServer.sequence = specificParamsFromServer.sequence.join(',');
-                        }
-                        const currentDefaultsAndSavedSpecific = { ...investmentStrategyParams.value };
-                        const finalSpecificParams = { ...currentDefaultsAndSavedSpecific };
-
-                        if (invStrategy.parameters) {
-                             invStrategy.parameters.forEach(pDef => {
-                                if (!pDef.advanced && !pDef.readonly &&
-                                    pDef.name !== 'minAmount' && pDef.name !== 'maxAmount' && pDef.name !== 'amount' &&
-                                    specificParamsFromServer.hasOwnProperty(pDef.name)) {
-                                    finalSpecificParams[pDef.name] = specificParamsFromServer[pDef.name];
+                    // Start of new logic: Properly merge default and server params
+                    const defaultParams = {};
+                    if (invStrategy.parameters) {
+                        invStrategy.parameters.forEach(param => {
+                            if (!param.advanced && !param.readonly &&
+                                param.name !== 'minAmount' && param.name !== 'maxAmount' && param.name !== 'amount') {
+                                if (param.editor === 'text_list' && Array.isArray(param.default)) {
+                                    defaultParams[param.name] = param.default.join(',');
+                                } else if (param.type === 'boolean') {
+                                    defaultParams[param.name] = (param.default === true);
+                                } else {
+                                    defaultParams[param.name] = param.default;
                                 }
-                            });
-                        }
-                        investmentStrategyParams.value = finalSpecificParams;
+                            }
+                        });
                     }
+
+                    const paramsFromServer = invSettingsFromServer.investment_strategy_specific_params || {};
+                    let mergedParams = { ...defaultParams, ...paramsFromServer };
+
+                    if (invStrategy.id === 'martingale_user_defined' && mergedParams.sequence && Array.isArray(mergedParams.sequence)) {
+                        mergedParams.sequence = mergedParams.sequence.join(',');
+                    }
+                    
+                    investmentStrategyParams.value = mergedParams;
+                    // End of new logic
                 } else {
                     selectedInvestmentStrategy.value = null;
                 }
@@ -561,8 +561,7 @@ const app = createApp({
                     const defaultParams = {};
                     if (newStrategy.parameters) {
                         newStrategy.parameters.forEach(param => {
-                            if (!param.advanced && !param.readonly &&
-                                param.name !== 'minAmount' && param.name !== 'maxAmount' && param.name !== 'amount') {
+                            if (!param.advanced && !param.readonly) {
                                 if (param.editor === 'text_list' && Array.isArray(param.default)) {
                                     defaultParams[param.name] = param.default.join(',');
                                 } else if (param.type === 'boolean') {

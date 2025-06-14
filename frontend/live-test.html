@@ -212,7 +212,7 @@
                                         {{ getValidationError(['investment_settings', 'investment_strategy_specific_params', paramDef.name]) }}
                                     </div>
                                 </div>
-                                <div v-if="selectedInvestmentStrategy && selectedInvestmentStrategy.parameters && !selectedInvestmentStrategy.parameters.filter(p => !p.advanced && !p.readonly && p.name !== 'minAmount' && p.name !== 'maxAmount' && p.name !== 'amount').length" class="text-muted x-small fst-italic">
+                                <div v-if="selectedInvestmentStrategy && selectedInvestmentStrategy.parameters && !selectedInvestmentStrategy.parameters.filter(p => !p.advanced && !p.readonly).length" class="text-muted x-small fst-italic">
                                     此投资策略无特定用户可配置参数。
                                 </div>
                             </div>
