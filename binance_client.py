@@ -378,6 +378,82 @@ class BinanceClient:
         data = self._request('GET', '/fapi/v1/ticker/price', params=params, is_fapi=True)
         return float(data['price'])
 
+    def get_index_price_klines(self, symbol: str, interval: str,
+                               start_time: Optional[int] = None,
+                               end_time: Optional[int] = None,
+                               limit: Optional[int] = None) -> pd.DataFrame:
+        """
+        获取U本位合约的指数价格K线数据。
+        """
+        all_klines_data = []
+
+        if limit is not None and start_time is None:
+            params = {
+                'pair': symbol.upper(), 'interval': interval,
+                'limit': min(limit, self.MAX_KLINE_LIMIT)
+            }
+            if end_time: params['endTime'] = end_time
+            data = self._request('GET', '/fapi/v1/indexPriceKlines', params=params, is_fapi=True)
+            all_klines_data.extend(data)
+        
+        elif start_time is not None:
+            current_start_time_ms = start_time
+            interval_duration_ms = self.INTERVAL_MS.get(interval)
+            if not interval_duration_ms:
+                raise ValueError(f"不支持的K线周期: {interval}")
+
+            while True:
+                params_segment = {
+                    'pair': symbol.upper(), 'interval': interval,
+                    'startTime': current_start_time_ms, 'limit': self.MAX_KLINE_LIMIT
+                }
+                if end_time: params_segment['endTime'] = end_time
+                
+                data_segment = self._request('GET', '/fapi/v1/indexPriceKlines', params=params_segment, is_fapi=True)
+                
+                if not data_segment:
+                    break
+                
+                all_klines_data.extend(data_segment)
+                
+                last_kline_open_time_ms = int(data_segment[-1][0])
+                current_start_time_ms = last_kline_open_time_ms + interval_duration_ms
+                
+                if (end_time and current_start_time_ms > end_time) or \
+                   (len(data_segment) < self.MAX_KLINE_LIMIT):
+                    break
+                
+                time.sleep(0.15)
+            
+            if limit is not None and len(all_klines_data) > limit:
+                all_klines_data = all_klines_data[:limit]
+        
+        else:
+            raise ValueError("get_index_price_klines: 必须提供 start_time 或 limit。")
+
+        if not all_klines_data:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(all_klines_data, columns=[
+            'open_time', 'open', 'high', 'low', 'close', 'ignore1',
+            'close_time', 'ignore2', 'ignore3',
+            'ignore4', 'ignore5', 'ignore6'
+        ])
+
+        # Select necessary columns
+        df = df[['open_time', 'open', 'high', 'low', 'close', 'close_time']]
+
+        df['open_time'] = pd.to_datetime(df['open_time'], unit='ms', utc=True)
+        df['close_time'] = pd.to_datetime(df['close_time'], unit='ms', utc=True)
+        numeric_cols = ['open', 'high', 'low', 'close']
+        for col in numeric_cols:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+
+        df.set_index('open_time', inplace=True)
+        df.sort_index(inplace=True)
+
+        return df
+
     # --- WebSocket 相关方法 ---
     def _get_ws_url(self, stream_name: str) -> str:
         """获取U本位合约的WebSocket基础URL"""
@@ -1174,7 +1250,7 @@ class BinanceClient:
                 try:
                     parts = ws_key.split('_', 1)
                     if len(parts) == 2:
-                        symbol, interval = parts[0].upper(), parts[1]
+                        symbol, interval = parts.upper(), parts
                         # stop_kline_websocket will acquire the lock again, which is fine with RLock
                         self.stop_kline_websocket(symbol, interval) 
                     else:

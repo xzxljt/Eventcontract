@@ -752,27 +752,28 @@ async def background_signal_verifier():
                 # we need the kline that starts at 10:04:00.
                 kline_start_time_utc = end_time_utc - timedelta(minutes=1)
 
-                kline_df = await asyncio.to_thread( # IO密集型操作，放入线程池
-                    binance_client.get_historical_klines,
-                    signal_copy_to_verify['symbol'], '1m',
-                    start_time=int(kline_start_time_utc.timestamp() * 1000), limit=1 # Use kline_start_time_utc
-                )
+                # --- MODIFICATION: Use Index Price for validation ---
+                logger.info(f"Verifying signal {signal_copy_to_verify['id']} using index price.")
                 actual_price = None
-                if not kline_df.empty:
-                    actual_price = float(kline_df.iloc[0]['close'])
-                else: 
-                    print(f"验证 {signal_copy_to_verify['id']}: 未找到 {end_time_utc.isoformat()} 的1m K线，尝试获取最新价...")
-                    try:
-                        actual_price = await asyncio.to_thread(binance_client.get_latest_price, signal_copy_to_verify['symbol'])
-                    except Exception as e_latest:
-                         print(f"获取 {signal_copy_to_verify['symbol']} 最新价格失败: {e_latest}")
+                try:
+                    kline_df = await binance_client.get_index_price_klines(
+                        signal_copy_to_verify['symbol'], '1m',
+                        start_time=int(kline_start_time_utc.timestamp() * 1000), limit=1
+                    )
+                    if not kline_df.empty:
+                        actual_price = float(kline_df.iloc[0]['close'])
+                    else:
+                        logger.warning(f"验证 {signal_copy_to_verify['id']}: 未能获取到 {end_time_utc.isoformat()} 的指数价格K线。验证失败。")
+                except Exception as e_idx_verify:
+                    logger.error(f"验证 {signal_copy_to_verify['id']} 时获取指数价格失败: {e_idx_verify}")
+                # --- END MODIFICATION ---
 
                 if actual_price is None:
-                    print(f"无法获取 {signal_copy_to_verify['symbol']} 的结束价格进行验证。信号ID: {signal_copy_to_verify['id']}")
+                    print(f"无法获取 {signal_copy_to_verify['symbol']} 的指数价格进行验证。信号ID: {signal_copy_to_verify['id']}")
                     with live_signals_lock:
                         for i, sig_live in enumerate(live_signals):
                             if sig_live.get('id') == signal_copy_to_verify['id'] and not sig_live.get('verified'):
-                                live_signals[i].update({'verified': True, 'result': False, 'actual_end_price': -3, 'verify_notes': '无法获取结束价', 'verify_time': format_for_display(current_time_utc)})
+                                live_signals[i].update({'verified': True, 'result': False, 'actual_end_price': -3, 'verify_notes': '无法获取指数结束价', 'verify_time': format_for_display(current_time_utc)})
                                 verified_something = True; break
                     continue
 
@@ -1111,7 +1112,34 @@ async def handle_kline_data(kline_data: dict):
                 )
                 
                 exp_end_time_dt = sig_time_dt + timedelta(minutes=event_period_minutes)
-                sig_price = float(latest_sig_data['close'])
+                
+                # --- MODIFICATION: Use Index Price for recording signal price ---
+                sig_price = float(latest_sig_data['close']) # Fallback value
+                try:
+                    # The signal is on the last kline, get its open time to fetch the corresponding index kline
+                    kline_open_time_ms = int(latest_sig_data.name.timestamp() * 1000)
+                    
+                    # Fetch the single index price kline for the same period
+                    index_price_df = await binance_client.get_index_price_klines(
+                        live_test_config_data['symbol'],
+                        live_test_config_data['interval'],
+                        start_time=kline_open_time_ms,
+                        limit=1
+                    )
+                    
+                    if not index_price_df.empty:
+                        # Check if the fetched kline matches the time
+                        fetched_kline_open_time_ms = int(index_price_df.iloc[0]['open_time'].timestamp() * 1000)
+                        if fetched_kline_open_time_ms == kline_open_time_ms:
+                            sig_price = float(index_price_df.iloc[0]['close'])
+                            logger.info(f"Successfully fetched index price {sig_price} for signal recording.")
+                        else:
+                            logger.warning(f"Index price kline time mismatch. Expected: {kline_open_time_ms}, Got: {fetched_kline_open_time_ms}. Falling back to market price.")
+                    else:
+                        logger.warning(f"Could not fetch index price kline for {live_test_config_data['symbol']} at {kline_open_time_ms}. Falling back to market price.")
+                except Exception as e_idx_price:
+                    logger.error(f"Error fetching index price for signal recording: {e_idx_price}. Falling back to market price.")
+                # --- END MODIFICATION ---
                 
                 inv_amount = 20.0; profit_pct = 80.0; loss_pct = 100.0
                 inv_settings_from_config = live_test_config_data.get("investment_settings")
@@ -2201,6 +2229,8 @@ async def run_backtest_endpoint(request: BacktestRequest):
             backtester = Backtester(
                 df=df_klines.copy(),
                 strategy=prediction_instance,
+                symbol=request.symbol,
+                interval=request.interval,
                 event_period=request.event_period,
                 confidence_threshold=request.confidence_threshold,
                 investment_strategy_id=inv_id,

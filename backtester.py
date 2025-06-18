@@ -4,13 +4,19 @@ import pandas as pd
 import numpy as np
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
+import logging
 from strategies import Strategy # 确保 strategies.py 在同一目录或PYTHONPATH中
 from investment_strategies import BaseInvestmentStrategy, get_available_investment_strategies # 确保 investment_strategies.py
+from binance_client import BinanceClient
+
+logger = logging.getLogger(__name__)
 
 class Backtester:
     def __init__(self,
                  df: pd.DataFrame,
                  strategy: Strategy,
+                 symbol: str,
+                 interval: str,
                  event_period: str,
                  confidence_threshold: float = 0,
                  investment_strategy_id: str = 'fixed',
@@ -22,11 +28,13 @@ class Backtester:
                  max_investment_amount: float = 250.0,
                  kline_fetch_limit_for_signal: int = 100,
                  use_close_for_end_price: bool = True,
-                 slippage_pct: float = 0.000002, # 默认滑点比例 (0.002%)
+                 slippage_pct: float = 0.0, # 默认滑点比例 (0.002%)
                  min_trade_interval_minutes: float = 0
                 ):
         self.df = df.copy() # 原始数据副本
         self.strategy = strategy
+        self.symbol = symbol
+        self.interval = interval
         self.event_period = event_period
         self.confidence_threshold = confidence_threshold
         self.initial_balance = initial_balance
@@ -56,6 +64,7 @@ class Backtester:
         self.results = None
         self.period_minutes = self._convert_period_to_minutes(event_period)
         self.df_with_indicators = None # 将在此处存储带有全局指标的DataFrame
+        self.binance_client = BinanceClient() # 初始化Binance客户端
 
         # 初始化日志
         print(f"初始化回测器: 事件周期={event_period} ({self.period_minutes}分钟), 预测策略={strategy.name}, 投资策略={self.investment_strategy.name}")
@@ -79,9 +88,33 @@ class Backtester:
         else: raise ValueError(f"不支持的事件周期: {period}")
 
     def run(self) -> Dict[str, Any]:
+        # logger.info("\n[DEBUG] --- Backtester Run Start ---")
         if self.df.empty:
-            print("错误: DataFrame 为空，无法运行回测。")
+            # logger.info("[DEBUG] 错误: DataFrame 为空，无法运行回测。")
             return self._calculate_statistics([], 0.0, 0, 0)
+
+        # 获取指数价格数据
+        # logger.info("[DEBUG] Backtester: 开始获取指数价格K线数据...")
+        try:
+            # 假设self.df的索引是回测的完整时间范围
+            start_time_ms = int(self.df.index.min().timestamp() * 1000)
+            end_time_ms = int((self.df.index.max() + timedelta(minutes=self.period_minutes)).timestamp() * 1000)
+            df_index_price = self.binance_client.get_index_price_klines(
+                symbol=self.symbol,
+                interval=self.interval,
+                start_time=start_time_ms,
+                end_time=end_time_ms
+            )
+            if df_index_price.empty:
+                raise ValueError("未能获取到回测时间范围内的指数价格数据。")
+            # logger.info(f"[DEBUG] Backtester: 成功获取 {len(df_index_price)} 条指数价格K线。")
+            # logger.info(f"[DEBUG]   指数价格数据范围: {df_index_price.index.min()} to {df_index_price.index.max()}")
+        except Exception as e_idx_price:
+            # logger.info(f"错误: 获取指数价格数据失败: {e_idx_price}")
+            import traceback
+            traceback.print_exc()
+            return self._calculate_statistics([], 0.0, 0, 0)
+
 
         if not isinstance(self.df.index, pd.DatetimeIndex):
             try:
@@ -133,6 +166,7 @@ class Backtester:
         # 主循环
         for i in range(start_index, len(self.df_with_indicators)):
             current_kline_time = self.df_with_indicators.index[i]
+            # logger.info(f"\n[DEBUG] Main loop: i={i}, current_kline_time={current_kline_time}")
             state_updated_this_step = False # 标记本轮K线中，投资策略的状态是否已被更新
             
             # 1. 处理已结算的交易
@@ -144,13 +178,16 @@ class Backtester:
 
             for trade in pending_trades:
                 if trade['end_time_expected'] <= current_kline_time:
+                    # logger.info(f"  [DEBUG] Settling trade: SignalTime={trade['signal_time']}, ExpectedEnd={trade['end_time_expected']}")
                     # 查找结算价格
-                    future_kline_index_pos = self.df_with_indicators.index.searchsorted(trade['end_time_expected'], side='left')
+                    # --- MODIFICATION: Use Index Price for backtest validation ---
+                    future_kline_index_pos = df_index_price.index.searchsorted(trade['end_time_expected'], side='left')
                     
-                    if future_kline_index_pos < len(self.df_with_indicators):
-                        actual_end_kline_row = self.df_with_indicators.iloc[future_kline_index_pos]
-                        end_price = actual_end_kline_row['close'] if self.use_close_for_end_price else actual_end_kline_row['open']
-                        actual_end_time_obj = self.df_with_indicators.index[future_kline_index_pos]
+                    if future_kline_index_pos < len(df_index_price):
+                        actual_end_kline_row = df_index_price.iloc[future_kline_index_pos]
+                        end_price = actual_end_kline_row['close'] # 指数价格只使用收盘价
+                        actual_end_time_obj = df_index_price.index[future_kline_index_pos]
+                        # logger.info(f"    [DEBUG] Settlement Found: EndPrice={end_price} at IndexTime={actual_end_time_obj}")
                         
                         price_change_pct = (end_price - trade['effective_signal_price_for_calc']) / trade['effective_signal_price_for_calc'] * 100 if trade['effective_signal_price_for_calc'] != 0 else 0
                         
@@ -195,6 +232,7 @@ class Backtester:
                         predictions.append(trade)
                     else:
                         # 无法结算，保留在待处理列表或单独处理
+                        # logger.info(f"    [DEBUG] Settlement FAILED: ExpectedEnd={trade['end_time_expected']} is out of index price data range (max: {df_index_price.index.max()}).")
                         trade.update({'result': None, 'pnl_amount': 0.0, 'balance_after_trade': current_balance})
                         predictions.append(trade) # 添加到最终结果，但标记为未验证
                 else:
@@ -237,15 +275,47 @@ class Backtester:
             # 3. 创建新交易并添加到待处理列表
             num_valid_signals_found += 1
 
-            # --- 新增：最小开单间隔检查 ---
+            # --- MODIFICATION: Adjust entry price logic and remove slippage ---
+
+            # Boundary check: ensure we can access the next kline
+            if i + 1 >= len(self.df_with_indicators):
+                # logger.warning(f"  [DEBUG] Signal generated on the last kline ({current_kline_time}). Cannot determine entry price from next kline. Skipping trade.")
+                continue
+
+            # --- 新增：最小开单间隔检查 (使用下一根K线的时间进行判断) ---
+            next_kline_time = self.df_with_indicators.index[i + 1]
             if self.min_trade_interval_minutes > 0 and last_actual_trade_time is not None:
-                time_diff = (current_kline_time - last_actual_trade_time).total_seconds() / 60
+                time_diff = (next_kline_time - last_actual_trade_time).total_seconds() / 60
                 if time_diff < self.min_trade_interval_minutes:
                     # print(f"DEBUG: Skipping signal at {current_kline_time} due to min interval. Last trade at {last_actual_trade_time}. Diff: {time_diff:.2f}m")
                     continue # 跳过此信号
 
-            signal_price = self.df_with_indicators.iloc[i]['close']
-            effective_signal_price = signal_price * (1 + self.slippage_pct) if signal_val == 1 else signal_price * (1 - self.slippage_pct)
+            # Use the open price of the NEXT kline as the entry price
+            effective_signal_price = self.df_with_indicators.iloc[i + 1]['open']
+            # logger.info(f"  [DEBUG] Signal on kline {current_kline_time}. Entry planned for next kline {next_kline_time} at open price: {effective_signal_price}")
+
+            # --- MODIFICATION: Fetch Index Price for signal recording (using the signal kline time) ---
+            index_price_at_signal = None
+            signal_kline_index_pos = df_index_price.index.searchsorted(current_kline_time, side='left')
+            # logger.info(f"    [DEBUG] Searching for index price to record. Signal time: {current_kline_time}, Found position in df_index_price: {signal_kline_index_pos}")
+
+            if signal_kline_index_pos < len(df_index_price):
+                index_kline_time = df_index_price.index[signal_kline_index_pos]
+                if abs((index_kline_time - current_kline_time).total_seconds()) < 60:
+                    index_price_at_signal = df_index_price.iloc[signal_kline_index_pos]['close']
+                    # logger.info(f"    [DEBUG] Successfully fetched index price for recording: {index_price_at_signal}")
+                else:
+                    pass
+                    # logger.warning(f"    [DEBUG] Index kline time mismatch for recording. Falling back to market entry price.")
+            else:
+                pass
+                #  logger.warning(f"    [DEBUG] Index search for recording out of bounds. Falling back to market entry price.")
+            
+            if index_price_at_signal is None:
+                index_price_at_signal = effective_signal_price # Fallback
+            # --- END MODIFICATION ---
+
+            # effective_signal_price is now the clean market entry price (next kline's open) without slippage
             
             # 如果投资策略的状态在本轮K线中已经被结算的交易更新过，
             # 我们传递 None 以避免重复计算最后一次的交易结果。
@@ -270,25 +340,27 @@ class Backtester:
 
             if investment_amount > 0:
                 new_trade = {
-                    'signal_time': current_kline_time,
-                    'signal_price': float(signal_price),
-                    'effective_signal_price_for_calc': float(effective_signal_price),
+                    'signal_time': next_kline_time, # Use next kline's time
+                    'signal_price': float(index_price_at_signal), # Displayed price is still the index price at signal time
+                    'effective_signal_price_for_calc': float(effective_signal_price), # PnL is calculated from next kline's open
                     'signal': signal_val,
                     'confidence': confidence_val,
-                    'end_time_expected': current_kline_time + timedelta(minutes=self.period_minutes),
+                    'end_time_expected': next_kline_time + timedelta(minutes=self.period_minutes), # End time is based on actual trade time
                     'investment_amount': float(round(investment_amount, 2)),
-                    'actual_trade_time': current_kline_time, # 记录实际交易时间
+                    'actual_trade_time': next_kline_time, # Record actual trade time as next kline's time
                 }
                 pending_trades.append(new_trade)
-                last_actual_trade_time = current_kline_time # 更新上一笔实际交易时间
+                last_actual_trade_time = next_kline_time # Update last trade time
+                # logger.info(f"  [DEBUG] New trade generated and pending: ActualSignalTime={new_trade['signal_time']}, SignalPrice(Index)={new_trade['signal_price']}, MarketPrice(for PnL)={new_trade['effective_signal_price_for_calc']}, ExpectedEnd={new_trade['end_time_expected']}")
 
         # 循环结束后，处理所有剩余的待处理交易（标记为未验证）
         for trade in pending_trades:
             trade.update({'result': None, 'pnl_amount': 0.0, 'balance_after_trade': current_balance})
             predictions.append(trade)
 
-        print(f"回测循环结束。总共评估 {num_signals_evaluated} 个K线时间点，找到 {num_valid_signals_found} 个有效预测信号，生成 {len(predictions)} 条交易记录。")
+        # logger.info(f"回测循环结束。总共评估 {num_signals_evaluated} 个K线时间点，找到 {num_valid_signals_found} 个有效预测信号，生成 {len(predictions)} 条交易记录。")
         self.results = self._calculate_statistics(predictions, max_drawdown, max_consecutive_wins, max_consecutive_losses)
+        # logger.info("[DEBUG] --- Backtester Run End ---")
         return self.results
 
     def _calculate_statistics(self, predictions: List[Dict[str, Any]], max_drawdown_val: float, max_wins: int, max_losses: int) -> Dict[str, Any]:
@@ -480,6 +552,9 @@ class Backtester:
         processed_predictions_list = []
         for pred_item_dict_orig in predictions: # 使用包含所有信号（包括未交易的）的 'predictions' 列表
             processed_pred_item = {}
+            # Exclude the internal calculation field before sending to frontend
+            pred_item_dict_orig.pop('effective_signal_price_for_calc', None)
+            
             for key, value in pred_item_dict_orig.items():
                 if isinstance(value, pd.Timestamp): # Pandas Timestamp -> Python datetime
                     processed_pred_item[key] = value.to_pydatetime()

@@ -315,6 +315,19 @@ const app = createApp({
                 const response = await axios.post('/api/backtest', payload);
                 backtestResults.value = response.data;
 
+                // FIX: Correctly display the entry price from `signal_price`.
+                if (backtestResults.value && backtestResults.value.predictions) {
+                    backtestResults.value.predictions.forEach(prediction => {
+                        // The backend now provides the entry price only in `signal_price`.
+                        // To ensure the template displays it correctly without being changed,
+                        // we create the field the template expects (`effective_signal_price_for_calc`)
+                        // and populate it with the value from `signal_price`.
+                        if (prediction.signal_price !== undefined) {
+                            prediction.effective_signal_price_for_calc = prediction.signal_price;
+                        }
+                    });
+                }
+
                 if (backtestResults.value && backtestResults.value.daily_pnl) {
                     calendarView.value.dailyPnlData = backtestResults.value.daily_pnl;
                     let refDateStr = payload.start_time;
