@@ -414,53 +414,38 @@
                                 <div v-else-if="displayedManagedSignals.length === 0 && liveSignals.length > 0" class="text-center text-muted py-3">无信号符合当前筛选条件。</div>
                                 <div v-else-if="liveSignals.length === 0" class="text-center text-muted py-3">暂无实时信号。</div>
 
-                                <div style="max-height: 600px; overflow-y: auto;"> <!-- 可滚动区域 -->
-                                    <div v-for="signal in displayedManagedSignals" :key="signal.id" :class="['card signal-card mb-3 shadow-sm', getSignalStatusClass(signal)]">
-                                        <div class="card-header d-flex justify-content-between align-items-center p-2 small">
+                                <div class="signal-cards-container" style="max-height: 600px; overflow-y: auto;">
+                                    <div v-for="signal in paginatedSignals" :key="signal.id" class="card signal-card mb-3" :class="getSignalStatusClass(signal)">
+                                        <div class="card-header d-flex justify-content-between align-items-center p-2" :class="signal.verified ? (signal.result ? 'bg-success-subtle' : 'bg-danger-subtle') : ''">
                                             <div>
                                                 <input type="checkbox" class="form-check-input me-2" :value="signal.id" v-model="selectedSignalIds">
-                                                <span :class="['badge fs-6 me-2', signal.signal === 1 ? 'bg-success' : 'bg-danger']"> {{ signal.signal === 1 ? '做多' : '做空' }} </span>
-                                                <strong class="me-2">{{ signal.symbol }}</strong>
-                                                <small class="text-muted">({{ signal.interval }})</small>
-                                                <small v-if="signal.origin_config_id && currentConfigId && signal.origin_config_id === currentConfigId" class="text-primary ms-1 fst-italic">(我的)</small>
-                                                <small v-else-if="signal.origin_config_id === 'test_signal_broadcast_all'" class="text-info ms-1 fst-italic">(测试)</small>
+                                                <span class="fw-bold">{{ formatDateTime(signal.signal_time) }}</span>
+                                                <span :class="['badge', signal.signal === 1 ? 'bg-success' : 'bg-danger', 'ms-2']">{{ signal.signal === 1 ? '做多' : '做空' }}</span>
                                             </div>
-                                            <small class="text-muted">{{ formatDateTime(signal.signal_time) }}</small>
+                                            <span :class="['badge', signal.verified ? (signal.result ? 'bg-success' : 'bg-danger') : 'bg-warning text-dark']">
+                                                {{ signal.verified ? (signal.result ? '胜利' : '失败') : '待验证' }}
+                                            </span>
                                         </div>
-                                        <div class="card-body p-2 x-small">
-                                            <div class="row">
-                                                <div class="col-md-6">
-                                                    <p class="mb-1">ID: <span class="text-muted x-small">{{ signal.id.substring(0,15) }}...</span></p>
-                                                    <p class="mb-1">预测策略: <span class="text-muted">{{ getStrategyName(signal.prediction_strategy_id, 'prediction') }} <i class="bi bi-info-circle ms-1" @click="toggleSignalDetails(signal)" style="cursor: pointer;"></i></span></p>
-                                                    <p class="mb-1">置信度: <span class="text-muted">{{ signal.confidence?.toFixed(2) }}</span></p>
-                                                    <p class="mb-1">信号价格: <span class="text-muted">{{ signal.signal_price?.toFixed(signal.symbol && signal.symbol.includes('BTC') ? 2 : 4) }}</span></p>
-                                                    <p class="mb-1">事件周期: <span class="text-muted">{{ signal.event_period }}</span></p>
-                                                    <p class="mb-1">投资额: <strong class="text-primary">{{ signal.investment_amount?.toFixed(2) }} USDT</strong></p>
-                                                </div>
-                                                <div class="col-md-6">
-                                                    <p class="mb-1">预期结束: <span class="text-muted">{{ formatDateTime(signal.expected_end_time) }}</span></p>
-                                                    <template v-if="signal.verified">
-                                                        <p class="mb-1">结束价格: <span class="text-muted">{{ signal.actual_end_price !== null ? signal.actual_end_price?.toFixed(signal.symbol && signal.symbol.includes('BTC') ? 2 : 4) : 'N/A' }}</span></p>
-                                                        <p class="mb-1">价格变化(%): <span :class="getPnlClass(signal.price_change_pct)">{{ signal.price_change_pct?.toFixed(2) }}%</span></p>
-                                                        <p class="mb-1">信号盈亏(PnL%): <span :class="getPnlClass(signal.pnl_pct)">{{ signal.pnl_pct?.toFixed(2) }}%</span></p>
-                                                        <p class="mb-1">实际盈亏金额: <strong :class="getPnlClass(signal.actual_profit_loss_amount)">{{ signal.actual_profit_loss_amount?.toFixed(2) }} USDT</strong></p>
-                                                        <p class="mb-0">结果: <span :class="['badge', signal.result ? 'bg-success' : 'bg-danger']">{{ signal.result ? '正确' : '错误' }}</span></p>
-                                                    </template>
-                                                    <template v-else>
-                                                        <p class="mb-1 text-warning">状态: 等待验证 <span v-if="isTimeRemainingRelevant(signal)" class="ms-1 countdown">({{ getTimeRemaining(signal) }})</span> </p>
-                                                        <p class="mb-1">潜在盈利: <span class="text-success">+{{ signal.potential_profit }} USDT</span> ({{signal.profit_rate_pct}}%)</p>
-                                                        <p class="mb-1">潜在亏损: <span class="text-danger">-{{ signal.potential_loss }} USDT</span> ({{signal.loss_rate_pct}}%)</p>
-                                                    </template>
+                                        <div class="card-body p-2">
+                                            <div class="row gx-2 gy-2">
+                                                <div class="col-6 col-md-3"><div class="trade-detail-item"><span class="trade-detail-label">入场价</span><span class="trade-detail-value">{{ signal.signal_price?.toFixed(signal.symbol && signal.symbol.includes('BTC') ? 2 : 4) }}</span></div></div>
+                                                <div class="col-6 col-md-3"><div class="trade-detail-item"><span class="trade-detail-label">置信度</span><span class="trade-detail-value">{{ signal.confidence?.toFixed(2) }}</span></div></div>
+                                                <div class="col-6 col-md-3"><div class="trade-detail-item"><span class="trade-detail-label">投资额</span><span class="trade-detail-value">{{ signal.investment_amount?.toFixed(2) }}</span></div></div>
+                                                <div class="col-6 col-md-3"><div class="trade-detail-item"><span class="trade-detail-label">潜在盈亏</span><span class="trade-detail-value"><span class="text-success">+{{ signal.potential_profit?.toFixed(2) }}</span> / <span class="text-danger">-{{ signal.potential_loss?.toFixed(2) }}</span></span></div></div>
+                                                <div class="col-12"><div class="trade-detail-item text-center justify-content-center" v-if="!signal.verified"><span class="trade-detail-label me-2">倒计时</span><span class="trade-detail-value countdown">{{ getTimeRemaining(signal) }}</span></div></div>
+                                            </div>
+                                            <div v-if="signal.isDetailsVisible" class="mt-2 pt-2 border-top">
+                                                <div class="row gx-2 gy-2">
+                                                    <div class="col-6 col-md-4"><div class="trade-detail-item"><span class="trade-detail-label">交易对</span><span class="trade-detail-value">{{ signal.symbol }} ({{signal.interval}})</span></div></div>
+                                                    <div class="col-6 col-md-4"><div class="trade-detail-item"><span class="trade-detail-label">事件周期</span><span class="trade-detail-value">{{ signal.event_period }}</span></div></div>
+                                                    <div class="col-6 col-md-4"><div class="trade-detail-item"><span class="trade-detail-label">预测策略</span><span class="trade-detail-value">{{ getStrategyName(signal.prediction_strategy_id, 'prediction') }} <i class="bi bi-info-circle-fill text-primary" data-bs-toggle="popover" :data-bs-title="getStrategyName(signal.prediction_strategy_id, 'prediction')" :data-bs-content="formatParams(signal.prediction_strategy_params)"></i></span></div></div>
                                                 </div>
                                             </div>
                                         </div>
-                                        <!-- Strategy Details Collapsible Section -->
-                                        <div v-if="signal.isDetailsVisible" class="mt-2 p-2 border-top">
-                                            <ul class="list-unstyled mb-0 x-small">
-                                                <li v-for="(value, key) in signal.prediction_strategy_params" :key="key">
-                                                    <span class="fw-bold">{{ key }}:</span> {{ value }}
-                                                </li>
-                                            </ul>
+                                        <div class="card-footer p-1 text-center">
+                                            <button class="btn btn-link btn-sm text-decoration-none" @click="toggleSignalDetails(signal)">
+                                                {{ signal.isDetailsVisible ? '收起' : '详情' }} <i :class="['bi', signal.isDetailsVisible ? 'bi-chevron-up' : 'bi-chevron-down']"></i>
+                                            </button>
                                         </div>
                                     </div>
                                 </div>

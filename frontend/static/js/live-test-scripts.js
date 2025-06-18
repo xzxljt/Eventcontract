@@ -1,6 +1,6 @@
 // frontend/static/js/live-test-scripts.js
 
-const { createApp, ref, onMounted, onUnmounted, computed, watch, getCurrentInstance } = Vue;
+const { createApp, ref, onMounted, onUnmounted, computed, watch, getCurrentInstance, nextTick } = Vue;
 
 const app = createApp({
     setup() {
@@ -910,7 +910,7 @@ const app = createApp({
                         : parseFloat(monitorSettings.value.investment.simulatedBalance)),
                 minAmount: parseFloat(monitorSettings.value.investment.minAmount),
                 maxAmount: parseFloat(monitorSettings.value.investment.maxAmount),
-                percentageOfBalance: parseFloat(finalInvestmentSpecificParams.percentageOfBalance ?? monitorSettings.value.investment.percentageOfBalance),
+                percentageOfBalance: parseFloat(monitorSettings.value.investment.percentageOfBalance),
                 profitRate: parseFloat(monitorSettings.value.investment.profitRate),
                 lossRate: parseFloat(monitorSettings.value.investment.lossRate),
                 simulatedBalance: parseFloat(monitorSettings.value.investment.simulatedBalance),
@@ -1091,7 +1091,7 @@ const app = createApp({
                 } else {
                     sanitized.potential_loss = null;
                 }
-                sanitized.isDetailsVisible = false;
+                sanitized.isDetailsVisible = false; // 默认不显示详情
                 return sanitized;
             });
 
@@ -1105,7 +1105,7 @@ const app = createApp({
         const handleNewSignal = (signalData) => {
             console.log("LiveTest: Raw signal data received:", signalData); // Add this line
             const newSignal = sanitizeSignal(signalData);
-            newSignal.isDetailsVisible = false; // Add isDetailsVisible property
+            newSignal.isDetailsVisible = false;
             console.log("LiveTest: Sanitized signal data:", newSignal); // Add this line
 
             console.log("LiveTest: Received new signal:", newSignal); // Add this line
@@ -1252,6 +1252,15 @@ const app = createApp({
             return strategy ? strategy.name : (strategyId || "未知");
         };
 
+        const formatParams = (params) => {
+            if (!params || typeof params !== 'object' || Object.keys(params).length === 0) {
+                return '无参数';
+            }
+            return Object.entries(params)
+                .map(([key, value]) => `${key}: ${value}`)
+                .join('<br>');
+        };
+
         // --- Countdown Timer for Signals ---
         const timeRemainingRefs = ref({});
         let countdownInterval = null;
@@ -1285,6 +1294,29 @@ const app = createApp({
         };
         const getTimeRemaining = (signal) => timeRemainingRefs.value[signal.id] || (signal.verified ? '已验证' : '计算中...');
         const isTimeRemainingRelevant = (signal) => !signal.verified && signal.expected_end_time;
+
+        const initializePopovers = () => {
+            nextTick(() => {
+                const popoverTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="popover"]'));
+                popoverTriggerList.forEach(popoverTriggerEl => {
+                    // Dispose of any existing popover to avoid duplicates
+                    const existingPopover = bootstrap.Popover.getInstance(popoverTriggerEl);
+                    if (existingPopover) {
+                        existingPopover.dispose();
+                    }
+                    // Create a new popover
+                    new bootstrap.Popover(popoverTriggerEl, {
+                        trigger: 'hover focus',
+                        html: true,
+                        sanitize: false, // Allow HTML content like <br>
+                    });
+                });
+            });
+        };
+
+        watch(paginatedSignals, () => {
+            initializePopovers();
+        }, { deep: true, flush: 'post' });
 
 
 
@@ -1395,6 +1427,7 @@ const app = createApp({
 
             // Validation Error Method
             getValidationError,
+            formatParams,
         };
     }
 });

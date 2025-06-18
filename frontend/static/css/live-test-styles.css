@@ -143,3 +143,68 @@
     transition: all 0.5s ease-in-out;
     overflow: hidden;
 }
+/* Live Signal Card Styles */
+.signal-card {
+    border-width: 1px;
+    transition: all 0.3s ease;
+}
+
+.signal-card.status-verified-correct {
+    border-color: var(--bs-success);
+}
+
+.signal-card.status-verified-incorrect {
+    border-color: var(--bs-danger);
+}
+
+.signal-card.status-pending {
+    border-color: var(--bs-warning);
+}
+
+.signal-card .card-header {
+    font-size: 0.85rem;
+}
+
+.signal-card .card-body {
+    font-size: 0.8rem;
+}
+
+.signal-card .card-footer {
+    background-color: #f8f9fa;
+    border-top: 1px solid #dee2e6;
+}
+
+.trade-detail-item {
+    background-color: #f8f9fa;
+    border-radius: 0.375rem;
+    padding: 0.5rem 0.75rem;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+.trade-detail-label {
+    font-size: 0.75em;
+    color: #6c757d;
+    margin-bottom: 0.15rem;
+}
+
+.trade-detail-value {
+    font-size: 1em;
+    font-weight: 600;
+    line-height: 1.2;
+}
+
+.countdown {
+    font-weight: bold;
+    color: var(--bs-primary);
+}
+/* Popover Custom Styles */
+.popover {
+    max-width: 400px; /* Adjust popover width */
+}
+
+.popover-body {
+    font-size: 0.8rem; /* Smaller font for popover content */
+    white-space: pre-wrap; /* Allow line breaks */
+}
