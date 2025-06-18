@@ -1034,14 +1034,21 @@ const app = createApp({
 
         // --- Signal Handling ---
         const sanitizeSignal = (signal) => {
-            // ... (这部分逻辑保持不变)
             const sanitized = { ...signal };
+
+            // FIX: The backend now only sends `signal_price`. The template might still
+            // expect `effective_signal_price_for_calc` for the entry price display.
+            // We create it here for compatibility to ensure the price is displayed correctly.
+            if (sanitized.signal_price !== undefined) {
+                sanitized.effective_signal_price_for_calc = sanitized.signal_price;
+            }
+
             // Map origin_config_id to config_id for filtering
             if (sanitized.origin_config_id && !sanitized.config_id) {
                 sanitized.config_id = sanitized.origin_config_id;
             }
             const numericFields = [
-                'confidence', 'signal_price', 'actual_end_price',
+                'confidence', 'signal_price', 'actual_end_price', 'effective_signal_price_for_calc',
                 'price_change_pct', 'pnl_pct', 'investment_amount',
                 'actual_profit_loss_amount', 'profit_rate_pct', 'loss_rate_pct',
                 'potential_profit', 'potential_loss', 'balance_after_trade'

@@ -742,6 +742,7 @@ async def background_signal_verifier():
                         verified_something = True
         
         for signal_copy_to_verify in signals_to_verify_copy:
+            logger.info(f"[background_signal_verifier] Verifying signal ID: {signal_copy_to_verify.get('id')}")
             try:
                 end_time_utc = parse_frontend_datetime(signal_copy_to_verify['expected_end_time'])
                 if not end_time_utc.tzinfo: end_time_utc = end_time_utc.replace(tzinfo=timezone.utc)
@@ -807,6 +808,7 @@ async def background_signal_verifier():
                     'actual_profit_loss_amount': round(actual_pnl_amt, 2),
                     'verified': True, 'verify_time': format_for_display(current_time_utc)
                 }
+                logger.debug(f"[background_signal_verifier] Signal {signal_copy_to_verify.get('id')}: Created update_fields: {json.dumps(ensure_json_serializable(update_fields), indent=2)}")
 
                 original_updated = False
                 with live_signals_lock:
@@ -860,6 +862,8 @@ async def background_signal_verifier():
                     # Broadcast the next investment amount after state change
                     await broadcast_next_investment_amount(config_id_of_signal)
                     
+                    logger.debug(f"[background_signal_verifier] Broadcasting 'verified_signal' for signal {signal_copy_to_verify.get('id')}: {json.dumps(signal_copy_to_verify, indent=2)}")
+                    logger.debug(f"[background_signal_verifier] Broadcasting 'verified_signal' for signal {signal_copy_to_verify.get('id')}: {json.dumps(ensure_json_serializable(signal_copy_to_verify), indent=2)}")
                     await manager.broadcast_json(
                         {"type": "verified_signal", "data": signal_copy_to_verify},
                         filter_func=lambda c: websocket_to_config_id_map.get(c) == signal_copy_to_verify.get('origin_config_id')
@@ -1078,6 +1082,20 @@ async def handle_kline_data(kline_data: dict):
                 continue
             
             signal_df = pred_strat_info['class'](params=final_pred_params).generate_signals(df_klines.copy()) # 策略计算（如 generate_signals）通常是CPU密集型操作。如果耗时较长，建议后续使用 await asyncio.to_thread() 将其移出事件循环执行，以避免阻塞。
+# --- START LOGGING LATEST K-LINE DATA ---
+            try:
+                if not signal_df.empty and 'rsi' in signal_df.columns and 'close' in signal_df.columns:
+                    latest_data = signal_df.tail(3)
+                    log_message = f"[{live_test_config_data.get('_config_id', 'N/A')}] 最新3条K线数据:"
+                    for index, row in latest_data.iterrows():
+                        timestamp_str = index.strftime('%Y-%m-%d %H:%M:%S') if isinstance(index, pd.Timestamp) else str(index)
+                        log_message += f"\n  - 时间: {timestamp_str}, 价格: {row['close']:.4f}, RSI: {row['rsi']:.2f}"
+                    logger.info(log_message)
+                else:
+                    logger.debug(f"[{live_test_config_data.get('_config_id', 'N/A')}] K-line data logging skipped: DataFrame is empty or missing 'rsi'/'close' columns.")
+            except Exception as e:
+                logger.error(f"[{live_test_config_data.get('_config_id', 'N/A')}] Error during K-line data logging: {e}", exc_info=True)
+            # --- END LOGGING LATEST K-LINE DATA ---
             
             if signal_df.empty or 'signal' not in signal_df.columns or 'confidence' not in signal_df.columns:
                 continue
@@ -1132,7 +1150,7 @@ async def handle_kline_data(kline_data: dict):
                         fetched_kline_open_time_ms = int(index_price_df.iloc[0]['open_time'].timestamp() * 1000)
                         if fetched_kline_open_time_ms == kline_open_time_ms:
                             sig_price = float(index_price_df.iloc[0]['close'])
-                            logger.info(f"Successfully fetched index price {sig_price} for signal recording.")
+                            logger.info(f"[handle_kline_data] Successfully fetched index price {sig_price} for signal recording. Market price was {float(latest_sig_data['close'])}.")
                         else:
                             logger.warning(f"Index price kline time mismatch. Expected: {kline_open_time_ms}, Got: {fetched_kline_open_time_ms}. Falling back to market price.")
                     else:
@@ -1243,6 +1261,7 @@ async def handle_kline_data(kline_data: dict):
                     'verified': False, 'origin_config_id': live_test_config_data['_config_id'],
                     'autox_triggered_info': []
                 }
+                logger.debug(f"[handle_kline_data] Created new_live_signal object: {json.dumps(ensure_json_serializable(new_live_signal), indent=2)}")
 
                 # --- MODIFICATION: Deduct investment amount immediately ---
                 config_id_for_balance_update = live_test_config_data.get('_config_id')
@@ -1328,6 +1347,8 @@ async def handle_kline_data(kline_data: dict):
                 
                 print(f"有效交易信号 (Config ID: {live_test_config_data['_config_id']}): ID={new_live_signal['id']}, 交易对={new_live_signal['symbol']}_{new_live_signal['interval']}, 方向={'上涨' if new_live_signal['signal'] == 1 else '下跌'}, 置信度={new_live_signal['confidence']:.2f}, 投资额={new_live_signal['investment_amount']:.2f}, AutoX触发客户端数: {num_triggered}")
                 
+                logger.debug(f"[handle_kline_data] Broadcasting 'new_signal': {json.dumps(new_live_signal, indent=2)}")
+                logger.debug(f"[handle_kline_data] Broadcasting 'new_signal': {json.dumps(ensure_json_serializable(new_live_signal), indent=2)}")
                 await manager.broadcast_json(
                     {"type": "new_signal", "data": new_live_signal},
                     filter_func=lambda c: websocket_to_config_id_map.get(c) == new_live_signal['origin_config_id']

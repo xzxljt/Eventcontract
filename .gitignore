@@ -44,3 +44,4 @@ config/active_test_config.json
 config/autox_clients_data.json
 live_signals.json
 bot.bat
+get_eth_price.py
