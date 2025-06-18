@@ -208,3 +208,10 @@
     font-size: 0.8rem; /* Smaller font for popover content */
     white-space: pre-wrap; /* Allow line breaks */
 }
+.bg-success-subtle {
+    background-color: rgba(var(--bs-success-rgb), 0.15) !important;
+}
+
+.bg-danger-subtle {
+    background-color: rgba(var(--bs-danger-rgb), 0.15) !important;
+}

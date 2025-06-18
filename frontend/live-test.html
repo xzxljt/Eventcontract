@@ -426,7 +426,7 @@
                                                 {{ signal.verified ? (signal.result ? '胜利' : '失败') : '待验证' }}
                                             </span>
                                         </div>
-                                        <div class="card-body p-2">
+                                        <div class="card-body p-2" @click="toggleSignalDetails(signal)" style="cursor: pointer;">
                                             <div class="row gx-2 gy-2">
                                                 <div class="col-6 col-md-3"><div class="trade-detail-item"><span class="trade-detail-label">入场价</span><span class="trade-detail-value">{{ signal.signal_price?.toFixed(signal.symbol && signal.symbol.includes('BTC') ? 2 : 4) }}</span></div></div>
                                                 <div class="col-6 col-md-3"><div class="trade-detail-item"><span class="trade-detail-label">置信度</span><span class="trade-detail-value">{{ signal.confidence?.toFixed(2) }}</span></div></div>
@@ -438,14 +438,12 @@
                                                 <div class="row gx-2 gy-2">
                                                     <div class="col-6 col-md-4"><div class="trade-detail-item"><span class="trade-detail-label">交易对</span><span class="trade-detail-value">{{ signal.symbol }} ({{signal.interval}})</span></div></div>
                                                     <div class="col-6 col-md-4"><div class="trade-detail-item"><span class="trade-detail-label">事件周期</span><span class="trade-detail-value">{{ signal.event_period }}</span></div></div>
-                                                    <div class="col-6 col-md-4"><div class="trade-detail-item"><span class="trade-detail-label">预测策略</span><span class="trade-detail-value">{{ getStrategyName(signal.prediction_strategy_id, 'prediction') }} <i class="bi bi-info-circle-fill text-primary" data-bs-toggle="popover" :data-bs-title="getStrategyName(signal.prediction_strategy_id, 'prediction')" :data-bs-content="formatParams(signal.prediction_strategy_params)"></i></span></div></div>
+                                                    <div class="col-6 col-md-4"><div class="trade-detail-item"><span class="trade-detail-label">预测策略</span><span class="trade-detail-value">{{ getStrategyName(signal.prediction_strategy_id, 'prediction') }} <i class="bi bi-info-circle-fill text-primary" @click.stop data-bs-toggle="popover" :data-bs-title="getStrategyName(signal.prediction_strategy_id, 'prediction')" :data-bs-content="formatParams(signal.prediction_strategy_params)"></i></span></div></div>
                                                 </div>
                                             </div>
                                         </div>
-                                        <div class="card-footer p-1 text-center">
-                                            <button class="btn btn-link btn-sm text-decoration-none" @click="toggleSignalDetails(signal)">
-                                                {{ signal.isDetailsVisible ? '收起' : '详情' }} <i :class="['bi', signal.isDetailsVisible ? 'bi-chevron-up' : 'bi-chevron-down']"></i>
-                                            </button>
+                                        <div class="card-footer p-1 text-center text-muted" @click="toggleSignalDetails(signal)" style="cursor: pointer;">
+                                            {{ signal.isDetailsVisible ? '收起' : '详情' }} <i :class="['bi', signal.isDetailsVisible ? 'bi-chevron-up' : 'bi-chevron-down']"></i>
                                         </div>
                                     </div>
                                 </div>
