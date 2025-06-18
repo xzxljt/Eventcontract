@@ -9,9 +9,15 @@
 /* Signal card adjustments (shared-styles.css has base .signal-card styles) */
 .signal-card {
     border-radius: var(--border-radius-lg); /* Ensure it uses the larger radius */
+    transition: all 0.2s ease-in-out;
 }
+
+.signal-card:hover {
+    transform: translateY(-2px);
+}
+
 .signal-card .card-header, .signal-card .card-body {
-    padding: 0.85rem 1rem; /* Consistent padding */
+    padding: 1rem; /* Consistent padding */
 }
 .signal-card p {
     margin-bottom: 0.4rem;
@@ -20,7 +26,7 @@
 }
 .signal-card p strong, .signal-card p .text-primary { /* Example specific highlight */
     color: var(--text-primary-color); /* Or a more specific highlight color */
-    font-weight: 500;
+    font-weight: 600;
 }
 .signal-card .badge {
     font-size: 0.85em; /* Slightly larger badges in signal cards */
@@ -124,4 +130,16 @@
     border-color: var(--border-color) !important;
     border-radius: var(--border-radius-base) !important;
     padding: 0.75rem !important;
+}
+.signal-card .card-footer {
+    transition: all 0.3s ease-in-out;
+}
+
+.signal-card .card-footer .btn {
+    transition: background-color 0.3s ease;
+}
+
+.signal-card .card-footer div[v-if] {
+    transition: all 0.5s ease-in-out;
+    overflow: hidden;
 }

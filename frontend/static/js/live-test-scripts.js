@@ -1091,6 +1091,7 @@ const app = createApp({
                 } else {
                     sanitized.potential_loss = null;
                 }
+                sanitized.isDetailsVisible = false;
                 return sanitized;
             });
 
@@ -1104,6 +1105,7 @@ const app = createApp({
         const handleNewSignal = (signalData) => {
             console.log("LiveTest: Raw signal data received:", signalData); // Add this line
             const newSignal = sanitizeSignal(signalData);
+            newSignal.isDetailsVisible = false; // Add isDetailsVisible property
             console.log("LiveTest: Sanitized signal data:", newSignal); // Add this line
 
             console.log("LiveTest: Received new signal:", newSignal); // Add this line
@@ -1214,6 +1216,13 @@ const app = createApp({
                 showServerMessage(err.response?.data?.detail || err.message || "删除信号时发生网络错误。", true);
             } finally {
                 deletingSignals.value = false;
+            }
+        };
+
+        const toggleSignalDetails = (signalToToggle) => {
+            const signal = liveSignals.value.find(s => s.id === signalToToggle.id);
+            if (signal) {
+                signal.isDetailsVisible = !signal.isDetailsVisible;
             }
         };
 
@@ -1382,6 +1391,7 @@ const app = createApp({
 
             toggleSelectAllDisplayedManagedSignals,
             deleteSelectedSignals,
+            toggleSignalDetails,
 
             // Validation Error Method
             getValidationError,

@@ -431,7 +431,7 @@
                                             <div class="row">
                                                 <div class="col-md-6">
                                                     <p class="mb-1">ID: <span class="text-muted x-small">{{ signal.id.substring(0,15) }}...</span></p>
-                                                    <p class="mb-1">预测策略: <span class="text-muted">{{ getStrategyName(signal.prediction_strategy_id, 'prediction') }}</span></p>
+                                                    <p class="mb-1">预测策略: <span class="text-muted">{{ getStrategyName(signal.prediction_strategy_id, 'prediction') }} <i class="bi bi-info-circle ms-1" @click="toggleSignalDetails(signal)" style="cursor: pointer;"></i></span></p>
                                                     <p class="mb-1">置信度: <span class="text-muted">{{ signal.confidence?.toFixed(2) }}</span></p>
                                                     <p class="mb-1">信号价格: <span class="text-muted">{{ signal.signal_price?.toFixed(signal.symbol && signal.symbol.includes('BTC') ? 2 : 4) }}</span></p>
                                                     <p class="mb-1">事件周期: <span class="text-muted">{{ signal.event_period }}</span></p>
@@ -453,6 +453,14 @@
                                                     </template>
                                                 </div>
                                             </div>
+                                        </div>
+                                        <!-- Strategy Details Collapsible Section -->
+                                        <div v-if="signal.isDetailsVisible" class="mt-2 p-2 border-top">
+                                            <ul class="list-unstyled mb-0 x-small">
+                                                <li v-for="(value, key) in signal.prediction_strategy_params" :key="key">
+                                                    <span class="fw-bold">{{ key }}:</span> {{ value }}
+                                                </li>
+                                            </ul>
                                         </div>
                                     </div>
                                 </div>
