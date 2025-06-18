@@ -757,7 +757,8 @@ async def background_signal_verifier():
                 logger.info(f"Verifying signal {signal_copy_to_verify['id']} using index price.")
                 actual_price = None
                 try:
-                    kline_df = await binance_client.get_index_price_klines(
+                    kline_df = await asyncio.to_thread(
+                        binance_client.get_index_price_klines,
                         signal_copy_to_verify['symbol'], '1m',
                         start_time=int(kline_start_time_utc.timestamp() * 1000), limit=1
                     )
@@ -1138,7 +1139,8 @@ async def handle_kline_data(kline_data: dict):
                     kline_open_time_ms = int(latest_sig_data.name.timestamp() * 1000)
                     
                     # Fetch the single index price kline for the same period
-                    index_price_df = await binance_client.get_index_price_klines(
+                    index_price_df = await asyncio.to_thread(
+                        binance_client.get_index_price_klines,
                         live_test_config_data['symbol'],
                         live_test_config_data['interval'],
                         start_time=kline_open_time_ms,
@@ -1147,7 +1149,7 @@ async def handle_kline_data(kline_data: dict):
                     
                     if not index_price_df.empty:
                         # Check if the fetched kline matches the time
-                        fetched_kline_open_time_ms = int(index_price_df.iloc[0]['open_time'].timestamp() * 1000)
+                        fetched_kline_open_time_ms = int(index_price_df.index[0].timestamp() * 1000)
                         if fetched_kline_open_time_ms == kline_open_time_ms:
                             sig_price = float(index_price_df.iloc[0]['close'])
                             logger.info(f"[handle_kline_data] Successfully fetched index price {sig_price} for signal recording. Market price was {float(latest_sig_data['close'])}.")

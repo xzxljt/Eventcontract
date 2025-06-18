@@ -311,8 +311,6 @@ class Backtester:
                 pass
                 #  logger.warning(f"    [DEBUG] Index search for recording out of bounds. Falling back to market entry price.")
             
-            if index_price_at_signal is None:
-                index_price_at_signal = effective_signal_price # Fallback
             # --- END MODIFICATION ---
 
             # effective_signal_price is now the clean market entry price (next kline's open) without slippage
@@ -338,11 +336,12 @@ class Backtester:
             if investment_amount < self.investment_strategy.min_amount:
                 investment_amount = 0.0
 
-            if investment_amount > 0:
+            # 仅当成功获取到指数价格且投资金额大于0时，才创建交易
+            if investment_amount > 0 and index_price_at_signal is not None:
                 new_trade = {
                     'signal_time': next_kline_time, # Use next kline's time
-                    'signal_price': float(index_price_at_signal), # Displayed price is still the index price at signal time
-                    'effective_signal_price_for_calc': float(effective_signal_price), # PnL is calculated from next kline's open
+                    'signal_price': float(index_price_at_signal), # 显示价格和计算价格都使用指数价格
+                    'effective_signal_price_for_calc': float(index_price_at_signal), # PnL is calculated from index price
                     'signal': signal_val,
                     'confidence': confidence_val,
                     'end_time_expected': next_kline_time + timedelta(minutes=self.period_minutes), # End time is based on actual trade time
@@ -510,8 +509,8 @@ class Backtester:
                             # else: 如果 pnl/trades 不为0但 balance 是 NaN，这是异常情况，目前余额会是 last_known_balance
 
                     # 再次检查并确保第一个日期的余额是有效的
-                    if pd.isna(daily_summary_reindexed['balance'].iloc[0]):
-                        daily_summary_reindexed['balance'].iloc[0] = self.initial_balance
+                    if pd.isna(daily_summary_reindexed['balance'].iloc):
+                        daily_summary_reindexed['balance'].iloc = self.initial_balance
                     # 向前填充以处理可能因其他原因（理论上不应发生）导致的中间NaN
                     daily_summary_reindexed['balance'] = daily_summary_reindexed['balance'].ffill()
 

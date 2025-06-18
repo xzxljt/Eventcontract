@@ -1291,8 +1291,8 @@ def get_available_strategies() -> List[Dict[str, Any]]:
             'description': '使用RSI指标判断超买超卖',
             'parameters': [
                 {'name': 'rsi_period', 'type': 'int', 'default': 14, 'min': 5, 'max': 30, 'description': 'RSI周期'},
-                {'name': 'rsi_overbought', 'type': 'int', 'default': 70, 'min': 60, 'max': 90, 'description': 'RSI超买阈值'},
-                {'name': 'rsi_oversold', 'type': 'int', 'default': 30, 'min': 10, 'max': 40, 'description': 'RSI超卖阈值'},
+                {'name': 'rsi_overbought', 'type': 'int', 'default': 70, 'min': 1, 'max': 99, 'description': 'RSI超买阈值'},
+                {'name': 'rsi_oversold', 'type': 'int', 'default': 30, 'min': 1, 'max': 99, 'description': 'RSI超卖阈值'},
             ]
         },
         {
