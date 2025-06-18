@@ -170,7 +170,7 @@ class ConnectionManager:
             timeout_sec: 每个WebSocket发送操作的超时时间（秒）
         """
         broadcast_overall_start_time = time.time()
-        logger.info(f"开始异步WebSocket广播 - 时间: {datetime.now().isoformat()}")
+        # logger.info(f"开始异步WebSocket广播 - 时间: {datetime.now().isoformat()}")
         
         active_connections_copy = list(self.active_connections) # 迭代副本以允许在广播时断开连接
         
@@ -185,7 +185,7 @@ class ConnectionManager:
         if not connections_to_send_to:
             logger.debug("没有符合条件的WebSocket连接需要广播。")
             broadcast_overall_elapsed = time.time() - broadcast_overall_start_time
-            logger.info(f"异步WebSocket广播完成 (无连接) - 总耗时: {broadcast_overall_elapsed:.4f}秒")
+            # logger.info(f"异步WebSocket广播完成 (无连接) - 总耗时: {broadcast_overall_elapsed:.4f}秒")
             return {"total_targeted": 0, "success": 0, "error": 0}
 
         logger.debug(f"准备向 {len(connections_to_send_to)} 个客户端创建发送任务...")
@@ -222,13 +222,13 @@ class ConnectionManager:
         
         broadcast_overall_elapsed = time.time() - broadcast_overall_start_time
         logger.info(
-            f"异步WebSocket广播完成 - 总耗时: {broadcast_overall_elapsed:.4f}秒, "
+            # f"异步WebSocket广播完成 - 总耗时: {broadcast_overall_elapsed:.4f}秒, "
             f"目标客户端数: {total_targeted_connections}, 成功: {success_count}, 失败: {error_count}"
         )
         
         if broadcast_overall_elapsed > 1.0:
             logger.warning(
-                f"异步WebSocket广播耗时较长: {broadcast_overall_elapsed:.4f}秒, "
+                # f"异步WebSocket广播耗时较长: {broadcast_overall_elapsed:.4f}秒, "
                 f"成功/目标: {success_count}/{total_targeted_connections}"
             )
         
@@ -246,6 +246,7 @@ class InvestmentStrategySettings(BaseModel):
     lossRate: float = Field(100.0, description="事件合约失败损失率 (%)")
     simulatedBalance: Optional[float] = Field(None, description="模拟账户总资金 (用于百分比投资策略计算)")
     min_trade_interval_minutes: Optional[float] = Field(0, description="最小开单间隔（分钟），0表示不限制")
+    investment_strategy_specific_params: Optional[Dict[str, Any]] = Field(None, description="选定投资策略的特定参数")
 
 
 class BacktestInvestmentSettings(BaseModel):
@@ -492,7 +493,10 @@ async def load_active_test_config():
             # 从文件加载配置后，重新创建策略实例
             # 注意：这里需要确保 _create_and_store_investment_strategy_instance 函数已经被定义
             # 我们将把它的定义放在 handle_kline_data 之前
-            inv_instance = _create_and_store_investment_strategy_instance(config_data)
+            # 在创建实例之前，将配置ID添加到数据中
+            config_data_with_id = config_data.copy()
+            config_data_with_id['_config_id'] = active_config_id
+            inv_instance = _create_and_store_investment_strategy_instance(config_data_with_id)
             if inv_instance:
                 running_live_test_configs[active_config_id]['investment_strategy_instance'] = inv_instance
 
@@ -1601,8 +1605,18 @@ async def websocket_endpoint(websocket: WebSocket):
                     await websocket.send_json({"type": "session_not_found", "data": {"config_id": client_config_id}})
             
             elif message_type == 'set_runtime_config':
+                logger.info(f"[DEBUG] Received 'set_runtime_config' message. Raw data: {json.dumps(data, indent=2)}")
                 config_payload_data = data.get('data', {})
-                try: 
+
+                # 修正：在验证之前，手动合并策略特定参数到 investment_settings 中
+                if 'investment_settings' in config_payload_data and 'investment_strategy_specific_params' in config_payload_data['investment_settings']:
+                    specific_params = config_payload_data['investment_settings'].pop('investment_strategy_specific_params')
+                    if specific_params:
+                        logger.info(f"[DEBUG] Merging specific params into investment_settings: {specific_params}")
+                        config_payload_data['investment_settings'].update(specific_params)
+                        logger.info(f"[DEBUG] Final investment_settings before validation: {config_payload_data['investment_settings']}")
+
+                try:
                     required_keys = ["symbol", "interval", "prediction_strategy_id", "confidence_threshold", "event_period", "investment_settings"]
                     if not all(key in config_payload_data for key in required_keys):
                         await websocket.send_json({"type": "error", "data": {"message": "运行时配置缺少必要字段。"}})
@@ -1685,6 +1699,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         logger.info(f"Creating new config {new_config_id}. Initial/New simulatedBalance: {newly_input_simulated_balance}, initial current_balance: {final_current_balance}")
 
                     full_config_to_store = {
+                        "_config_id": new_config_id,
                         "symbol": new_symbol, # new_symbol, new_interval 在前面约 line 1445-1446 定义
                         "interval": new_interval,
                         "prediction_strategy_id": config_payload_data["prediction_strategy_id"],

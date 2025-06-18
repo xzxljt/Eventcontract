@@ -154,9 +154,16 @@ class PercentageOfBalanceStrategy(BaseInvestmentStrategy):
         super().__init__(params, **kwargs)
         self.name = "账户百分比策略"
         self.description = "每次投资当前账户余额的固定百分比。"
-        self.percentage = float(self.params.get('percentageOfBalance', 10.0)) 
-        if not (0 < self.percentage <= 100): 
-            raise ValueError("'percentageOfBalance' 参数必须在 (0, 100] 之间。")
+        # 修正：优先从 'percentage' 键获取值，以匹配文档字符串和可能的调用约定，
+        # 同时保留 'percentageOfBalance' 作为备用，以兼容前端UI定义。
+        percentage_val = self.params.get('percentage', self.params.get('percentageOfBalance'))
+        if percentage_val is None:
+            # 如果两个键都不存在，则使用默认值
+            percentage_val = 10.0
+        
+        self.percentage = float(percentage_val)
+        if not (0 < self.percentage <= 100):
+            raise ValueError("百分比参数 ('percentage' 或 'percentageOfBalance') 必须在 (0, 100] 之间。")
 
 
     def calculate_investment(
