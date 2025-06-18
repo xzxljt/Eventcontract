@@ -174,3 +174,42 @@
     line-height: 1.1;
     margin-top: 2px;
 }
+/* Trade History Card Styles */
+.trade-card .card-header {
+    padding: 0.5rem 1rem;
+    font-size: 0.9rem;
+}
+
+.trade-card .card-body {
+    padding: 1rem;
+    font-size: 0.85rem;
+}
+
+.trade-detail-item {
+    background-color: #f8f9fa;
+    border-radius: 0.375rem;
+    padding: 0.5rem 0.75rem;
+    margin-bottom: 0.5rem;
+    display: flex;
+    flex-direction: column;
+}
+
+.trade-detail-label {
+    font-size: 0.75em;
+    color: #6c757d;
+    margin-bottom: 0.15rem;
+}
+
+.trade-detail-value {
+    font-size: 1em;
+    font-weight: 600;
+    line-height: 1.2;
+}
+
+.bg-success-subtle {
+    background-color: rgba(var(--bs-success-rgb), 0.15) !important;
+}
+
+.bg-danger-subtle {
+    background-color: rgba(var(--bs-danger-rgb), 0.15) !important;
+}

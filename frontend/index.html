@@ -384,41 +384,64 @@
 
                             <div class="mt-4">
                                 <h5>交易记录详情</h5>
-                                <div class="table-responsive" style="max-height: 400px; overflow-y: auto;">
-                                    <table class="table table-striped table-hover table-sm">
-                                        <thead>
-                                            <tr>
-                                                <th>信号时间</th> <th>方向</th> <th>置信度</th> <th>投资额</th>
-                                                <th>入场价</th> <th>出场价</th> <th>价格%</th>
-                                                <th>盈亏额</th> <th>结果</th> <th>交易后余额</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody v-if="backtestResults.predictions && Array.isArray(backtestResults.predictions)">
-                                            <tr v-for="(pred, index) in backtestResults.predictions" :key="index" :class="pred.result === true ? 'table-success' : (pred.result === false ? 'table-danger' : '')">
-                                                <td>{{ formatDateTime(pred.signal_time) }}</td>
-                                                <td>
-                                                    <span v-if="pred.signal === 1" class="badge bg-success">做多</span>
-                                                    <span v-else-if="pred.signal === -1" class="badge bg-danger">做空</span>
-                                                    <span v-else class="badge bg-secondary">无</span>
-                                                </td>
-                                                <td>{{ pred.confidence?.toFixed(2) }}</td>
-                                                <td>{{ pred.investment_amount?.toFixed(2) }}</td>
-                                                <td>{{ pred.effective_signal_price_for_calc?.toFixed(pred.symbol && pred.symbol.includes('BTC') ? 2 : 4) || 'N/A' }}</td>
-                                                <td>{{ pred.end_price?.toFixed(pred.symbol && pred.symbol.includes('BTC') ? 2 : 4) || 'N/A' }}</td>
-                                                <td :class="(pred.price_change_pct || 0) >= 0 ? 'text-success' : 'text-danger'"> {{ pred.price_change_pct?.toFixed(2) || 'N/A' }}% </td>
-                                                <td :class="(pred.pnl_amount || 0) >= 0 ? 'text-success' : 'text-danger'"> {{ pred.pnl_amount?.toFixed(2) || 'N/A' }} </td>
-                                                <td>
+                                <div class="trade-history-cards" style="max-height: 450px; overflow-y: auto;">
+                                    <div v-if="backtestResults.predictions && backtestResults.predictions.length > 0">
+                                        <div v-for="(pred, index) in backtestResults.predictions" :key="index" class="card trade-card mb-3" :class="pred.result === true ? 'border-success' : (pred.result === false ? 'border-danger' : 'border-secondary')">
+                                            <div class="card-header d-flex justify-content-between align-items-center" :class="pred.result === true ? 'bg-success-subtle' : (pred.result === false ? 'bg-danger-subtle' : 'bg-light')">
+                                                <span class="fw-bold">{{ formatDateTime(pred.signal_time) }}</span>
+                                                <div>
+                                                    <span v-if="pred.signal === 1" class="badge bg-success me-2">做多</span>
+                                                    <span v-else-if="pred.signal === -1" class="badge bg-danger me-2">做空</span>
                                                     <span v-if="pred.result === true" class="badge bg-success">胜利</span>
                                                     <span v-else-if="pred.result === false" class="badge bg-danger">失败</span>
-                                                    <span v-else class="badge bg-light text-dark">未验证/无</span>
-                                                </td>
-                                                <td>{{ pred.balance_after_trade?.toFixed(2) }}</td>
-                                            </tr>
-                                            <tr v-if="!backtestResults.predictions || backtestResults.predictions.length === 0">
-                                                <td colspan="10" class="text-center text-muted">沒有交易记录。</td>
-                                            </tr>
-                                        </tbody>
-                                    </table>
+                                                    <span v-else class="badge bg-light text-dark">未验证</span>
+                                                </div>
+                                            </div>
+                                            <div class="card-body">
+                                                <div class="row">
+                                                    <div class="col-md-4 col-sm-6">
+                                                        <div class="trade-detail-item">
+                                                            <span class="trade-detail-label">盈亏</span>
+                                                            <span class="trade-detail-value" :class="getPnlClass(pred.pnl_amount)">{{ pred.pnl_amount?.toFixed(2) || 'N/A' }}</span>
+                                                        </div>
+                                                    </div>
+                                                    <div class="col-md-4 col-sm-6">
+                                                        <div class="trade-detail-item">
+                                                            <span class="trade-detail-label">最终余额</span>
+                                                            <span class="trade-detail-value">{{ pred.balance_after_trade?.toFixed(2) }}</span>
+                                                        </div>
+                                                    </div>
+                                                    <div class="col-md-4 col-sm-6">
+                                                        <div class="trade-detail-item">
+                                                            <span class="trade-detail-label">投资额</span>
+                                                            <span class="trade-detail-value">{{ pred.investment_amount?.toFixed(2) }}</span>
+                                                        </div>
+                                                    </div>
+                                                    <div class="col-md-4 col-sm-6">
+                                                        <div class="trade-detail-item">
+                                                            <span class="trade-detail-label">入场/出场价</span>
+                                                            <span class="trade-detail-value">{{ pred.effective_signal_price_for_calc?.toFixed(pred.symbol && pred.symbol.includes('BTC') ? 2 : 4) || 'N/A' }} / {{ pred.end_price?.toFixed(pred.symbol && pred.symbol.includes('BTC') ? 2 : 4) || 'N/A' }}</span>
+                                                        </div>
+                                                    </div>
+                                                    <div class="col-md-4 col-sm-6">
+                                                        <div class="trade-detail-item">
+                                                            <span class="trade-detail-label">价格变化</span>
+                                                            <span class="trade-detail-value" :class="getPnlClass(pred.price_change_pct)">{{ pred.price_change_pct?.toFixed(2) || 'N/A' }}%</span>
+                                                        </div>
+                                                    </div>
+                                                    <div class="col-md-4 col-sm-6">
+                                                        <div class="trade-detail-item">
+                                                            <span class="trade-detail-label">置信度</span>
+                                                            <span class="trade-detail-value">{{ pred.confidence?.toFixed(2) }}</span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div v-else class="text-center text-muted mt-3">
+                                        <p>没有交易记录。</p>
+                                    </div>
                                 </div>
                             </div>
                         </div>

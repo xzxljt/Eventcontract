@@ -645,17 +645,17 @@ const app = createApp({
 
         return {
             // State
-            symbols, favoriteSymbols, 
+            symbols, favoriteSymbols,
             predictionStrategies, selectedPredictionStrategy, predictionStrategyParams,
             investmentStrategies, selectedInvestmentStrategy, investmentStrategyParams,
             allSavedParams, // 虽然主要在内部使用，但如果模板中需要可以暴露
-            backtestParams, 
+            backtestParams,
             backtestResults, loading, error, validationError, // 暴露 validationError
             backtestResults, loading, error, validationError, fieldErrors, // <--- 添加 fieldError
 
             // Methods
             toggleFavorite, isFavorite, // Favorite methods
-            runBacktest, 
+            runBacktest,
             saveStrategyParameters,
             ensureGlobalInvestmentSettings, // 如果需要在模板中调用（一般不需要）
 
