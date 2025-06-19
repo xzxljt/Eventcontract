@@ -185,7 +185,7 @@ class Backtester:
                     
                     if future_kline_index_pos < len(df_index_price):
                         actual_end_kline_row = df_index_price.iloc[future_kline_index_pos]
-                        end_price = actual_end_kline_row['close'] # 指数价格只使用收盘价
+                        end_price = actual_end_kline_row['open'] # 指数价格只使用收盘价
                         actual_end_time_obj = df_index_price.index[future_kline_index_pos]
                         # logger.info(f"    [DEBUG] Settlement Found: EndPrice={end_price} at IndexTime={actual_end_time_obj}")
                         
