@@ -779,7 +779,18 @@ async def background_signal_verifier():
                     with live_signals_lock:
                         for i, sig_live in enumerate(live_signals):
                             if sig_live.get('id') == signal_copy_to_verify['id'] and not sig_live.get('verified'):
-                                live_signals[i].update({'verified': True, 'result': False, 'actual_end_price': -3, 'verify_notes': '无法获取指数结束价', 'verify_time': format_for_display(current_time_utc)})
+                                update_fields_on_failure = {
+                                    'verified': False,
+                                    'verification_status': 'failed_retrying',
+                                    'actual_end_price': None,
+                                    'price_change_pct': None,
+                                    'result': None,
+                                    'pnl_pct': None,
+                                    'actual_profit_loss_amount': None,
+                                    'verify_notes': '获取价格失败，等待重试...',
+                                    'verify_time': format_for_display(now_utc())
+                                }
+                                live_signals[i].update(update_fields_on_failure)
                                 verified_something = True; break
                     continue
 
@@ -811,7 +822,8 @@ async def background_signal_verifier():
                     'actual_end_price': actual_price, 'price_change_pct': round(change_pct, 4),
                     'result': correct, 'pnl_pct': round(pnl, 4),
                     'actual_profit_loss_amount': round(actual_pnl_amt, 2),
-                    'verified': True, 'verify_time': format_for_display(current_time_utc)
+                    'verified': True, 'verify_time': format_for_display(current_time_utc),
+                    'verification_status': 'success'
                 }
                 logger.debug(f"[background_signal_verifier] Signal {signal_copy_to_verify.get('id')}: Created update_fields: {json.dumps(ensure_json_serializable(update_fields), indent=2)}")
 
@@ -1265,6 +1277,7 @@ async def handle_kline_data(kline_data: dict):
                     'investment_amount': round(inv_amount, 2),
                     'profit_rate_pct': profit_pct, 'loss_rate_pct': loss_pct,
                     'verified': False, 'origin_config_id': live_test_config_data['_config_id'],
+                    'verification_status': 'pending',
                     'autox_triggered_info': []
                 }
                 logger.debug(f"[handle_kline_data] Created new_live_signal object: {json.dumps(ensure_json_serializable(new_live_signal), indent=2)}")

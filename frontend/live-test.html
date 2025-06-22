@@ -422,8 +422,10 @@
                                                 <span class="fw-bold">{{ formatDateTime(signal.signal_time) }}</span>
                                                 <span :class="['badge', signal.signal === 1 ? 'bg-success' : 'bg-danger', 'ms-2']">{{ signal.signal === 1 ? '做多' : '做空' }}</span>
                                             </div>
-                                            <span :class="['badge', signal.verified ? (signal.result ? 'bg-success' : 'bg-danger') : 'bg-warning text-dark']">
-                                                {{ signal.verified ? (signal.result ? '胜利' : '失败') : '待验证' }}
+                                            <span v-if="signal.verification_status === 'failed_retrying'" class="badge bg-warning text-dark">重试中</span>
+                                            <span v-else-if="signal.result === null" class="badge bg-secondary">待验证</span>
+                                            <span v-else :class="['badge', signal.result ? 'bg-success' : 'bg-danger']">
+                                                {{ signal.result ? '胜利' : '失败' }}
                                             </span>
                                         </div>
                                         <div class="card-body p-2" @click="toggleSignalDetails(signal)" style="cursor: pointer;">
@@ -432,8 +434,26 @@
                                                 <div class="col-6 col-md-3"><div class="trade-detail-item"><span class="trade-detail-label">置信度</span><span class="trade-detail-value">{{ signal.confidence?.toFixed(2) }}</span></div></div>
                                                 <div class="col-6 col-md-3"><div class="trade-detail-item"><span class="trade-detail-label">投资额</span><span class="trade-detail-value">{{ signal.investment_amount?.toFixed(2) }}</span></div></div>
                                                 <div class="col-6 col-md-3"><div class="trade-detail-item"><span class="trade-detail-label">潜在盈亏</span><span class="trade-detail-value"><span class="text-success">+{{ signal.potential_profit?.toFixed(2) }}</span> / <span class="text-danger">-{{ signal.potential_loss?.toFixed(2) }}</span></span></div></div>
-                                                <div class="col-6 col-md-3" v-if="signal.verified"><div class="trade-detail-item"><span class="trade-detail-label">验证价格</span><span class="trade-detail-value">{{ signal.actual_end_price?.toFixed(signal.symbol && signal.symbol.includes('BTC') ? 2 : 4) }}</span></div></div>
-                                                <div class="col-6 col-md-3" v-if="signal.verified"><div class="trade-detail-item"><span class="trade-detail-label">价格变化</span><span class="trade-detail-value" :class="getPnlClass(signal.price_change_pct)">{{ signal.price_change_pct?.toFixed(4) }}%</span></div></div>
+                                                <div class="col-6 col-md-3" v-if="signal.verified">
+                                                    <div class="trade-detail-item">
+                                                        <span class="trade-detail-label">验证价格</span>
+                                                        <span class="trade-detail-value">
+                                                            <span v-if="signal.verification_status === 'failed_retrying'" class="text-warning">验证重试中...</span>
+                                                            <span v-else-if="signal.actual_end_price === null">-</span>
+                                                            <span v-else>{{ signal.actual_end_price?.toFixed(signal.symbol && signal.symbol.includes('BTC') ? 2 : 4) }}</span>
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                                <div class="col-6 col-md-3" v-if="signal.verified">
+                                                    <div class="trade-detail-item">
+                                                        <span class="trade-detail-label">价格变化</span>
+                                                        <span class="trade-detail-value">
+                                                            <span v-if="signal.verification_status === 'failed_retrying'">--</span>
+                                                            <span v-else-if="signal.price_change_pct === null">-</span>
+                                                            <span v-else :class="getPnlClass(signal.price_change_pct)">{{ signal.price_change_pct?.toFixed(4) }}%</span>
+                                                        </span>
+                                                    </div>
+                                                </div>
                                                 <div class="col-12"><div class="trade-detail-item text-center justify-content-center" v-if="!signal.verified"><span class="trade-detail-label me-2">倒计时</span><span class="trade-detail-value countdown">{{ getTimeRemaining(signal) }}</span></div></div>
                                             </div>
                                             <div v-if="signal.isDetailsVisible" class="mt-2 pt-2 border-top">
