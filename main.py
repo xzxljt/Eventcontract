@@ -372,36 +372,50 @@ def ensure_json_serializable(data: Any) -> Any:
     elif isinstance(data, (datetime, pd.Timestamp)): return data.isoformat()
     return data
 
-# --- 新增：用于执行阻塞文件操作的辅助函数 ---
+# --- 新增：文件写入锁管理器，解决并发写入冲突 ---
+file_write_locks: Dict[str, threading.Lock] = {}
+file_write_locks_lock = threading.Lock() # 用于保护 file_write_locks 字典本身
+
+def get_lock_for_file(file_path: str) -> threading.Lock:
+    """为指定的文件路径获取或创建一把锁，确保文件操作的线程安全。"""
+    with file_write_locks_lock:
+        if file_path not in file_write_locks:
+            file_write_locks[file_path] = threading.Lock()
+        return file_write_locks[file_path]
+
+
+# --- 用于执行阻塞文件操作的辅助函数 ---
 def _blocking_save_json_to_file(file_path: str, data_to_save: Any):
     """
     一个同步的辅助函数，用于将数据保存到JSON文件。
     它会创建临时文件并进行原子替换，以确保数据完整性。
     这个函数应该通过 asyncio.to_thread 来调用。
     """
-    temp_file_path = file_path + ".tmp"
-    try:
-        # 确保目录存在
-        file_dir = os.path.dirname(file_path)
-        if file_dir and not os.path.exists(file_dir):
-            os.makedirs(file_dir)
+    file_lock = get_lock_for_file(file_path) # 获取文件对应的锁
+    with file_lock: # 使用锁来保护整个文件读写和替换过程
+        temp_file_path = file_path + ".tmp"
+        try:
+            # 确保目录存在
+            file_dir = os.path.dirname(file_path)
+            if file_dir and not os.path.exists(file_dir):
+                os.makedirs(file_dir)
 
-        serializable_data = ensure_json_serializable(data_to_save) # 确保数据可序列化
-        with open(temp_file_path, "w", encoding="utf-8") as f:
-            json.dump(serializable_data, f, indent=4)
-            f.flush()  # 确保所有内部缓冲区的数据都写入文件
-            os.fsync(f.fileno()) # 强制将文件写入磁盘
-        
-        os.replace(temp_file_path, file_path) # 原子性地替换旧文件
-        # print(f"数据已同步保存到: {file_path}") # 日志可以在调用方打印
-    except Exception as e:
-        print(f"同步保存文件 {file_path} 失败: {e}\n{traceback.format_exc()}")
-        if os.path.exists(temp_file_path):
-            try:
-                os.remove(temp_file_path)
-            except Exception as rm_err:
-                print(f"清理临时文件 {temp_file_path} 失败: {rm_err}")
-        raise # 重新抛出异常，让调用者知道保存失败
+            serializable_data = ensure_json_serializable(data_to_save) # 确保数据可序列化
+            with open(temp_file_path, "w", encoding="utf-8") as f:
+                json.dump(serializable_data, f, indent=4)
+                f.flush()  # 确保所有内部缓冲区的数据都写入文件
+                os.fsync(f.fileno()) # 强制将文件写入磁盘
+            
+            os.replace(temp_file_path, file_path) # 原子性地替换旧文件
+            # print(f"数据已同步保存到: {file_path}") # 日志可以在调用方打印
+        except Exception as e:
+            print(f"同步保存文件 {file_path} 失败: {e}\n{traceback.format_exc()}")
+            if os.path.exists(temp_file_path):
+                try:
+                    os.remove(temp_file_path)
+                except Exception as rm_err:
+                    print(f"清理临时文件 {temp_file_path} 失败: {rm_err}")
+            raise # 重新抛出异常，让调用者知道保存失败
 
 def _blocking_load_json_from_file(file_path: str, default_value: Any = None) -> Any:
     """
