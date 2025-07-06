@@ -1156,7 +1156,7 @@ async def handle_kline_data(kline_data: dict):
                             logger.info(f"信号 (Config: {live_test_config_data['_config_id']}) 被最小开单间隔规则跳过。间隔: {time_diff_minutes:.2f} < {min_interval_minutes} 分钟。")
                             return # 直接返回，彻底忽略此信号
 
-                event_period_minutes = {'10m': 10, '30m': 30, '1h': 60, '1d': 1440}.get(
+                event_period_minutes = {'3m': 3, '10m': 10, '30m': 30, '1h': 60, '1d': 1440}.get(
                     live_test_config_data.get("event_period", "10m"), 10
                 )
                 
