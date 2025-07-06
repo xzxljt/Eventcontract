@@ -1,3 +1,6 @@
+import logging
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 # --- START OF FILE backtester.py ---
 
 import pandas as pd

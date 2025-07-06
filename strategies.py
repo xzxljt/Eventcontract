@@ -1,4 +1,5 @@
 import pandas as pd
+import pandas_ta as ta
 import numpy as np
 from typing import Dict, Any, Tuple, List
 import logging # 导入logging模块
@@ -1282,6 +1283,133 @@ class BBSqueezeBreakoutStrategy(Strategy):
         return df_signaled
 
 
+# --- RsiBollingerBandsStrategy ---
+class RsiBollingerBandsStrategy(Strategy):
+    def __init__(self, params: Dict[str, Any] = None):
+        default_params = {
+            'bb_period': 20,
+            'bb_std_dev': 2.0,
+            'rsi_period': 14,
+            'rsi_oversold': 30,
+            'rsi_overbought': 70
+        }
+        if params: default_params.update(params)
+        super().__init__(default_params)
+        self.name = "RSI+布林带策略"
+        self.min_history_periods = max(self.params['bb_period'], self.params['rsi_period'])
+
+    def calculate_all_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
+        df = super().calculate_all_indicators(df)
+        try:
+            # 使用 append=True 直接、可靠地添加指标列
+            df.ta.bbands(length=self.params['bb_period'], std=self.params['bb_std_dev'], append=True)
+            df.ta.rsi(length=self.params['rsi_period'], append=True)
+        except Exception as e:
+            logger.error(f"({self.name}) 在 calculate_all_indicators 中计算指标时出错: {e}", exc_info=True)
+        return df
+
+    def generate_signals_from_indicators_on_window(self, df_window_with_indicators: pd.DataFrame) -> pd.DataFrame:
+        df_out = df_window_with_indicators.copy()
+        if 'signal' not in df_out.columns: df_out['signal'] = 0
+        if 'confidence' not in df_out.columns: df_out['confidence'] = 0
+
+        # 根据日志的明确结果，精确生成列名
+        std_dev_str = str(float(self.params['bb_std_dev']))
+        
+        close_col = 'close'
+        bb_upper_col = f"BBU_{self.params['bb_period']}_{std_dev_str}"
+        bb_lower_col = f"BBL_{self.params['bb_period']}_{std_dev_str}"
+        rsi_col = f"RSI_{self.params['rsi_period']}"
+
+        required_cols = [close_col, bb_upper_col, bb_lower_col, rsi_col]
+        if not all(col in df_out.columns for col in required_cols):
+            logger.warning(f"({self.name}) [window] 缺少必要的列。需要: {required_cols}, 拥有: {df_out.columns.tolist()}")
+            return df_out
+
+        if len(df_out) < 1:
+            return df_out
+
+        # Get the last row
+        last_row = df_out.iloc[-1]
+
+        # Check for NaN values in the last row for required columns
+        if last_row[required_cols].isna().any():
+            return df_out
+
+        # 添加诊断日志
+        # logger.info(f"({self.name}) [window] 信号判断前的数据 (最后一行):\n"
+                    #  f"{last_row[required_cols]}")
+
+        signal = 0
+        confidence = 0
+        
+        close = last_row[close_col]
+        bb_upper = last_row[bb_upper_col]
+        bb_lower = last_row[bb_lower_col]
+        rsi = last_row[rsi_col]
+
+        # Sell signal condition
+        if close >= bb_upper and rsi >= self.params['rsi_overbought']:
+            signal = -1
+            # Confidence calculation
+            rsi_conf = (rsi - self.params['rsi_overbought']) / (100 - self.params['rsi_overbought']) if (100 - self.params['rsi_overbought']) > 0 else 0
+            bb_conf = (close - bb_upper) / (bb_upper - bb_lower) if (bb_upper - bb_lower) > 0 else 0
+            confidence = 50 + min(50, (rsi_conf * 0.6 + bb_conf * 0.4) * 100)
+
+        # Buy signal condition
+        elif close <= bb_lower and rsi <= self.params['rsi_oversold']:
+            signal = 1
+            # Confidence calculation
+            rsi_conf = (self.params['rsi_oversold'] - rsi) / self.params['rsi_oversold'] if self.params['rsi_oversold'] > 0 else 0
+            bb_conf = (bb_lower - close) / (bb_upper - bb_lower) if (bb_upper - bb_lower) > 0 else 0
+            confidence = 50 + min(50, (rsi_conf * 0.6 + bb_conf * 0.4) * 100)
+
+        df_out.iloc[-1, df_out.columns.get_loc('signal')] = signal
+        df_out.iloc[-1, df_out.columns.get_loc('confidence')] = int(max(0, min(100, confidence)))
+
+        # if signal != 0:
+            # logger.info(f"({self.name}) [window] 触发信号! Signal: {signal}, Confidence: {int(confidence)}, "
+                        # f"Close: {close:.2f}, BBL: {bb_lower:.2f}, BBU: {bb_upper:.2f}, RSI: {rsi:.2f}")
+
+        return df_out
+
+    def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
+        df_with_indicators = self.calculate_all_indicators(df.copy())
+        df_signaled = df_with_indicators.copy()
+        if 'signal' not in df_signaled.columns: df_signaled['signal'] = 0
+        
+        # 同样，精确生成列名
+        std_dev_str = str(float(self.params['bb_std_dev']))
+        
+        close_col = 'close'
+        bb_upper_col = f"BBU_{self.params['bb_period']}_{std_dev_str}"
+        bb_lower_col = f"BBL_{self.params['bb_period']}_{std_dev_str}"
+        rsi_col = f"RSI_{self.params['rsi_period']}"
+
+        required_cols = [close_col, bb_upper_col, bb_lower_col, rsi_col]
+        if not all(col in df_signaled.columns for col in required_cols):
+            logger.warning(f"({self.name}) 缺少必要的列，无法生成信号。需要的列: {required_cols}, 可用列: {df_signaled.columns.tolist()}")
+            return df_signaled
+
+        # 添加诊断日志
+        log_cols = [close_col, bb_upper_col, bb_lower_col, rsi_col]
+        logger.info(f"({self.name}) [full] 信号判断前的数据 (最后5行):\n"
+                    f"{df_signaled[log_cols].tail(5)}")
+
+        # 开空信号: 收盘价 >= 布林带上轨 AND RSI >= 超买阈值
+        sell_conditions = (df_signaled[close_col] >= df_signaled[bb_upper_col]) & \
+                          (df_signaled[rsi_col] >= self.params['rsi_overbought'])
+        
+        # 开多信号: 收盘价 <= 布林带下轨 AND RSI <= 超卖阈值
+        buy_conditions = (df_signaled[close_col] <= df_signaled[bb_lower_col]) & \
+                         (df_signaled[rsi_col] <= self.params['rsi_oversold'])
+
+        df_signaled.loc[sell_conditions, 'signal'] = -1
+        df_signaled.loc[buy_conditions, 'signal'] = 1
+        
+        return df_signaled
+
+
 # --- get_available_strategies (no change needed, but ensure it lists these classes) ---
 def get_available_strategies() -> List[Dict[str, Any]]:
     """获取所有可用策略的列表"""
@@ -1382,6 +1510,17 @@ def get_available_strategies() -> List[Dict[str, Any]]:
                 {'name': 'squeeze_threshold_pct', 'type': 'float', 'default': 0.5, 'min': 0.2, 'max': 1.5, 'step': 0.1, 'description': '挤压阈值(带宽/中轨%)'},
                 {'name': 'breakout_confirmation_candles', 'type': 'int', 'default': 1, 'min': 1, 'max': 3, 'description': '突破确认K线数'},
                 {'name': 'min_breakout_body_pct', 'type': 'float', 'default': 0.3, 'min': 0.1, 'max': 0.7, 'step': 0.05, 'description': '突破K线最小实体占比'},
+            ]
+        },
+        {
+            'id': 'rsi_bb', 'name': 'RSI+布林带策略', 'class': RsiBollingerBandsStrategy,
+            'description': '结合RSI和布林带判断超买超卖区域的突破',
+            'parameters': [
+                {'name': 'bb_period', 'type': 'int', 'default': 20, 'min': 10, 'max': 50, 'description': '布林带周期'},
+                {'name': 'bb_std_dev', 'type': 'float', 'default': 2.0, 'min': 1.5, 'max': 3.0, 'step': 0.1, 'description': '布林带标准差'},
+                {'name': 'rsi_period', 'type': 'int', 'default': 14, 'min': 5, 'max': 30, 'description': 'RSI周期'},
+                {'name': 'rsi_oversold', 'type': 'int', 'default': 30, 'min': 1, 'max': 99, 'description': 'RSI超卖阈值'},
+                {'name': 'rsi_overbought', 'type': 'int', 'default': 70, 'min': 1, 'max': 99, 'description': 'RSI超买阈值'},
             ]
         }
     ]
