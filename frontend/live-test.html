@@ -9,7 +9,7 @@
     <!-- Shared Custom CSS -->
     <link rel="stylesheet" href="/static/css/shared-styles.css"> <!-- 新增：引入共享CSS -->
     <!-- Custom CSS for this page -->
-    <link rel="stylesheet" href="/static/css/live-test-styles.css">
+    <link rel="stylesheet" href="/static/css/live-test-styles.css?v=1.1">
     <!-- 移除：内联 <style> 标签内容已迁移到 shared-styles.css -->
     <link rel="stylesheet" href="https://font.sec.miui.com/font/css?family=MiSans:400,700:MiSans" />
 <link rel="icon" href="/static/favicon.ico" type="image/x-icon">
@@ -134,12 +134,14 @@
                                             v-model="predictionStrategyParams[paramDef.name]">
                                         <option v-for="opt in paramDef.options" :key="opt" :value="opt">{{opt}}</option>
                                     </select>
-                                    <select v-else-if="paramDef.type === 'boolean'" class="form-select form-select-sm"
-                                            :class="{'is-invalid': getValidationError(['prediction_strategy_params', paramDef.name])}"
-                                            v-model="predictionStrategyParams[paramDef.name]">
-                                        <option :value="true">是</option>
-                                        <option :value="false">否</option>
-                                    </select>
+                                    <div v-else-if="paramDef.type === 'boolean'" class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" role="switch"
+                                               :id="'pred_param_live_' + paramDef.name"
+                                               v-model="predictionStrategyParams[paramDef.name]">
+                                        <label class="form-check-label x-small" :for="'pred_param_live_' + paramDef.name">
+                                            {{ predictionStrategyParams[paramDef.name] ? '已启用' : '已禁用' }}
+                                        </label>
+                                    </div>
                                     <div v-if="getValidationError(['prediction_strategy_params', paramDef.name])" class="invalid-feedback">
                                         {{ getValidationError(['prediction_strategy_params', paramDef.name]) }}
                                     </div>
@@ -494,7 +496,7 @@
     <!-- Load Navbar Script -->
     <script src="/static/js/load-navbar.js"></script>
     <!-- Custom JS for this page -->
-    <script src="/static/js/live-test-scripts.js"></script>
+    <script src="/static/js/live-test-scripts.js?v=1.1"></script>
     <script>
         document.addEventListener('DOMContentLoaded', () => {
             loadNavbar('navbar-container', '/templates/navbar.html');

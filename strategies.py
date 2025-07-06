@@ -1287,25 +1287,53 @@ class BBSqueezeBreakoutStrategy(Strategy):
 class RsiBollingerBandsStrategy(Strategy):
     def __init__(self, params: Dict[str, Any] = None):
         default_params = {
+            # --- Indicator Switches ---
+            'use_bb': True,
+            'use_rsi': True,
+            'use_td_seq': False, # Default to off
+
+            # --- Bollinger Bands Params ---
             'bb_period': 20,
             'bb_std_dev': 2.0,
+
+            # --- RSI Params ---
             'rsi_period': 14,
             'rsi_oversold': 30,
-            'rsi_overbought': 70
+            'rsi_overbought': 70,
+
+            # --- TD Sequential Params ---
+            'td_seq_buy_setup': 9,  # Can be 9 or 13
+            'td_seq_sell_setup': 9, # Can be 9 or 13
         }
         if params: default_params.update(params)
         super().__init__(default_params)
-        self.name = "RSI+布林带策略"
-        self.min_history_periods = max(self.params['bb_period'], self.params['rsi_period'])
+        
+        active_indicators = []
+        if self.params.get('use_bb'): active_indicators.append('BB')
+        if self.params.get('use_rsi'): active_indicators.append('RSI')
+        if self.params.get('use_td_seq'): active_indicators.append('TD')
+        self.name = f"Flexible ({'+'.join(active_indicators)})"
+        
+        self.min_history_periods = 0
+        if self.params.get('use_bb'): self.min_history_periods = max(self.min_history_periods, self.params['bb_period'])
+        if self.params.get('use_rsi'): self.min_history_periods = max(self.min_history_periods, self.params['rsi_period'])
+        if self.params.get('use_td_seq'): self.min_history_periods = max(self.min_history_periods, 13) # TD needs at least a few bars
+        if self.min_history_periods == 0: self.min_history_periods = 1
+
 
     def calculate_all_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         df = super().calculate_all_indicators(df)
         try:
-            # 使用 append=True 直接、可靠地添加指标列
-            df.ta.bbands(length=self.params['bb_period'], std=self.params['bb_std_dev'], append=True)
-            df.ta.rsi(length=self.params['rsi_period'], append=True)
+            if self.params.get('use_bb'):
+                df.ta.bbands(length=self.params['bb_period'], std=self.params['bb_std_dev'], append=True)
+            if self.params.get('use_rsi'):
+                df.ta.rsi(length=self.params['rsi_period'], append=True)
+            if self.params.get('use_td_seq'):
+                # pandas-ta calculates both setup and countdown. We check for the final signal.
+                # It creates columns like 'TD_SEQ_UPa' and 'TD_SEQ_DNa'
+                df.ta.td_seq(append=True)
         except Exception as e:
-            logger.error(f"({self.name}) 在 calculate_all_indicators 中计算指标时出错: {e}", exc_info=True)
+            logger.error(f"({self.name}) Error calculating indicators: {e}", exc_info=True)
         return df
 
     def generate_signals_from_indicators_on_window(self, df_window_with_indicators: pd.DataFrame) -> pd.DataFrame:
@@ -1313,100 +1341,114 @@ class RsiBollingerBandsStrategy(Strategy):
         if 'signal' not in df_out.columns: df_out['signal'] = 0
         if 'confidence' not in df_out.columns: df_out['confidence'] = 0
 
-        # 根据日志的明确结果，精确生成列名
-        std_dev_str = str(float(self.params['bb_std_dev']))
-        
-        close_col = 'close'
-        bb_upper_col = f"BBU_{self.params['bb_period']}_{std_dev_str}"
-        bb_lower_col = f"BBL_{self.params['bb_period']}_{std_dev_str}"
-        rsi_col = f"RSI_{self.params['rsi_period']}"
-
-        required_cols = [close_col, bb_upper_col, bb_lower_col, rsi_col]
-        if not all(col in df_out.columns for col in required_cols):
-            logger.warning(f"({self.name}) [window] 缺少必要的列。需要: {required_cols}, 拥有: {df_out.columns.tolist()}")
-            return df_out
-
         if len(df_out) < 1:
             return df_out
 
-        # Get the last row
         last_row = df_out.iloc[-1]
+        active_signals = []
 
-        # Check for NaN values in the last row for required columns
-        if last_row[required_cols].isna().any():
-            return df_out
+        # --- Calculate signal for each enabled indicator ---
 
-        # 添加诊断日志
-        # logger.info(f"({self.name}) [window] 信号判断前的数据 (最后一行):\n"
-                    #  f"{last_row[required_cols]}")
+        # Bollinger Bands Signal
+        if self.params.get('use_bb'):
+            bb_signal = 0
+            std_dev_str = str(float(self.params['bb_std_dev']))
+            bb_upper_col = f"BBU_{self.params['bb_period']}_{std_dev_str}"
+            bb_lower_col = f"BBL_{self.params['bb_period']}_{std_dev_str}"
+            if all(c in last_row for c in [bb_upper_col, bb_lower_col, 'close']) and not last_row[[bb_upper_col, bb_lower_col, 'close']].isna().any():
+                if last_row['close'] <= last_row[bb_lower_col]: bb_signal = 1
+                elif last_row['close'] >= last_row[bb_upper_col]: bb_signal = -1
+            active_signals.append(bb_signal)
 
-        signal = 0
-        confidence = 0
+        # RSI Signal
+        if self.params.get('use_rsi'):
+            rsi_signal = 0
+            rsi_col = f"RSI_{self.params['rsi_period']}"
+            if rsi_col in last_row and pd.notna(last_row[rsi_col]):
+                if last_row[rsi_col] <= self.params['rsi_oversold']: rsi_signal = 1
+                elif last_row[rsi_col] >= self.params['rsi_overbought']: rsi_signal = -1
+            active_signals.append(rsi_signal)
+
+        # TD Sequential Signal
+        if self.params.get('use_td_seq'):
+            td_signal = 0
+            # pandas-ta uses 'TD_SEQ_UPa' for buy setup count and 'TD_SEQ_DNa' for sell setup count
+            td_buy_col = 'TD_SEQ_UPa'
+            td_sell_col = 'TD_SEQ_DNa'
+            if td_buy_col in last_row and last_row[td_buy_col] == self.params['td_seq_buy_setup']:
+                td_signal = 1
+            elif td_sell_col in last_row and last_row[td_sell_col] == self.params['td_seq_sell_setup']:
+                td_signal = -1
+            active_signals.append(td_signal)
+
+        # --- Combine Signals (AND Logic) ---
+        final_signal = 0
+        if not active_signals: # No indicators enabled
+            pass
+        elif all(s == 1 for s in active_signals):
+            final_signal = 1
+        elif all(s == -1 for s in active_signals):
+            final_signal = -1
         
-        close = last_row[close_col]
-        bb_upper = last_row[bb_upper_col]
-        bb_lower = last_row[bb_lower_col]
-        rsi = last_row[rsi_col]
+        # Simple confidence for now
+        confidence = 100 if final_signal != 0 else 0
 
-        # Sell signal condition
-        if close >= bb_upper and rsi >= self.params['rsi_overbought']:
-            signal = -1
-            # Confidence calculation
-            rsi_conf = (rsi - self.params['rsi_overbought']) / (100 - self.params['rsi_overbought']) if (100 - self.params['rsi_overbought']) > 0 else 0
-            bb_conf = (close - bb_upper) / (bb_upper - bb_lower) if (bb_upper - bb_lower) > 0 else 0
-            confidence = 50 + min(50, (rsi_conf * 0.6 + bb_conf * 0.4) * 100)
-
-        # Buy signal condition
-        elif close <= bb_lower and rsi <= self.params['rsi_oversold']:
-            signal = 1
-            # Confidence calculation
-            rsi_conf = (self.params['rsi_oversold'] - rsi) / self.params['rsi_oversold'] if self.params['rsi_oversold'] > 0 else 0
-            bb_conf = (bb_lower - close) / (bb_upper - bb_lower) if (bb_upper - bb_lower) > 0 else 0
-            confidence = 50 + min(50, (rsi_conf * 0.6 + bb_conf * 0.4) * 100)
-
-        df_out.iloc[-1, df_out.columns.get_loc('signal')] = signal
-        df_out.iloc[-1, df_out.columns.get_loc('confidence')] = int(max(0, min(100, confidence)))
-
-        # if signal != 0:
-            # logger.info(f"({self.name}) [window] 触发信号! Signal: {signal}, Confidence: {int(confidence)}, "
-                        # f"Close: {close:.2f}, BBL: {bb_lower:.2f}, BBU: {bb_upper:.2f}, RSI: {rsi:.2f}")
-
+        df_out.iloc[-1, df_out.columns.get_loc('signal')] = final_signal
+        df_out.iloc[-1, df_out.columns.get_loc('confidence')] = confidence
+        
         return df_out
 
     def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
+        # This method is for full backtesting. The main logic is in the windowed version.
+        # We can implement a vectorized version here for speed if needed.
         df_with_indicators = self.calculate_all_indicators(df.copy())
         df_signaled = df_with_indicators.copy()
         if 'signal' not in df_signaled.columns: df_signaled['signal'] = 0
+        if 'confidence' not in df_signaled.columns: df_signaled['confidence'] = 0
+
+        buy_conditions = pd.Series(True, index=df_signaled.index)
+        sell_conditions = pd.Series(True, index=df_signaled.index)
+
+        # BB Conditions
+        if self.params.get('use_bb'):
+            std_dev_str = str(float(self.params['bb_std_dev']))
+            bb_upper_col = f"BBU_{self.params['bb_period']}_{std_dev_str}"
+            bb_lower_col = f"BBL_{self.params['bb_period']}_{std_dev_str}"
+            if all(c in df_signaled.columns for c in [bb_upper_col, bb_lower_col]):
+                buy_conditions &= (df_signaled['close'] <= df_signaled[bb_lower_col])
+                sell_conditions &= (df_signaled['close'] >= df_signaled[bb_upper_col])
+            else: # If column missing, condition is false
+                buy_conditions &= False
+                sell_conditions &= False
+
+        # RSI Conditions
+        if self.params.get('use_rsi'):
+            rsi_col = f"RSI_{self.params['rsi_period']}"
+            if rsi_col in df_signaled.columns:
+                buy_conditions &= (df_signaled[rsi_col] <= self.params['rsi_oversold'])
+                sell_conditions &= (df_signaled[rsi_col] >= self.params['rsi_overbought'])
+            else:
+                buy_conditions &= False
+                sell_conditions &= False
+
+        # TD Sequential Conditions
+        if self.params.get('use_td_seq'):
+            td_buy_col = 'TD_SEQ_UPa'
+            td_sell_col = 'TD_SEQ_DNa'
+            if td_buy_col in df_signaled.columns:
+                buy_conditions &= (df_signaled[td_buy_col] == self.params['td_seq_buy_setup'])
+            else:
+                buy_conditions &= False
+            if td_sell_col in df_signaled.columns:
+                sell_conditions &= (df_signaled[td_sell_col] == self.params['td_seq_sell_setup'])
+            else:
+                sell_conditions &= False
         
-        # 同样，精确生成列名
-        std_dev_str = str(float(self.params['bb_std_dev']))
-        
-        close_col = 'close'
-        bb_upper_col = f"BBU_{self.params['bb_period']}_{std_dev_str}"
-        bb_lower_col = f"BBL_{self.params['bb_period']}_{std_dev_str}"
-        rsi_col = f"RSI_{self.params['rsi_period']}"
-
-        required_cols = [close_col, bb_upper_col, bb_lower_col, rsi_col]
-        if not all(col in df_signaled.columns for col in required_cols):
-            logger.warning(f"({self.name}) 缺少必要的列，无法生成信号。需要的列: {required_cols}, 可用列: {df_signaled.columns.tolist()}")
-            return df_signaled
-
-        # 添加诊断日志
-        log_cols = [close_col, bb_upper_col, bb_lower_col, rsi_col]
-        logger.info(f"({self.name}) [full] 信号判断前的数据 (最后5行):\n"
-                    f"{df_signaled[log_cols].tail(5)}")
-
-        # 开空信号: 收盘价 >= 布林带上轨 AND RSI >= 超买阈值
-        sell_conditions = (df_signaled[close_col] >= df_signaled[bb_upper_col]) & \
-                          (df_signaled[rsi_col] >= self.params['rsi_overbought'])
-        
-        # 开多信号: 收盘价 <= 布林带下轨 AND RSI <= 超卖阈值
-        buy_conditions = (df_signaled[close_col] <= df_signaled[bb_lower_col]) & \
-                         (df_signaled[rsi_col] <= self.params['rsi_oversold'])
-
-        df_signaled.loc[sell_conditions, 'signal'] = -1
+        # Apply signals
         df_signaled.loc[buy_conditions, 'signal'] = 1
-        
+        df_signaled.loc[sell_conditions, 'signal'] = -1
+        df_signaled.loc[buy_conditions | sell_conditions, 'confidence'] = 100
+
         return df_signaled
 
 
@@ -1513,14 +1555,26 @@ def get_available_strategies() -> List[Dict[str, Any]]:
             ]
         },
         {
-            'id': 'rsi_bb', 'name': 'RSI+布林带策略', 'class': RsiBollingerBandsStrategy,
-            'description': '结合RSI和布林带判断超买超卖区域的突破',
+            'id': 'flexible_signal', 'name': '灵活信号组合策略', 'class': RsiBollingerBandsStrategy,
+            'description': '结合RSI,布林带和TD Sequential指标，可灵活配置。',
             'parameters': [
+                # --- Indicator Switches ---
+                {'name': 'use_bb', 'type': 'boolean', 'default': True, 'description': '启用布林带指标'},
+                {'name': 'use_rsi', 'type': 'boolean', 'default': True, 'description': '启用RSI指标'},
+                {'name': 'use_td_seq', 'type': 'boolean', 'default': False, 'description': '启用TD Sequential指标'},
+                
+                # --- BB Params ---
                 {'name': 'bb_period', 'type': 'int', 'default': 20, 'min': 10, 'max': 50, 'description': '布林带周期'},
                 {'name': 'bb_std_dev', 'type': 'float', 'default': 2.0, 'min': 1.5, 'max': 3.0, 'step': 0.1, 'description': '布林带标准差'},
+                
+                # --- RSI Params ---
                 {'name': 'rsi_period', 'type': 'int', 'default': 14, 'min': 5, 'max': 30, 'description': 'RSI周期'},
-                {'name': 'rsi_oversold', 'type': 'int', 'default': 30, 'min': 1, 'max': 99, 'description': 'RSI超卖阈值'},
-                {'name': 'rsi_overbought', 'type': 'int', 'default': 70, 'min': 1, 'max': 99, 'description': 'RSI超买阈值'},
+                {'name': 'rsi_oversold', 'type': 'int', 'default': 30, 'min': 1, 'max': 45, 'description': 'RSI超卖阈值'},
+                {'name': 'rsi_overbought', 'type': 'int', 'default': 70, 'min': 55, 'max': 99, 'description': 'RSI超买阈值'},
+
+                # --- TD Sequential Params ---
+                {'name': 'td_seq_buy_setup', 'type': 'select', 'default': 9, 'options': [9, 13], 'description': 'TD买入计数'},
+                {'name': 'td_seq_sell_setup', 'type': 'select', 'default': 9, 'options': [9, 13], 'description': 'TD卖出计数'},
             ]
         }
     ]
