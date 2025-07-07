@@ -763,6 +763,7 @@ const app = createApp({
 
             // Utils for template
             getPnlClass: typeof getPnlClass === 'function' ? getPnlClass : () => '',
+            formatDateTime: utilFormatDateTime,
         };
     }
 });
@@ -784,4 +785,7 @@ if (typeof getPnlClass === 'function') {
     app.config.globalProperties.getPnlClass = () => '';
 }
 
+// Manually register components from the global VueVirtualScroller object
+app.component('recycle-scroller', VueVirtualScroller.RecycleScroller);
+app.component('dynamic-scroller', VueVirtualScroller.DynamicScroller);
 app.mount('#app');

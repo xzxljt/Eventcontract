@@ -71,6 +71,11 @@ self.onmessage = function(event) {
         }
         
         const pnl = pred.pnl_amount || 0;
+        const isWin = pnl > 0; // Recalculate result as a boolean
+        const pnlPercentage = pred.signal_price !== 0 ? (pnl / pred.signal_price) * 100 : 0; // Recalculate PnL %
+        // Normalize confidence from (e.g. 85) to (e.g. 0.85)
+        const normalizedConfidence = pred.confidence > 1 ? pred.confidence / 100 : pred.confidence;
+
         totalPnlAmount += pnl;
         currentBalance += pnl;
 
@@ -78,13 +83,13 @@ self.onmessage = function(event) {
         dailyPnl[dateStr].trades += 1;
         dailyPnl[dateStr].balance = currentBalance;
 
-        if (pred.result === true) {
+        if (isWin) {
             totalWins++;
             consecutiveWins++;
             consecutiveLosses = 0;
             maxConsecutiveWins = Math.max(maxConsecutiveWins, consecutiveWins);
             totalGrossProfit += pnl;
-        } else if (pred.result === false) {
+        } else { // loss
             consecutiveLosses++;
             consecutiveWins = 0;
             maxConsecutiveLosses = Math.max(maxConsecutiveLosses, consecutiveLosses);
@@ -93,10 +98,10 @@ self.onmessage = function(event) {
 
         if (pred.signal === 1) {
             longPredictions++;
-            if (pred.result === true) longWins++;
+            if (isWin) longWins++;
         } else if (pred.signal === -1) {
             shortPredictions++;
-            if (pred.result === true) shortWins++;
+            if (isWin) shortWins++;
         }
 
         maxBalance = Math.max(maxBalance, currentBalance);
@@ -105,7 +110,12 @@ self.onmessage = function(event) {
 
         recalculatedPredictions.push({
             ...pred,
-            balance_after_trade: currentBalance
+            pnl_amount: pnl,
+            pnl_percentage: pnlPercentage,
+            confidence: normalizedConfidence, // Use normalized confidence
+            result: isWin, // Use recalculated boolean result
+            balance_after_trade: currentBalance,
+            final_balance: currentBalance
         });
     }
 

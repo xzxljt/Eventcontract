@@ -13,6 +13,7 @@
     <link rel="stylesheet" href="/static/css/index-styles.css?v=1.1">
     <link rel="stylesheet" href="https://font.sec.miui.com/font/css?family=MiSans:400,700:MiSans" />
 <link rel="icon" href="/static/favicon.ico" type="image/x-icon">
+<link rel="stylesheet" href="https://unpkg.com/vue-virtual-scroller/dist/vue-virtual-scroller.css"/>
 </head>
 <body>
     <div id="app">
@@ -278,7 +279,7 @@
                     <div v-if="validationError" class="alert alert-danger white-space-pre-wrap">{{ validationError }}</div> <!-- 用于显示校验错误 -->
 
 
-                    <div v-if="backtestResults && !loading && !error && !validationError" class="card result-card">
+                    <div v-if="filteredData && !loading && !error && !validationError" class="card result-card">
                         <div class="card-header bg-success text-white d-flex justify-content-between align-items-center">
                             <h5 class="mb-0">回测结果</h5>
                             <span class="badge bg-light text-dark">{{ filteredData.predictions.length }} / {{ backtestResults.predictions.length }} 条记录</span>
@@ -418,65 +419,63 @@
 
                                 <div class="mt-4">
                                     <h5>交易记录详情</h5>
-                                    <div class="trade-history-cards" style="max-height: 450px; overflow-y: auto;">
-                                        <div v-if="filteredData.predictions && filteredData.predictions.length > 0">
-                                            <div v-for="(pred, index) in filteredData.predictions" :key="index" class="card trade-card mb-3" :class="pred.result === true ? 'border-success' : (pred.result === false ? 'border-danger' : 'border-secondary')">
-                                                <div class="card-header d-flex justify-content-between align-items-center" :class="pred.result === true ? 'bg-success-subtle' : (pred.result === false ? 'bg-danger-subtle' : 'bg-light')">
-                                                    <span class="fw-bold">{{ formatDateTime(pred.signal_time) }}</span>
-                                                    <div>
-                                                        <span v-if="pred.signal === 1" class="badge bg-success me-2">做多</span>
-                                                        <span v-else-if="pred.signal === -1" class="badge bg-danger me-2">做空</span>
-                                                        <span v-if="pred.result === true" class="badge bg-success">胜利</span>
-                                                        <span v-else-if="pred.result === false" class="badge bg-danger">失败</span>
-                                                        <span v-else class="badge bg-light text-dark">未验证</span>
+                                    <recycle-scroller
+                                      class="scroller"
+                                      :items="filteredData.predictions"
+                                      :item-size="210"
+                                      key-field="signal_time"
+                                      v-slot="{ item }">
+                                      <div class="card trade-card mb-3" :class="item.result ? 'border-success' : 'border-danger'">
+                                        <div class="card-header d-flex justify-content-between align-items-center" :class="item.result ? 'bg-success-subtle' : 'bg-danger-subtle'">
+                                            <span class="fw-bold">{{ formatDateTime(item.signal_time) }}</span>
+                                            <div>
+                                                <span class="badge bg-danger me-2" v-if="item.signal_type === 'SHORT'">做空</span>
+                                                <span class="badge bg-success me-2" v-else>做多</span>
+                                                <span class="badge" :class="item.result ? 'bg-success' : 'bg-danger'">{{ item.result ? '胜利' : '失败' }}</span>
+                                            </div>
+                                        </div>
+                                        <div class="card-body">
+                                            <div class="row">
+                                                <div class="col-md-4 col-sm-6">
+                                                    <div class="trade-detail-item">
+                                                        <span class="trade-detail-label">盈亏</span>
+                                                        <span class="trade-detail-value" :class="item.pnl_amount > 0 ? 'pnl-positive' : 'pnl-negative'">{{ item.pnl_amount?.toFixed(2) }}</span>
                                                     </div>
                                                 </div>
-                                                <div class="card-body">
-                                                    <div class="row">
-                                                        <div class="col-md-4 col-sm-6">
-                                                            <div class="trade-detail-item">
-                                                                <span class="trade-detail-label">盈亏</span>
-                                                                <span class="trade-detail-value" :class="getPnlClass(pred.pnl_amount)">{{ pred.pnl_amount?.toFixed(2) || 'N/A' }}</span>
-                                                            </div>
-                                                        </div>
-                                                        <div class="col-md-4 col-sm-6">
-                                                            <div class="trade-detail-item">
-                                                                <span class="trade-detail-label">最终余额</span>
-                                                                <span class="trade-detail-value">{{ pred.balance_after_trade?.toFixed(2) }}</span>
-                                                            </div>
-                                                        </div>
-                                                        <div class="col-md-4 col-sm-6">
-                                                            <div class="trade-detail-item">
-                                                                <span class="trade-detail-label">投资额</span>
-                                                                <span class="trade-detail-value">{{ pred.investment_amount?.toFixed(2) }}</span>
-                                                            </div>
-                                                        </div>
-                                                        <div class="col-md-4 col-sm-6">
-                                                            <div class="trade-detail-item">
-                                                                <span class="trade-detail-label">入场/出场价</span>
-                                                                <span class="trade-detail-value">{{ pred.effective_signal_price_for_calc?.toFixed(pred.symbol && pred.symbol.includes('BTC') ? 2 : 4) || 'N/A' }} / {{ pred.end_price?.toFixed(pred.symbol && pred.symbol.includes('BTC') ? 2 : 4) || 'N/A' }}</span>
-                                                            </div>
-                                                        </div>
-                                                        <div class="col-md-4 col-sm-6">
-                                                            <div class="trade-detail-item">
-                                                                <span class="trade-detail-label">价格变化</span>
-                                                                <span class="trade-detail-value" :class="getPnlClass(pred.price_change_pct)">{{ pred.price_change_pct?.toFixed(2) || 'N/A' }}%</span>
-                                                            </div>
-                                                        </div>
-                                                        <div class="col-md-4 col-sm-6">
-                                                            <div class="trade-detail-item">
-                                                                <span class="trade-detail-label">置信度</span>
-                                                                <span class="trade-detail-value">{{ pred.confidence?.toFixed(2) }}</span>
-                                                            </div>
-                                                        </div>
+                                                <div class="col-md-4 col-sm-6">
+                                                    <div class="trade-detail-item">
+                                                        <span class="trade-detail-label">最终余额</span>
+                                                        <span class="trade-detail-value">{{ item.final_balance?.toFixed(2) }}</span>
+                                                    </div>
+                                                </div>
+                                                <div class="col-md-4 col-sm-6">
+                                                    <div class="trade-detail-item">
+                                                        <span class="trade-detail-label">投资额</span>
+                                                        <span class="trade-detail-value">{{ item.investment_amount?.toFixed(2) }}</span>
+                                                    </div>
+                                                </div>
+                                                <div class="col-md-4 col-sm-6">
+                                                    <div class="trade-detail-item">
+                                                        <span class="trade-detail-label">入场/出场价</span>
+                                                        <span class="trade-detail-value">{{ item.signal_price?.toFixed(4) }} / {{ item.end_price?.toFixed(4) }}</span>
+                                                    </div>
+                                                </div>
+                                                <div class="col-md-4 col-sm-6">
+                                                    <div class="trade-detail-item">
+                                                        <span class="trade-detail-label">价格变化</span>
+                                                        <span class="trade-detail-value" :class="item.pnl_percentage > 0 ? 'pnl-positive' : 'pnl-negative'">{{ item.pnl_percentage?.toFixed(2) }}%</span>
+                                                    </div>
+                                                </div>
+                                                <div class="col-md-4 col-sm-6">
+                                                    <div class="trade-detail-item">
+                                                        <span class="trade-detail-label">置信度</span>
+                                                        <span class="trade-detail-value">{{ (item.confidence * 100).toFixed(2) }}</span>
                                                     </div>
                                                 </div>
                                             </div>
                                         </div>
-                                        <div v-else class="text-center text-muted mt-3">
-                                            <p>没有符合筛选条件的交易记录。</p>
-                                        </div>
-                                    </div>
+                                      </div>
+                                    </recycle-scroller>
                                 </div>
                             </div>
                             <div v-else class="text-center text-muted mt-5">
@@ -494,7 +493,6 @@
         </div>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/vue@3.2.45/dist/vue.global.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
     <script src="https://cdn.jsdelivr.net/npm/flatpickr/dist/l10n/zh.js"></script>
@@ -503,7 +501,9 @@
     <script src="/static/js/utils.js"></script>
     <!-- Load Navbar Script -->
     <script src="/static/js/load-navbar.js"></script>
-    <!-- Custom JS for this page -->
+    <!-- Vue and App Scripts -->
+    <script src="https://cdn.jsdelivr.net/npm/vue@3.2.45/dist/vue.global.js"></script>
+    <script src="https://unpkg.com/vue-virtual-scroller@next"></script>
     <script src="/static/js/index-scripts.js?v=1.1"></script>
     <script>
         document.addEventListener('DOMContentLoaded', () => {
