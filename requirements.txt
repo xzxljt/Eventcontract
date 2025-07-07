@@ -5,6 +5,5 @@ pandas
 numpy
 python-dotenv
 timezonefinder
-websockets
 websocket-client
 pandas-ta

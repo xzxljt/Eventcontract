@@ -8,7 +8,7 @@ import numpy as np
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
 import logging
-from strategies import Strategy # 确保 strategies.py 在同一目录或PYTHONPATH中
+from strategies import Strategy, get_available_strategies # 确保 strategies.py 在同一目录或PYTHONPATH中
 from investment_strategies import BaseInvestmentStrategy, get_available_investment_strategies # 确保 investment_strategies.py
 from binance_client import BinanceClient
 
@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 class Backtester:
     def __init__(self,
                  df: pd.DataFrame,
+                 df_index_price: Optional[pd.DataFrame],
                  strategy: Strategy,
                  symbol: str,
                  interval: str,
@@ -35,6 +36,7 @@ class Backtester:
                  min_trade_interval_minutes: float = 0
                 ):
         self.df = df.copy() # 原始数据副本
+        self.df_index_price = df_index_price.copy() if df_index_price is not None else None
         self.strategy = strategy
         self.symbol = symbol
         self.interval = interval
@@ -99,25 +101,30 @@ class Backtester:
 
         # 获取指数价格数据
         # logger.info("[DEBUG] Backtester: 开始获取指数价格K线数据...")
-        try:
-            # 假设self.df的索引是回测的完整时间范围
-            start_time_ms = int(self.df.index.min().timestamp() * 1000)
-            end_time_ms = int((self.df.index.max() + timedelta(minutes=self.period_minutes)).timestamp() * 1000)
-            df_index_price = self.binance_client.get_index_price_klines(
-                symbol=self.symbol,
-                interval=self.interval,
-                start_time=start_time_ms,
-                end_time=end_time_ms
-            )
-            if df_index_price.empty:
-                raise ValueError("未能获取到回测时间范围内的指数价格数据。")
-            # logger.info(f"[DEBUG] Backtester: 成功获取 {len(df_index_price)} 条指数价格K线。")
-            # logger.info(f"[DEBUG]   指数价格数据范围: {df_index_price.index.min()} to {df_index_price.index.max()}")
-        except Exception as e_idx_price:
-            # logger.info(f"错误: 获取指数价格数据失败: {e_idx_price}")
-            import traceback
-            traceback.print_exc()
-            return self._calculate_statistics([], 0.0, 0, 0)
+        if self.df_index_price is None:
+            logger.info("No pre-loaded index price data found, fetching from client...")
+            try:
+                # 假设self.df的索引是回测的完整时间范围
+                start_time_ms = int(self.df.index.min().timestamp() * 1000)
+                end_time_ms = int((self.df.index.max() + timedelta(minutes=self.period_minutes)).timestamp() * 1000)
+                df_index_price = self.binance_client.get_index_price_klines(
+                    symbol=self.symbol,
+                    interval=self.interval,
+                    start_time=start_time_ms,
+                    end_time=end_time_ms
+                )
+                if df_index_price.empty:
+                    raise ValueError("未能获取到回测时间范围内的指数价格数据。")
+                # logger.info(f"[DEBUG] Backtester: 成功获取 {len(df_index_price)} 条指数价格K线。")
+                # logger.info(f"[DEBUG]   指数价格数据范围: {df_index_price.index.min()} to {df_index_price.index.max()}")
+            except Exception as e_idx_price:
+                # logger.info(f"错误: 获取指数价格数据失败: {e_idx_price}")
+                import traceback
+                traceback.print_exc()
+                return self._calculate_statistics([], 0.0, 0, 0)
+        else:
+            # logger.info("Using pre-loaded index price data.")
+            df_index_price = self.df_index_price
 
 
         if not isinstance(self.df.index, pd.DatetimeIndex):
@@ -599,3 +606,62 @@ class Backtester:
             'daily_pnl': daily_pnl_summary # 包含每日盈亏、交易次数和每日结束余额的字典
         }
 # --- END OF FILE backtester.py ---
+
+def run_single_backtest(df_kline: pd.DataFrame, 
+                        df_index_price: pd.DataFrame, 
+                        strategy_id: str, 
+                        strategy_params: dict, 
+                        backtest_config: dict) -> dict:
+    """
+    一个独立的函数，用于运行单次回测。
+    这是为了兼容 optimizer.py 的 worker_function。
+    """
+    # 1. 获取策略类
+    available_strategies = get_available_strategies()
+    strategy_info = next((s for s in available_strategies if s['id'] == strategy_id), None)
+    if not strategy_info:
+        raise ValueError(f"Strategy with id '{strategy_id}' not found.")
+    
+    strategy_class = strategy_info['class']
+    strategy = strategy_class(params=strategy_params)
+
+    # 2. 准备 Backtester 的配置
+    # 将 backtest_config 和 strategy_params 合并到 backtester 的初始化参数中
+    # backtest_config 包含了 symbol, interval, event_period 等
+    # strategy_params 包含了策略的参数，但 Backtester 不直接使用它们
+    
+    # 从 backtest_config 中提取 Backtester 需要的参数
+    bt_params = {
+        'df': df_kline,
+        'df_index_price': df_index_price,
+        'strategy': strategy,
+        'symbol': backtest_config.get('symbol'),
+        'interval': backtest_config.get('interval'),
+        'event_period': backtest_config.get('event_period'),
+        'initial_balance': backtest_config.get('initial_balance', 1000.0),
+        'profit_rate_pct': backtest_config.get('profit_rate_pct', 80.0),
+        'loss_rate_pct': backtest_config.get('loss_rate_pct', 100.0),
+        'investment_strategy_id': backtest_config.get('investment_strategy_id', 'fixed'),
+        'investment_strategy_params': backtest_config.get('investment_strategy_params'),
+        'min_investment_amount': backtest_config.get('min_investment_amount', 5.0),
+    }
+
+    # 3. 实例化并运行 Backtester
+    try:
+        backtester = Backtester(**bt_params)
+        results = backtester.run()
+        
+        # 确保返回的结果中包含参数信息，以便于分析
+        results['params'] = strategy_params
+        return results
+
+    except Exception as e:
+        logger.error(f"Backtest failed for strategy {strategy_id} with params {strategy_params}. Error: {e}", exc_info=True)
+        # 返回一个表示失败的字典结构，与 optimizer.py 中的 worker_function 错误处理保持一致
+        return {
+            'params': strategy_params,
+            'win_rate': -1,
+            'roi_percentage': -1,
+            'total_predictions': 0,
+            'error': str(e)
+        }
