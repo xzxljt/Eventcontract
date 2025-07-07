@@ -279,174 +279,208 @@
 
 
                     <div v-if="backtestResults && !loading && !error && !validationError" class="card result-card">
-                        <div class="card-header bg-success text-white"> <h5 class="mb-0">回测结果</h5> </div>
+                        <div class="card-header bg-success text-white d-flex justify-content-between align-items-center">
+                            <h5 class="mb-0">回测结果</h5>
+                            <span class="badge bg-light text-dark">{{ filteredData.predictions.length }} / {{ backtestResults.predictions.length }} 条记录</span>
+                        </div>
                         <div class="card-body">
-                            <div class="row">
-                                <div class="col-md-4 mb-3">
-                                    <div class="card shadow-sm">
-                                        <div class="card-header bg-light">总体预测统计</div>
-                                        <div class="card-body">
-                                            <p class="mb-1">总信号数: {{ backtestResults.total_predictions }}</p>
-                                            <p class="mb-1">胜利次数: {{ backtestResults.total_wins }}</p>
-                                            <p class="mb-0">胜率: <span :class="getWinRateClass(backtestResults.win_rate)">{{ backtestResults.win_rate?.toFixed(2) }}%</span></p>
+                            <!-- Filter Section -->
+                            <div class="filter-section card mb-4">
+                                <div class="card-body bg-light">
+                                    <h6 class="card-title text-primary">结果筛选器</h6>
+                                    <div class="row align-items-end">
+                                        <div class="col-md-10">
+                                            <div class="time-filter-group">
+                                                <div class="time-input-wrapper">
+                                                    <label for="filterStartTime" class="form-label small">开始时间</label>
+                                                    <input type="time" id="filterStartTime" class="form-control form-control-sm" v-model="filterStartTime">
+                                                </div>
+                                                <div class="time-input-separator">→</div>
+                                                <div class="time-input-wrapper">
+                                                    <label for="filterEndTime" class="form-label small">结束时间</label>
+                                                    <input type="time" id="filterEndTime" class="form-control form-control-sm" v-model="filterEndTime">
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-2">
+                                            <button class="btn btn-sm btn-secondary w-100" @click="resetFilters">重置</button>
+                                        </div>
+                                    </div>
+                                    <div class="row align-items-center mt-2">
+                                        <div class="col-md-12">
+                                            <label for="minConfidence" class="form-label small">最低置信度: <span class="fw-bold">{{ minConfidence }}</span></label>
+                                            <input type="range" id="minConfidence" class="form-range" v-model.number="minConfidence" min="0" max="100" step="1">
+                                        </div>
+                                    </div>
+                                    <div class="row mt-2">
+                                        <div class="col-md-12">
+                                            <label class="form-label small">按星期排除</label>
+                                            <div class="weekday-selector">
+                                                <button v-for="day in weekdays" :key="day.value"
+                                                        type="button"
+                                                        class="weekday-btn"
+                                                        :class="{ 'active': excludedWeekdays.includes(String(day.value)) }"
+                                                        @click="toggleWeekday(String(day.value))">
+                                                    {{ day.label }}
+                                                </button>
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
-                                <div class="col-md-4 mb-3">
-                                    <div class="card shadow-sm">
-                                        <div class="card-header bg-light">做多统计</div>
-                                        <div class="card-body">
-                                            <p class="mb-1">做多信号数: {{ backtestResults.long_predictions }}</p>
-                                            <p class="mb-0">胜率: <span :class="getWinRateClass(backtestResults.long_win_rate)">{{ backtestResults.long_win_rate?.toFixed(2) }}%</span></p>
-                                        </div>
-                                    </div>
-                                </div>
-                                <div class="col-md-4 mb-3">
-                                    <div class="card shadow-sm">
-                                        <div class="card-header bg-light">做空统计</div>
-                                        <div class="card-body">
-                                            <p class="mb-1">做空信号数: {{ backtestResults.short_predictions }}</p>
-                                            <p class="mb-0">胜率: <span :class="getWinRateClass(backtestResults.short_win_rate)">{{ backtestResults.short_win_rate?.toFixed(2) }}%</span></p>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                            
-                             <h6 class="mt-3 text-primary">资金表现</h6>
-                            <div class="row">
-                                <div class="col-md-3 col-6 mb-2"> <div class="card bg-info bg-opacity-10 text-center h-100"> <div class="card-body p-2"> <small class="text-muted d-block">初始资金</small> <h6 class="mb-0">{{ backtestResults.initial_balance?.toFixed(2) }}</h6> </div> </div> </div>
-                                <div class="col-md-3 col-6 mb-2"> <div class="card text-center h-100" :class="backtestResults.final_balance >= backtestResults.initial_balance ? 'bg-success bg-opacity-10' : 'bg-danger bg-opacity-10'"> <div class="card-body p-2"> <small class="text-muted d-block">最终资金</small> <h6 class="mb-0">{{ backtestResults.final_balance?.toFixed(2) }}</h6> </div> </div> </div>
-                                <div class="col-md-3 col-6 mb-2">  <div class="card text-center h-100" :class="backtestResults.total_pnl_amount >= 0 ? 'bg-success bg-opacity-10' : 'bg-danger bg-opacity-10'"> <div class="card-body p-2"> <small class="text-muted d-block">总盈亏金额</small> <h6 class="mb-0">{{ backtestResults.total_pnl_amount?.toFixed(2) }}</h6> </div> </div> </div>
-                                <div class="col-md-3 col-6 mb-2"> <div class="card text-center h-100" :class="backtestResults.roi_percentage >= 0 ? 'bg-success bg-opacity-10' : 'bg-danger bg-opacity-10'"> <div class="card-body p-2"> <small class="text-muted d-block">回报率 (ROI)</small> <h6 class="mb-0">{{ backtestResults.roi_percentage?.toFixed(2) }}%</h6> </div> </div> </div>
-                                <div class="col-md-3 col-6 mb-2"> <div class="card bg-light text-center h-100"> <div class="card-body p-2"> <small class="text-muted d-block">最大回撤</small> <h6 class="mb-0">{{ backtestResults.max_drawdown_percentage?.toFixed(2) }}%</h6> </div> </div> </div>
-                                <div class="col-md-3 col-6 mb-2"> <div class="card bg-light text-center h-100"> <div class="card-body p-2"> <small class="text-muted d-block">盈利因子</small> <h6 class="mb-0">{{ backtestResults.profit_factor }}</h6> </div> </div> </div>
-                                <div class="col-md-3 col-6 mb-2"> <div class="card bg-light text-center h-100"> <div class="card-body p-2"> <small class="text-muted d-block">最大连胜</small> <h6 class="mb-0">{{ backtestResults.max_consecutive_wins }}</h6> </div> </div> </div>
-                                <div class="col-md-3 col-6 mb-2"> <div class="card bg-light text-center h-100"> <div class="card-body p-2"> <small class="text-muted d-block">最大连败</small> <h6 class="mb-0">{{ backtestResults.max_consecutive_losses }}</h6> </div> </div> </div>
                             </div>
 
-                            <div v-if="backtestResults && backtestResults.daily_pnl && Object.keys(backtestResults.daily_pnl).length > 0" class="calendar-container">
-                                <div class="calendar-header">
-                                    <button class="btn btn-sm btn-outline-primary" @click="changeMonth(-1)">< 上一月</button>
-                                    <h5 class="mb-0">{{ currentMonthYearDisplay }} 每日盈亏</h5>
-                                    <button class="btn btn-sm btn-outline-primary" @click="changeMonth(1)">下一月 ></button>
+                            <div v-if="filteredData">
+                                <div class="row">
+                                    <div class="col-md-4 mb-3">
+                                        <div class="card shadow-sm">
+                                            <div class="card-header bg-light">总体预测统计</div>
+                                            <div class="card-body">
+                                                <p class="mb-1">总信号数: {{ filteredData.total_predictions }}</p>
+                                                <p class="mb-1">胜利次数: {{ filteredData.total_wins }}</p>
+                                                <p class="mb-0">胜率: <span :class="getWinRateClass(filteredData.win_rate)">{{ filteredData.win_rate?.toFixed(2) }}%</span></p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-4 mb-3">
+                                        <div class="card shadow-sm">
+                                            <div class="card-header bg-light">做多统计</div>
+                                            <div class="card-body">
+                                                <p class="mb-1">做多信号数: {{ filteredData.long_predictions }}</p>
+                                                <p class="mb-0">胜率: <span :class="getWinRateClass(filteredData.long_win_rate)">{{ filteredData.long_win_rate?.toFixed(2) }}%</span></p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-4 mb-3">
+                                        <div class="card shadow-sm">
+                                            <div class="card-header bg-light">做空统计</div>
+                                            <div class="card-body">
+                                                <p class="mb-1">做空信号数: {{ filteredData.short_predictions }}</p>
+                                                <p class="mb-0">胜率: <span :class="getWinRateClass(filteredData.short_win_rate)">{{ filteredData.short_win_rate?.toFixed(2) }}%</span></p>
+                                            </div>
+                                        </div>
+                                    </div>
                                 </div>
-                                <div class="calendar-grid">
-                                    <div class="calendar-day-header">一</div> <div class="calendar-day-header">二</div> <div class="calendar-day-header">三</div>
-                                    <div class="calendar-day-header">四</div> <div class="calendar-day-header">五</div> <div class="calendar-day-header">六</div> <div class="calendar-day-header">日</div>
-                                    
-                                <template v-for="(week, weekIndex) in calendarView.weeks" :key="'week-' + weekIndex">
-                                    <div v-for="(dayObj, dayIndex) in week" :key="'day-' + weekIndex + '-' + dayIndex"
-                                         :class="['calendar-day', 
-                                                  { 'not-current-month': !dayObj.isCurrentMonth }, /* 当不是当前月份的日期时应用样式 */
-                                                  { 'has-financial-data': dayObj.isCurrentMonth && 
-                                                      (dayObj.pnl !== undefined || 
-                                                       (dayObj.trades !== undefined && dayObj.trades > 0) ||
-                                                       dayObj.balance !== undefined) /* 当有财务数据(包括余额)时应用样式 */
-                                                  }]">
+                                
+                                <h6 class="mt-3 text-primary">资金表现</h6>
+                                <div class="row">
+                                    <div class="col-md-3 col-6 mb-2"> <div class="card bg-info bg-opacity-10 text-center h-100"> <div class="card-body p-2"> <small class="text-muted d-block">初始资金</small> <h6 class="mb-0">{{ filteredData.initial_balance?.toFixed(2) }}</h6> </div> </div> </div>
+                                    <div class="col-md-3 col-6 mb-2"> <div class="card text-center h-100" :class="filteredData.final_balance >= filteredData.initial_balance ? 'bg-success bg-opacity-10' : 'bg-danger bg-opacity-10'"> <div class="card-body p-2"> <small class="text-muted d-block">最终资金</small> <h6 class="mb-0">{{ filteredData.final_balance?.toFixed(2) }}</h6> </div> </div> </div>
+                                    <div class="col-md-3 col-6 mb-2">  <div class="card text-center h-100" :class="filteredData.total_pnl_amount >= 0 ? 'bg-success bg-opacity-10' : 'bg-danger bg-opacity-10'"> <div class="card-body p-2"> <small class="text-muted d-block">总盈亏金额</small> <h6 class="mb-0">{{ filteredData.total_pnl_amount?.toFixed(2) }}</h6> </div> </div> </div>
+                                    <div class="col-md-3 col-6 mb-2"> <div class="card text-center h-100" :class="filteredData.roi_percentage >= 0 ? 'bg-success bg-opacity-10' : 'bg-danger bg-opacity-10'"> <div class="card-body p-2"> <small class="text-muted d-block">回报率 (ROI)</small> <h6 class="mb-0">{{ filteredData.roi_percentage?.toFixed(2) }}%</h6> </div> </div> </div>
+                                    <div class="col-md-3 col-6 mb-2"> <div class="card bg-light text-center h-100"> <div class="card-body p-2"> <small class="text-muted d-block">最大回撤</small> <h6 class="mb-0">{{ filteredData.max_drawdown_percentage?.toFixed(2) }}%</h6> </div> </div> </div>
+                                    <div class="col-md-3 col-6 mb-2"> <div class="card bg-light text-center h-100"> <div class="card-body p-2"> <small class="text-muted d-block">盈利因子</small> <h6 class="mb-0">{{ filteredData.profit_factor }}</h6> </div> </div> </div>
+                                    <div class="col-md-3 col-6 mb-2"> <div class="card bg-light text-center h-100"> <div class="card-body p-2"> <small class="text-muted d-block">最大连胜</small> <h6 class="mb-0">{{ filteredData.max_consecutive_wins }}</h6> </div> </div> </div>
+                                    <div class="col-md-3 col-6 mb-2"> <div class="card bg-light text-center h-100"> <div class="card-body p-2"> <small class="text-muted d-block">最大连败</small> <h6 class="mb-0">{{ filteredData.max_consecutive_losses }}</h6> </div> </div> </div>
+                                </div>
+
+                                <div v-if="calendarView.weeks.length > 0" class="calendar-container">
+                                    <div class="calendar-header">
+                                        <button class="btn btn-sm btn-outline-primary" @click="changeMonth(-1)">< 上一月</button>
+                                        <h5 class="mb-0">{{ currentMonthYearDisplay }} 每日盈亏</h5>
+                                        <button class="btn btn-sm btn-outline-primary" @click="changeMonth(1)">下一月 ></button>
+                                    </div>
+                                    <div class="calendar-grid">
+                                        <div class="calendar-day-header">一</div> <div class="calendar-day-header">二</div> <div class="calendar-day-header">三</div>
+                                        <div class="calendar-day-header">四</div> <div class="calendar-day-header">五</div> <div class="calendar-day-header">六</div> <div class="calendar-day-header">日</div>
                                         
-                                        <template v-if="dayObj.isCurrentMonth"> <!-- 只处理当前月份的日期 -->
-                                            
-                                            <span :class="['day-number', {'today': dayObj.isToday}]">{{ dayObj.day }}</span>
-                                            
-                                            <!-- 仅当有任何财务数据（PnL、交易笔数或余额）时才渲染此容器 -->
-                                            <div v-if="(dayObj.pnl !== undefined || (dayObj.trades !== undefined && dayObj.trades > 0) || dayObj.balance !== undefined)"
-                                                 class="day-financial-details"> 
+                                        <template v-for="(week, weekIndex) in calendarView.weeks" :key="'week-' + weekIndex">
+                                            <div v-for="(dayObj, dayIndex) in week" :key="'day-' + weekIndex + '-' + dayIndex"
+                                                :class="['calendar-day',
+                                                        { 'not-current-month': !dayObj.isCurrentMonth },
+                                                        { 'has-financial-data': dayObj.isCurrentMonth && (dayObj.pnl !== undefined || (dayObj.trades !== undefined && dayObj.trades > 0) || dayObj.balance !== undefined) }]">
                                                 
-                                                <!-- 显示每日盈亏 -->
-                                                <div v-if="dayObj.pnl !== undefined"
-                                                     :class="['pnl-value', getPnlClass(dayObj.pnl)]">
-                                                    {{ dayObj.pnl?.toFixed(2) }}
-                                                </div>
-
-                                                <!-- 新增：显示每日回报率 -->
-                                                <div v-if="dayObj.daily_return_pct !== undefined"
-                                                     :class="['daily-return-pct', getPnlClass(dayObj.daily_return_pct)]"> <!-- 复用 getPnlClass 来决定颜色 -->
-                                                    {{ dayObj.daily_return_pct > 0 ? '+' : '' }}{{ dayObj.daily_return_pct?.toFixed(2) }}%
-                                                </div>
-                                                <!-- 显示交易笔数，仅当大于0时 -->
-                                                <div v-if="dayObj.trades !== undefined && dayObj.trades > 0"
-                                                     class="trades-count">
-                                                    {{ dayObj.trades }} 笔
-                                                </div>
-                                                <!-- 新增：显示每日余额 -->
-                                                <div v-if="dayObj.balance !== undefined"
-                                                     class="day-balance"> <!-- 为余额添加特定类名 -->
-                                                    余额: {{ dayObj.balance?.toFixed(2) }}
-                                                </div>
+                                                <template v-if="dayObj.isCurrentMonth">
+                                                    <span :class="['day-number', {'today': dayObj.isToday}]">{{ dayObj.day }}</span>
+                                                    <div v-if="(dayObj.pnl !== undefined || (dayObj.trades !== undefined && dayObj.trades > 0) || dayObj.balance !== undefined)" class="day-financial-details">
+                                                        <div v-if="dayObj.pnl !== undefined" :class="['pnl-value', getPnlClass(dayObj.pnl)]">
+                                                            {{ dayObj.pnl?.toFixed(2) }}
+                                                        </div>
+                                                        <div v-if="dayObj.daily_return_pct !== undefined" :class="['daily-return-pct', getPnlClass(dayObj.daily_return_pct)]">
+                                                            {{ dayObj.daily_return_pct > 0 ? '+' : '' }}{{ dayObj.daily_return_pct?.toFixed(2) }}%
+                                                        </div>
+                                                        <div v-if="dayObj.trades !== undefined && dayObj.trades > 0" class="trades-count">
+                                                            {{ dayObj.trades }} 笔
+                                                        </div>
+                                                        <div v-if="dayObj.balance !== undefined" class="day-balance">
+                                                            余额: {{ dayObj.balance?.toFixed(2) }}
+                                                        </div>
+                                                    </div>
+                                                </template>
+                                                <div v-else></div>
                                             </div>
                                         </template>
-                                        <!-- 如果不是当前月份的日期，则单元格内容为空 (由 not-current-month 类控制背景和文字颜色) -->
-                                        <div v-else></div> 
                                     </div>
-                                </template>
+                                    <small class="text-muted mt-2 d-block">注意：日历显示的是筛选后结果的每日盈亏。</small>
                                 </div>
-                                <small class="text-muted mt-2 d-block">注意：日历显示的是回测参数选定日期范围内的每日盈亏。</small>
-                            </div>
-                             <div v-else-if="backtestResults && (!backtestResults.daily_pnl || Object.keys(backtestResults.daily_pnl).length === 0) && backtestResults.predictions && backtestResults.predictions.length > 0" class="alert alert-light mt-3">
-                                回测期间内没有发生实际交易，或未能生成每日盈亏数据。
-                            </div>
+                                <div v-else-if="filteredData.predictions && filteredData.predictions.length > 0" class="alert alert-light mt-3">
+                                    筛选后的时间范围内没有发生实际交易，或未能生成每日盈亏数据。
+                                </div>
 
-                            <div class="mt-4">
-                                <h5>交易记录详情</h5>
-                                <div class="trade-history-cards" style="max-height: 450px; overflow-y: auto;">
-                                    <div v-if="backtestResults.predictions && backtestResults.predictions.length > 0">
-                                        <div v-for="(pred, index) in backtestResults.predictions" :key="index" class="card trade-card mb-3" :class="pred.result === true ? 'border-success' : (pred.result === false ? 'border-danger' : 'border-secondary')">
-                                            <div class="card-header d-flex justify-content-between align-items-center" :class="pred.result === true ? 'bg-success-subtle' : (pred.result === false ? 'bg-danger-subtle' : 'bg-light')">
-                                                <span class="fw-bold">{{ formatDateTime(pred.signal_time) }}</span>
-                                                <div>
-                                                    <span v-if="pred.signal === 1" class="badge bg-success me-2">做多</span>
-                                                    <span v-else-if="pred.signal === -1" class="badge bg-danger me-2">做空</span>
-                                                    <span v-if="pred.result === true" class="badge bg-success">胜利</span>
-                                                    <span v-else-if="pred.result === false" class="badge bg-danger">失败</span>
-                                                    <span v-else class="badge bg-light text-dark">未验证</span>
+                                <div class="mt-4">
+                                    <h5>交易记录详情</h5>
+                                    <div class="trade-history-cards" style="max-height: 450px; overflow-y: auto;">
+                                        <div v-if="filteredData.predictions && filteredData.predictions.length > 0">
+                                            <div v-for="(pred, index) in filteredData.predictions" :key="index" class="card trade-card mb-3" :class="pred.result === true ? 'border-success' : (pred.result === false ? 'border-danger' : 'border-secondary')">
+                                                <div class="card-header d-flex justify-content-between align-items-center" :class="pred.result === true ? 'bg-success-subtle' : (pred.result === false ? 'bg-danger-subtle' : 'bg-light')">
+                                                    <span class="fw-bold">{{ formatDateTime(pred.signal_time) }}</span>
+                                                    <div>
+                                                        <span v-if="pred.signal === 1" class="badge bg-success me-2">做多</span>
+                                                        <span v-else-if="pred.signal === -1" class="badge bg-danger me-2">做空</span>
+                                                        <span v-if="pred.result === true" class="badge bg-success">胜利</span>
+                                                        <span v-else-if="pred.result === false" class="badge bg-danger">失败</span>
+                                                        <span v-else class="badge bg-light text-dark">未验证</span>
+                                                    </div>
                                                 </div>
-                                            </div>
-                                            <div class="card-body">
-                                                <div class="row">
-                                                    <div class="col-md-4 col-sm-6">
-                                                        <div class="trade-detail-item">
-                                                            <span class="trade-detail-label">盈亏</span>
-                                                            <span class="trade-detail-value" :class="getPnlClass(pred.pnl_amount)">{{ pred.pnl_amount?.toFixed(2) || 'N/A' }}</span>
+                                                <div class="card-body">
+                                                    <div class="row">
+                                                        <div class="col-md-4 col-sm-6">
+                                                            <div class="trade-detail-item">
+                                                                <span class="trade-detail-label">盈亏</span>
+                                                                <span class="trade-detail-value" :class="getPnlClass(pred.pnl_amount)">{{ pred.pnl_amount?.toFixed(2) || 'N/A' }}</span>
+                                                            </div>
                                                         </div>
-                                                    </div>
-                                                    <div class="col-md-4 col-sm-6">
-                                                        <div class="trade-detail-item">
-                                                            <span class="trade-detail-label">最终余额</span>
-                                                            <span class="trade-detail-value">{{ pred.balance_after_trade?.toFixed(2) }}</span>
+                                                        <div class="col-md-4 col-sm-6">
+                                                            <div class="trade-detail-item">
+                                                                <span class="trade-detail-label">最终余额</span>
+                                                                <span class="trade-detail-value">{{ pred.balance_after_trade?.toFixed(2) }}</span>
+                                                            </div>
                                                         </div>
-                                                    </div>
-                                                    <div class="col-md-4 col-sm-6">
-                                                        <div class="trade-detail-item">
-                                                            <span class="trade-detail-label">投资额</span>
-                                                            <span class="trade-detail-value">{{ pred.investment_amount?.toFixed(2) }}</span>
+                                                        <div class="col-md-4 col-sm-6">
+                                                            <div class="trade-detail-item">
+                                                                <span class="trade-detail-label">投资额</span>
+                                                                <span class="trade-detail-value">{{ pred.investment_amount?.toFixed(2) }}</span>
+                                                            </div>
                                                         </div>
-                                                    </div>
-                                                    <div class="col-md-4 col-sm-6">
-                                                        <div class="trade-detail-item">
-                                                            <span class="trade-detail-label">入场/出场价</span>
-                                                            <span class="trade-detail-value">{{ pred.effective_signal_price_for_calc?.toFixed(pred.symbol && pred.symbol.includes('BTC') ? 2 : 4) || 'N/A' }} / {{ pred.end_price?.toFixed(pred.symbol && pred.symbol.includes('BTC') ? 2 : 4) || 'N/A' }}</span>
+                                                        <div class="col-md-4 col-sm-6">
+                                                            <div class="trade-detail-item">
+                                                                <span class="trade-detail-label">入场/出场价</span>
+                                                                <span class="trade-detail-value">{{ pred.effective_signal_price_for_calc?.toFixed(pred.symbol && pred.symbol.includes('BTC') ? 2 : 4) || 'N/A' }} / {{ pred.end_price?.toFixed(pred.symbol && pred.symbol.includes('BTC') ? 2 : 4) || 'N/A' }}</span>
+                                                            </div>
                                                         </div>
-                                                    </div>
-                                                    <div class="col-md-4 col-sm-6">
-                                                        <div class="trade-detail-item">
-                                                            <span class="trade-detail-label">价格变化</span>
-                                                            <span class="trade-detail-value" :class="getPnlClass(pred.price_change_pct)">{{ pred.price_change_pct?.toFixed(2) || 'N/A' }}%</span>
+                                                        <div class="col-md-4 col-sm-6">
+                                                            <div class="trade-detail-item">
+                                                                <span class="trade-detail-label">价格变化</span>
+                                                                <span class="trade-detail-value" :class="getPnlClass(pred.price_change_pct)">{{ pred.price_change_pct?.toFixed(2) || 'N/A' }}%</span>
+                                                            </div>
                                                         </div>
-                                                    </div>
-                                                    <div class="col-md-4 col-sm-6">
-                                                        <div class="trade-detail-item">
-                                                            <span class="trade-detail-label">置信度</span>
-                                                            <span class="trade-detail-value">{{ pred.confidence?.toFixed(2) }}</span>
+                                                        <div class="col-md-4 col-sm-6">
+                                                            <div class="trade-detail-item">
+                                                                <span class="trade-detail-label">置信度</span>
+                                                                <span class="trade-detail-value">{{ pred.confidence?.toFixed(2) }}</span>
+                                                            </div>
                                                         </div>
                                                     </div>
                                                 </div>
                                             </div>
                                         </div>
-                                    </div>
-                                    <div v-else class="text-center text-muted mt-3">
-                                        <p>没有交易记录。</p>
+                                        <div v-else class="text-center text-muted mt-3">
+                                            <p>没有符合筛选条件的交易记录。</p>
+                                        </div>
                                     </div>
                                 </div>
+                            </div>
+                            <div v-else class="text-center text-muted mt-5">
+                                <p>正在加载筛选数据...</p>
                             </div>
                         </div>
                     </div>

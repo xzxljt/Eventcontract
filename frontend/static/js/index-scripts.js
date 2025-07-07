@@ -4,6 +4,19 @@ const { createApp, ref, onMounted, onUnmounted, watch, computed, getCurrentInsta
 
 const app = createApp({
     setup() {
+        const worker = new Worker('./static/js/filter-worker.js');
+
+        // --- Debounce Utility ---
+        const debounce = (func, delay) => {
+            let timeoutId;
+            return (...args) => {
+                clearTimeout(timeoutId);
+                timeoutId = setTimeout(() => {
+                    func.apply(this, args);
+                }, delay);
+            };
+        };
+
         // --- 从 utils.js 引入或准备使用的函数 ---
         // 这些函数假设 utils.js 已加载并在全局作用域中可用
         // 对于模板中直接使用的，我们将在创建 app 后注册到 globalProperties
@@ -77,7 +90,7 @@ const app = createApp({
                 const aIsFav = isFavorite(a); const bIsFav = isFavorite(b);
                 if (aIsFav && !bIsFav) return -1; if (!aIsFav && bIsFav) return 1;
                 // 如果都不是收藏或都是收藏，则按字母排序 (可选)
-                // return a.localeCompare(b); 
+                // return a.localeCompare(b);
                 return 0; // 保持原有顺序或按 API 返回顺序
             });
         };
@@ -86,10 +99,38 @@ const app = createApp({
             const index = favoriteSymbols.value.indexOf(symbol);
             if (index === -1) favoriteSymbols.value.push(symbol);
             else favoriteSymbols.value.splice(index, 1);
-            saveFavorites(); 
+            saveFavorites();
             sortSymbols(); // 重新排序以更新UI
         };
 
+        // --- Result Filtering State ---
+        const filterStartTime = ref('');
+        const filterEndTime = ref('');
+        const minConfidence = ref(0);
+        const excludedWeekdays = ref([]);
+
+        const weekdays = ref([
+           { label: '一', value: '1' }, { label: '二', value: '2' },
+           { label: '三', value: '3' }, { label: '四', value: '4' },
+           { label: '五', value: '5' }, { label: '六', value: '6' },
+           { label: '日', value: '0' }
+       ]);
+
+       const toggleWeekday = (dayValue) => {
+           const index = excludedWeekdays.value.indexOf(dayValue);
+           if (index > -1) {
+               excludedWeekdays.value.splice(index, 1);
+           } else {
+               excludedWeekdays.value.push(dayValue);
+           }
+       };
+
+        const resetFilters = () => {
+            filterStartTime.value = '';
+            filterEndTime.value = '';
+            minConfidence.value = 0;
+            excludedWeekdays.value = [];
+        };
 
         // --- Initialization and Data Fetching (部分待提取到 apiService) ---
         const initDatePickers = () => {
@@ -327,34 +368,21 @@ const app = createApp({
                         }
                     });
                 }
-
-                if (backtestResults.value && backtestResults.value.daily_pnl) {
-                    calendarView.value.dailyPnlData = backtestResults.value.daily_pnl;
-                    let refDateStr = payload.start_time;
-                    const dailyPnlKeys = Object.keys(backtestResults.value.daily_pnl);
-                    if (dailyPnlKeys.length > 0) {
-                        refDateStr = dailyPnlKeys[0] + "T00:00:00"; 
-                    } else if (backtestResults.value.predictions?.length > 0 && backtestResults.value.predictions[0].signal_time) {
-                        refDateStr = backtestResults.value.predictions[0].signal_time; // 假设 signal_time 是可被 Date 解析的
+ 
+                // 初始计算交给 worker，确保传递的是纯 JS 对象
+                worker.postMessage({
+                    results: JSON.parse(JSON.stringify(backtestResults.value)),
+                    filters: {
+                        filterStartTime: '',
+                        filterEndTime: '',
+                        minConfidence: 0,
+                        excludedWeekdays: []
                     }
-                    
-                    try {
-                        const dateObj = new Date(refDateStr);
-                        if (!isNaN(dateObj.getTime())) {
-                            calendarView.value.year = dateObj.getFullYear();
-                            calendarView.value.month = dateObj.getMonth();
-                        } else {
-                            const today = new Date();
-                            calendarView.value.year = today.getFullYear();
-                            calendarView.value.month = today.getMonth();
-                        }
-                    } catch (e) { 
-                        const today = new Date();
-                        calendarView.value.year = today.getFullYear();
-                        calendarView.value.month = today.getMonth();
-                    }
-                    generateCalendar();
-                }
+                });
+                resetFilters(); // 重置UI筛选条件
+ 
+                // The calendar is now driven by a watcher on filteredData
+                // so we don't need to call generateCalendar here directly.
                 } catch (err) {
                     console.error('Backtest failed:', err);
                     // console.log('Full error object for debugging:', JSON.stringify(err, Object.getOwnPropertyNames(err)));
@@ -563,17 +591,17 @@ const app = createApp({
         // --- Calendar Logic ---
 
         const generateCalendar = () => {
+            // Now uses filteredData's daily_pnl via calendarView.dailyPnlData
             const year = calendarView.value.year; const month = calendarView.value.month;
             const dailyPnl = calendarView.value.dailyPnlData || {};
             const firstDay = new Date(year, month, 1);
             const lastDay = new Date(year, month + 1, 0);
             const daysInMonth = lastDay.getDate();
-            let startDayOfWeek = firstDay.getDay(); 
+            let startDayOfWeek = firstDay.getDay();
             startDayOfWeek = startDayOfWeek === 0 ? 6 : startDayOfWeek - 1; // 0 (周一) to 6 (周日)
 
             const weeksArray = []; let currentWeek = [];
-            // 用空白对象填充月初的空白单元格
-            for (let i = 0; i < startDayOfWeek; i++) currentWeek.push({ day: '', pnl: undefined, trades: undefined, balance: undefined, daily_return_pct: undefined, isCurrentMonth: false }); // 修改：确保 pnl, trades, balance 为 undefined
+            for (let i = 0; i < startDayOfWeek; i++) currentWeek.push({ day: '', pnl: undefined, trades: undefined, balance: undefined, daily_return_pct: undefined, isCurrentMonth: false });
             
             const todayDate = new Date();
             const todayStr = `${todayDate.getFullYear()}-${String(todayDate.getMonth() + 1).padStart(2, '0')}-${String(todayDate.getDate()).padStart(2, '0')}`;
@@ -585,7 +613,7 @@ const app = createApp({
                     day: day,
                     pnl: pnlData?.pnl,
                     trades: pnlData?.trades,
-                    balance: pnlData?.balance, // <--- 新增：获取每日余额
+                    balance: pnlData?.balance,
                     daily_return_pct: pnlData?.daily_return_pct,
                     isCurrentMonth: true,
                     dateString: dateStr,
@@ -594,24 +622,85 @@ const app = createApp({
                 if (currentWeek.length === 7) { weeksArray.push(currentWeek); currentWeek = []; }
             }
             if (currentWeek.length > 0) {
-                // 用空白对象填充月末的空白单元格
-                while (currentWeek.length < 7) currentWeek.push({ day: '', pnl: undefined, trades: undefined, balance: undefined, daily_return_pct: undefined, isCurrentMonth: false }); // 修改：确保 pnl, trades, balance 为 undefined
+                while (currentWeek.length < 7) currentWeek.push({ day: '', pnl: undefined, trades: undefined, balance: undefined, daily_return_pct: undefined, isCurrentMonth: false });
                 weeksArray.push(currentWeek);
             }
             calendarView.value.weeks = weeksArray;
         };
         const changeMonth = (offset) => {
             let newMonth = calendarView.value.month + offset; let newYear = calendarView.value.year;
-            if (newMonth < 0) { newMonth = 11; newYear--; } 
+            if (newMonth < 0) { newMonth = 11; newYear--; }
             else if (newMonth > 11) { newMonth = 0; newYear++; }
             calendarView.value.month = newMonth; calendarView.value.year = newYear;
-            generateCalendar(); // 重新生成日历，但此时可能没有对应月份的 dailyPnlData
-            // 注意：如果 dailyPnlData 只在回测后获取一次，那么切换月份不会有新的 PnL 数据。
-            // 如果希望切换月份也重新获取或筛选 PnL 数据，需要额外逻辑。
+            generateCalendar();
         };
-        const currentMonthYearDisplay = computed(() => 
+        const currentMonthYearDisplay = computed(() =>
             new Date(calendarView.value.year, calendarView.value.month).toLocaleDateString('zh-CN', { year: 'numeric', month: 'long' })
         );
+
+        // --- Debounced Filtering Logic ---
+        const filteredData = ref(null);
+ 
+        // 监听 Worker 返回的消息
+        worker.onmessage = (event) => {
+            filteredData.value = event.data;
+        };
+ 
+        const triggerWorkerFilter = () => {
+            if (!backtestResults.value) {
+                return;
+            }
+            // 确保传递给 worker 的是纯 JS 对象，而不是 Vue 的响应式代理
+            worker.postMessage({
+                results: JSON.parse(JSON.stringify(backtestResults.value)),
+                filters: {
+                    filterStartTime: filterStartTime.value,
+                    filterEndTime: filterEndTime.value,
+                    minConfidence: minConfidence.value,
+                    excludedWeekdays: [...excludedWeekdays.value] // 修复：将响应式数组转换为普通数组
+                }
+            });
+        };
+ 
+        const debouncedFilter = debounce(triggerWorkerFilter, 300);
+        watch([filterStartTime, filterEndTime, minConfidence, excludedWeekdays], debouncedFilter, { deep: true });
+
+        // Watch for filtered data changes to update the calendar
+        watch(filteredData, (newResults) => {
+            if (newResults && newResults.daily_pnl) {
+                calendarView.value.dailyPnlData = newResults.daily_pnl;
+                
+                let refDateStr = backtestParams.value.start_time;
+                const dailyPnlKeys = Object.keys(newResults.daily_pnl);
+                if (dailyPnlKeys.length > 0) {
+                    refDateStr = dailyPnlKeys[0] + "T00:00:00";
+                } else if (newResults.predictions?.length > 0 && newResults.predictions[0].signal_time) {
+                    refDateStr = newResults.predictions[0].signal_time;
+                }
+
+                try {
+                    const dateObj = new Date(refDateStr);
+                    if (!isNaN(dateObj.getTime())) {
+                        calendarView.value.year = dateObj.getFullYear();
+                        calendarView.value.month = dateObj.getMonth();
+                    } else {
+                        const today = new Date();
+                        calendarView.value.year = today.getFullYear();
+                        calendarView.value.month = today.getMonth();
+                    }
+                } catch (e) {
+                    const today = new Date();
+                    calendarView.value.year = today.getFullYear();
+                    calendarView.value.month = today.getMonth();
+                }
+                generateCalendar();
+            } else {
+                // If there are no results (e.g., all filtered out), clear the calendar
+                calendarView.value.dailyPnlData = {};
+                calendarView.value.weeks = [];
+            }
+        }, { deep: true });
+
 
         // --- Lifecycle Hooks ---
         onMounted(async () => {
@@ -648,24 +737,32 @@ const app = createApp({
             symbols, favoriteSymbols,
             predictionStrategies, selectedPredictionStrategy, predictionStrategyParams,
             investmentStrategies, selectedInvestmentStrategy, investmentStrategyParams,
-            allSavedParams, // 虽然主要在内部使用，但如果模板中需要可以暴露
+            allSavedParams,
             backtestParams,
-            backtestResults, loading, error, validationError, // 暴露 validationError
-            backtestResults, loading, error, validationError, fieldErrors, // <--- 添加 fieldError
+            backtestResults, loading, error, validationError, fieldErrors,
+
+            // Filtering State & Methods
+            filterStartTime,
+            filterEndTime,
+            minConfidence,
+            resetFilters,
+            excludedWeekdays,
 
             // Methods
-            toggleFavorite, isFavorite, // Favorite methods
+            toggleFavorite, isFavorite,
             runBacktest,
             saveStrategyParameters,
-            ensureGlobalInvestmentSettings, // 如果需要在模板中调用（一般不需要）
+            ensureGlobalInvestmentSettings,
+            toggleWeekday, weekdays,
 
             // Calendar
             calendarView, changeMonth, currentMonthYearDisplay,
 
-            // Computed or direct from utils for template (will be registered to globalProperties)
-            // formatDateTime: utilFormatDateTime, // 已通过 globalProperties 注册
-            // getWinRateClass: utilGetWinRateClass, // 已通过 globalProperties 注册
-            getPnlClass: typeof getPnlClass === 'function' ? getPnlClass : () => '', // 确保暴露给模板
+            // Computed Properties
+            filteredData,
+
+            // Utils for template
+            getPnlClass: typeof getPnlClass === 'function' ? getPnlClass : () => '',
         };
     }
 });
