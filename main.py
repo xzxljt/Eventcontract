@@ -2249,13 +2249,20 @@ async def run_backtest_endpoint(request: BacktestRequest):
             raise HTTPException(status_code=400, detail="回测时间范围无效。")
 
         # --- 修改：将 get_historical_klines 移至线程池 ---
-        df_klines = await asyncio.to_thread(
-            binance_client.get_historical_klines,
-            request.symbol,
-            request.interval,
-            int(start_utc.timestamp() * 1000),
-            int(end_utc.timestamp() * 1000)
-        )
+        def _fetch_data_in_thread():
+            """在单个线程中获取K线和指数价格数据，以避免多次启动线程的开销。"""
+            start_ms = int(start_utc.timestamp() * 1000)
+            end_ms = int(end_utc.timestamp() * 1000)
+            
+            kline_data = binance_client.get_historical_klines(
+                request.symbol, request.interval, start_ms, end_ms
+            )
+            index_price_data = binance_client.get_index_price_klines(
+                request.symbol, request.interval, start_ms, end_ms
+            )
+            return kline_data, index_price_data
+
+        df_klines, df_index_price = await asyncio.to_thread(_fetch_data_in_thread)
         # --- 结束修改 ---
 
         if df_klines.empty: raise HTTPException(status_code=404, detail="未找到指定范围的K线数据。")
@@ -2293,6 +2300,7 @@ async def run_backtest_endpoint(request: BacktestRequest):
             """在单独的线程中运行回测以避免阻塞事件循环。"""
             backtester = Backtester(
                 df=df_klines.copy(),
+                df_index_price=df_index_price.copy(),
                 strategy=prediction_instance,
                 symbol=request.symbol,
                 interval=request.interval,
