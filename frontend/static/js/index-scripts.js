@@ -50,6 +50,25 @@ const app = createApp({
         const error = ref(null); // 用于显示一般错误或回测API的文本错误
         const validationError = ref(null); // 用于显示Pydantic校验错误详情
 
+        // 进度条相关状态
+        const progressData = ref({
+            percentage: 0,
+            currentStage: 0,
+            stages: [
+                { id: 'init', label: '初始化', description: '准备回测参数和环境' },
+                { id: 'data', label: '获取数据', description: '从币安获取历史K线数据' },
+                { id: 'signals', label: '计算信号', description: '运行预测策略生成交易信号' },
+                { id: 'backtest', label: '执行回测', description: '模拟交易并计算收益' },
+                { id: 'results', label: '生成结果', description: '整理数据并生成报告' }
+            ],
+            stats: {
+                processedKlines: 0,
+                generatedSignals: 0,
+                executedTrades: 0,
+                elapsedTime: 0
+            }
+        });
+
 
         const backtestParams = ref({
             symbol: '',
@@ -58,9 +77,8 @@ const app = createApp({
             end_time: '',
             // startTime 和 endTime (camelCase) 仅用于 flatpickr 初始化时的 defaultDate，
             // 实际提交给后端的 payload 使用 snake_case (start_time, end_time)
-            prediction_strategy_id: '', 
-            eventPeriod: '10m', 
-            confidence_threshold: 50,
+            prediction_strategy_id: '',
+            eventPeriod: '10m',
             investment: {
                 initial_balance: 1000.0,
                 investment_strategy_id: 'fixed',
@@ -317,13 +335,131 @@ const app = createApp({
             investment.max_investment_amount = Number(investment.max_investment_amount) || 250.0;
         };
 
+        // 计算预期的K线数量和其他统计数据
+        const calculateExpectedStats = () => {
+            const startTime = new Date(backtestParams.value.start_time);
+            const endTime = new Date(backtestParams.value.end_time);
+            const interval = backtestParams.value.interval;
+
+            // 计算时间差（毫秒）
+            const timeDiffMs = endTime.getTime() - startTime.getTime();
+
+            // 根据K线周期计算间隔毫秒数
+            const intervalMs = {
+                '1m': 60 * 1000,
+                '3m': 3 * 60 * 1000,
+                '5m': 5 * 60 * 1000,
+                '15m': 15 * 60 * 1000,
+                '30m': 30 * 60 * 1000,
+                '1h': 60 * 60 * 1000,
+                '2h': 2 * 60 * 60 * 1000,
+                '4h': 4 * 60 * 60 * 1000,
+                '6h': 6 * 60 * 60 * 1000,
+                '8h': 8 * 60 * 60 * 1000,
+                '12h': 12 * 60 * 60 * 1000,
+                '1d': 24 * 60 * 60 * 1000,
+                '3d': 3 * 24 * 60 * 60 * 1000,
+                '1w': 7 * 24 * 60 * 60 * 1000
+            }[interval] || 60 * 1000; // 默认1分钟
+
+            // 计算预期K线数量
+            const expectedKlines = Math.floor(timeDiffMs / intervalMs);
+
+            // 基于K线数量估算信号和交易数量
+            // 假设每100根K线产生1-3个信号，每个信号有70%概率成交
+            const expectedSignals = Math.floor(expectedKlines * 0.02); // 2%的K线产生信号
+            const expectedTrades = Math.floor(expectedSignals * 0.7); // 70%的信号成交
+
+            return {
+                expectedKlines,
+                expectedSignals,
+                expectedTrades
+            };
+        };
+
+        // 进度模拟函数
+        const simulateProgress = () => {
+            const startTime = Date.now();
+            const expectedStats = calculateExpectedStats();
+
+            progressData.value.percentage = 0;
+            progressData.value.currentStage = 0;
+            progressData.value.stats = {
+                processedKlines: 0,
+                generatedSignals: 0,
+                executedTrades: 0,
+                elapsedTime: 0
+            };
+
+            const updateProgress = () => {
+                if (!loading.value || cancelling.value) return;
+
+                const elapsed = Date.now() - startTime;
+                progressData.value.stats.elapsedTime = Math.floor(elapsed / 1000);
+
+                // 模拟各阶段进度
+                const stageDurations = [500, 2000, 3000, 2500, 1000]; // 各阶段预计耗时(ms)
+                let totalElapsed = 0;
+                let currentStageIndex = 0;
+
+                for (let i = 0; i < stageDurations.length; i++) {
+                    if (elapsed <= totalElapsed + stageDurations[i]) {
+                        currentStageIndex = i;
+                        break;
+                    }
+                    totalElapsed += stageDurations[i];
+                    if (i === stageDurations.length - 1) {
+                        currentStageIndex = i;
+                    }
+                }
+
+                progressData.value.currentStage = currentStageIndex;
+
+                // 计算当前阶段内的进度
+                const stageElapsed = elapsed - totalElapsed;
+                const stageProgress = Math.min(stageElapsed / stageDurations[currentStageIndex], 1);
+                const baseProgress = (currentStageIndex / stageDurations.length) * 100;
+                const stageContribution = (stageProgress / stageDurations.length) * 100;
+
+                progressData.value.percentage = Math.min(baseProgress + stageContribution, 95);
+
+                // 基于预期值和进度的合理统计数据更新
+                const overallProgress = progressData.value.percentage / 100;
+
+                if (currentStageIndex >= 1) {
+                    // 数据获取阶段：K线数量基于时间进度平滑增长
+                    const dataProgress = Math.min((currentStageIndex + stageProgress) / stageDurations.length, 1);
+                    progressData.value.stats.processedKlines = Math.floor(expectedStats.expectedKlines * dataProgress);
+                }
+                if (currentStageIndex >= 2) {
+                    // 信号计算阶段：信号数量基于K线处理进度
+                    const signalProgress = Math.max(0, (currentStageIndex - 1 + stageProgress) / stageDurations.length);
+                    progressData.value.stats.generatedSignals = Math.floor(expectedStats.expectedSignals * signalProgress);
+                }
+                if (currentStageIndex >= 3) {
+                    // 回测执行阶段：交易数量基于信号处理进度
+                    const tradeProgress = Math.max(0, (currentStageIndex - 2 + stageProgress) / stageDurations.length);
+                    progressData.value.stats.executedTrades = Math.floor(expectedStats.expectedTrades * tradeProgress);
+                }
+
+                if (loading.value && !cancelling.value) {
+                    setTimeout(updateProgress, 200);
+                }
+            };
+
+            setTimeout(updateProgress, 100);
+        };
+
         const runBacktest = async () => {
             loading.value = true; error.value = null; validationError.value = null; fieldErrors.value = {}; backtestResults.value = null; // 清空 fieldErrors
             cancelling.value = false;
             calendarView.value.dailyPnlData = {}; calendarView.value.weeks = [];
 
             // 生成唯一的回测任务ID
-            currentBacktestId.value = 'backtest_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+            currentBacktestId.value = 'backtest_' + Date.now() + '_' + Math.random().toString(36).substring(2, 11);
+
+            // 启动进度模拟
+            simulateProgress();
 
             // 显示开始回测的提示
             showInfoToast('开始回测', '正在运行回测，请稍候...', 3000);
@@ -353,7 +489,7 @@ const app = createApp({
                     prediction_strategy_id: backtestParams.value.prediction_strategy_id,
                     prediction_strategy_params: finalPredictionParams,
                     event_period: backtestParams.value.eventPeriod,
-                    confidence_threshold: parseFloat(backtestParams.value.confidence_threshold), // 确保是浮点数
+                    confidence_threshold: 0, // 设置为0以包含所有信号，通过结果筛选器进行筛选
                     task_id: currentBacktestId.value, // 添加任务ID
                     investment: {
                         ...backtestParams.value.investment, // 包含 initial_balance, strategy_id 等
@@ -374,6 +510,10 @@ const app = createApp({
                 console.log('Sending to backtest API:', JSON.stringify(payload, null, 2));
                 const response = await axios.post('/api/backtest', payload);
                 backtestResults.value = response.data;
+
+                // 完成进度
+                progressData.value.percentage = 100;
+                progressData.value.currentStage = progressData.value.stages.length - 1;
 
                 // 检查是否被取消
                 if (response.data.cancelled) {
@@ -459,7 +599,7 @@ const app = createApp({
                                             if (fieldKey === 'start_time') fieldKey = 'startTime';
                                             else if (fieldKey === 'end_time') fieldKey = 'endTime';
                                             else if (fieldKey === 'prediction_strategy_id') fieldKey = 'predictionStrategy';
-                                            // Add other direct mappings if necessary, e.g. 'symbol', 'interval', 'eventPeriod', 'confidence_threshold'
+                                            // Add other direct mappings if necessary, e.g. 'symbol', 'interval', 'eventPeriod'
                                         } else if (loc.length > 2 && typeof loc[1] === 'string') { // Nested field
                                             const parentKey = loc[1];
                                             const childKey = loc[2];
@@ -809,7 +949,7 @@ const app = createApp({
             investmentStrategies, selectedInvestmentStrategy, investmentStrategyParams,
             allSavedParams,
             backtestParams,
-            backtestResults, loading, cancelling, currentBacktestId, error, validationError, fieldErrors,
+            backtestResults, loading, cancelling, currentBacktestId, progressData, error, validationError, fieldErrors,
 
             // Filtering State & Methods
             filterStartTime,

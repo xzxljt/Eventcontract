@@ -142,14 +142,7 @@
                                     </div>
                                 </div>
 
-                                <div class="mb-3">
-                                    <label for="confidenceThreshold" class="form-label">预测置信度阈值 ({{ backtestParams.confidence_threshold }})</label>
-                                    <input type="range" class="form-range" id="confidenceThreshold" v-model.number="backtestParams.confidence_threshold" min="0" max="100"
-                                           :class="{'is-invalid': fieldErrors.confidence_threshold}">
-                                </div>
-                                <div v-if="fieldErrors.confidence_threshold" class="invalid-feedback">
-                                    {{ fieldErrors.confidence_threshold }}
-                                </div>
+
                                 
                                 <hr> <h6 class="text-primary">投资设置</h6>
                                 
@@ -282,9 +275,87 @@
                 </div>
 
                 <div class="col-lg-8">
-                    <div v-if="loading" class="d-flex justify-content-center align-items-center my-5 loading-inline">
-                         <div class="spinner-border text-primary" style="width: 3rem; height: 3rem;" role="status"> <span class="visually-hidden">加载中...</span> </div>
-                         <p class="ms-3 mb-0 fs-5">正在运行回测，请稍候...</p>
+                    <div v-if="loading" class="backtest-progress-container">
+                        <!-- 进度头部 -->
+                        <div class="progress-header">
+                            <h3 class="progress-title">
+                                <div class="progress-icon">
+                                    <i class="bi bi-graph-up"></i>
+                                </div>
+                                回测进行中
+                            </h3>
+                            <p class="progress-subtitle">正在分析您的交易策略，请稍候...</p>
+                        </div>
+
+                        <!-- 主进度条 -->
+                        <div class="progress-main">
+                            <div class="progress-bar-container">
+                                <div class="progress-bar" :style="{ width: progressData.percentage + '%' }"></div>
+                            </div>
+                            <div class="progress-percentage">{{ Math.round(progressData.percentage) }}%</div>
+                        </div>
+
+                        <!-- 阶段指示器 -->
+                        <div class="progress-stages">
+                            <div
+                                v-for="(stage, index) in progressData.stages"
+                                :key="stage.id"
+                                class="progress-stage"
+                            >
+                                <div
+                                    class="stage-indicator"
+                                    :class="{
+                                        'active': index === progressData.currentStage,
+                                        'completed': index < progressData.currentStage
+                                    }"
+                                >
+                                    <i v-if="index < progressData.currentStage" class="bi bi-check"></i>
+                                    <span v-else-if="index === progressData.currentStage" class="spinner-border spinner-border-sm"></span>
+                                    <span v-else>{{ index + 1 }}</span>
+                                </div>
+                                <div
+                                    class="stage-label"
+                                    :class="{
+                                        'active': index === progressData.currentStage,
+                                        'completed': index < progressData.currentStage
+                                    }"
+                                >
+                                    {{ stage.label }}
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 当前阶段详情 -->
+                        <div class="progress-details">
+                            <div class="current-stage-info">
+                                <h4 class="current-stage-title">
+                                    {{ progressData.stages[progressData.currentStage]?.label }}
+                                </h4>
+                                <p class="current-stage-description">
+                                    {{ progressData.stages[progressData.currentStage]?.description }}
+                                </p>
+
+                                <!-- 统计信息 -->
+                                <div class="progress-stats">
+                                    <div class="progress-stat">
+                                        <span class="progress-stat-value">{{ progressData.stats.processedKlines }}</span>
+                                        <div class="progress-stat-label">已处理K线</div>
+                                    </div>
+                                    <div class="progress-stat">
+                                        <span class="progress-stat-value">{{ progressData.stats.generatedSignals }}</span>
+                                        <div class="progress-stat-label">生成信号</div>
+                                    </div>
+                                    <div class="progress-stat">
+                                        <span class="progress-stat-value">{{ progressData.stats.executedTrades }}</span>
+                                        <div class="progress-stat-label">执行交易</div>
+                                    </div>
+                                    <div class="progress-stat">
+                                        <span class="progress-stat-value">{{ progressData.stats.elapsedTime }}s</span>
+                                        <div class="progress-stat-label">已用时间</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                     <!-- 错误信息已移至左侧参数卡片中，就近显示在回测按钮附近 -->
 

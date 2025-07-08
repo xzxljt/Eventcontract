@@ -544,15 +544,38 @@ const app = createApp({
                 monitorSettings.value.investment.lossRate = invSettingsFromServer.lossRate ?? monitorSettings.value.investment.lossRate;
                 monitorSettings.value.investment.percentageOfBalance = invSettingsFromServer.percentageOfBalance ?? monitorSettings.value.investment.percentageOfBalance;
                 monitorSettings.value.investment.simulatedBalance = invSettingsFromServer.simulatedBalance ?? monitorSettings.value.investment.simulatedBalance;
+                // 修复：正确处理 min_trade_interval_minutes 字段
+                monitorSettings.value.investment.min_trade_interval_minutes = invSettingsFromServer.min_trade_interval_minutes ?? monitorSettings.value.investment.min_trade_interval_minutes;
 
                 const invStrategy = investmentStrategies.value.find(s => s.id === invSettingsFromServer.strategy_id);
                 if (invStrategy) {
                     selectedInvestmentStrategy.value = invStrategy;
-                    updateInvestmentStrategyParams(invStrategy); // Use the new reusable function
-                    
-                    // Now, override with any specific params from the server config
+
+                    // 修复：优先使用服务器配置，避免被全局参数覆盖
                     const paramsFromServer = invSettingsFromServer.investment_strategy_specific_params || {};
-                    investmentStrategyParams.value = { ...investmentStrategyParams.value, ...paramsFromServer };
+
+                    // 只有当服务器没有特定参数时，才使用全局保存的参数作为后备
+                    if (Object.keys(paramsFromServer).length === 0) {
+                        updateInvestmentStrategyParams(invStrategy);
+                    } else {
+                        // 获取默认参数
+                        const defaultParams = {};
+                        if (invStrategy.parameters) {
+                            invStrategy.parameters.forEach(param => {
+                                if (!param.advanced && !param.readonly) {
+                                    if (param.editor === 'text_list' && Array.isArray(param.default)) {
+                                        defaultParams[param.name] = param.default.join(',');
+                                    } else if (param.type === 'boolean') {
+                                        defaultParams[param.name] = (param.default === true);
+                                    } else {
+                                        defaultParams[param.name] = param.default;
+                                    }
+                                }
+                            });
+                        }
+                        // 使用服务器参数覆盖默认参数
+                        investmentStrategyParams.value = { ...defaultParams, ...paramsFromServer };
+                    }
                 } else {
                     selectedInvestmentStrategy.value = null;
                 }
@@ -766,21 +789,28 @@ const app = createApp({
                             break;
                         // +++ END: MODIFIED CASES +++
 
-                        // 处理活动配置通知 - 新增处理
+                        // 处理活动配置通知 - 修复刷新页面后表单不填充的问题
                         case "active_config_notification":
                             console.log("LiveTest: Received active_config_notification message:", message.data);
                             if (message.data && message.data.config_id && message.data.config) {
-                                // 只有当前没有活动配置时才应用收到的配置
-                                if (!currentConfigId.value) {
+                                // 检查是否是相同的配置ID
+                                if (currentConfigId.value === message.data.config_id) {
+                                    // 相同配置ID，更新表单数据（解决刷新页面后表单显示默认值的问题）
+                                    console.log("LiveTest: 相同配置ID，更新表单数据");
+                                    populateUiFromConfigDetails(message.data.config);
+                                    activeTestConfigDetails.value = message.data.config;
+                                    console.log("LiveTest: activeTestConfigDetails after active_config_notification (same ID):", activeTestConfigDetails.value);
+                                    showServerMessage(message.data.message || '已连接到活动测试配置', false, 4000);
+                                } else if (!currentConfigId.value) {
+                                    // 没有当前配置时才应用收到的配置
                                     currentConfigId.value = message.data.config_id;
                                     localStorage.setItem('liveTestConfigId', currentConfigId.value);
                                     populateUiFromConfigDetails(message.data.config);
-                                    // 更新活动配置细节
                                     activeTestConfigDetails.value = message.data.config;
-                                    console.log("LiveTest: activeTestConfigDetails after active_config_notification:", activeTestConfigDetails.value);
+                                    console.log("LiveTest: activeTestConfigDetails after active_config_notification (new ID):", activeTestConfigDetails.value);
                                     showServerMessage(message.data.message || '已连接到活动测试配置', false, 4000);
                                 } else {
-                                    console.log("LiveTest: 已有活动配置，忽略活动配置通知");
+                                    console.log("LiveTest: 已有不同的活动配置，忽略活动配置通知");
                                 }
                             }
                             break;
@@ -1406,14 +1436,20 @@ const app = createApp({
                     fetchAllLiveSignals()
                 ]);
 
-                if (predictionStrategies.value.length > 0 && !selectedPredictionStrategy.value) {
-                    const defaultPred = predictionStrategies.value.find(s => s.id === 'simple_rsi') || predictionStrategies.value[0];
-                    selectedPredictionStrategy.value = defaultPred;
-                }
-                if (investmentStrategies.value.length > 0 && !selectedInvestmentStrategy.value) {
-                    const defaultInv = investmentStrategies.value.find(s => s.id === 'fixed') || investmentStrategies.value[0];
-                    selectedInvestmentStrategy.value = defaultInv;
-                }
+                // 延迟设置默认策略，等待WebSocket连接和配置加载完成
+                // 这样可以避免默认策略与服务器配置产生冲突
+                setTimeout(() => {
+                    if (predictionStrategies.value.length > 0 && !selectedPredictionStrategy.value) {
+                        const defaultPred = predictionStrategies.value.find(s => s.id === 'simple_rsi') || predictionStrategies.value[0];
+                        selectedPredictionStrategy.value = defaultPred;
+                        console.log("LiveTest: 设置默认预测策略:", defaultPred?.name);
+                    }
+                    if (investmentStrategies.value.length > 0 && !selectedInvestmentStrategy.value) {
+                        const defaultInv = investmentStrategies.value.find(s => s.id === 'fixed') || investmentStrategies.value[0];
+                        selectedInvestmentStrategy.value = defaultInv;
+                        console.log("LiveTest: 设置默认投资策略:", defaultInv?.name);
+                    }
+                }, 2000); // 给WebSocket连接和配置加载留出时间
             } catch (err) {
                 console.error("LiveTest: Error during initial data fetch:", err);
                 showServerMessage("加载初始数据失败。请检查后端服务是否运行。", true, 8000);

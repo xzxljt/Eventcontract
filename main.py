@@ -1147,9 +1147,9 @@ async def handle_kline_data(kline_data: dict):
 
             if sig_val != 0 and conf_val >= current_confidence_threshold:
                 # --- START: 时间过滤逻辑 ---
-                trade_start_time_str = live_test_config_data.get("tradeStartTime")
-                trade_end_time_str = live_test_config_data.get("tradeEndTime")
-                # 修复字段名不匹配问题：前端发送 excluded_weekdays，后端读取 excludedWeekdays
+                # 修复字段名不一致问题：兼容两种字段名格式
+                trade_start_time_str = live_test_config_data.get("tradeStartTime") or live_test_config_data.get("trade_start_time")
+                trade_end_time_str = live_test_config_data.get("tradeEndTime") or live_test_config_data.get("trade_end_time")
                 excluded_weekdays = live_test_config_data.get("excluded_weekdays", []) or live_test_config_data.get("excludedWeekdays", [])
 
                 # 只有在设置了有效的过滤条件时才执行
@@ -1614,9 +1614,9 @@ async def websocket_endpoint(websocket: WebSocket):
             config_for_broadcast = current_active_config.copy()
             config_for_broadcast.pop('investment_strategy_instance', None)
 
-            # 确保新字段有默认值
-            config_for_broadcast.setdefault('tradeStartTime', '')
-            config_for_broadcast.setdefault('tradeEndTime', '')
+            # 确保新字段有默认值，统一使用下划线格式
+            config_for_broadcast.setdefault('trade_start_time', '')
+            config_for_broadcast.setdefault('trade_end_time', '')
             config_for_broadcast.setdefault('excluded_weekdays', [])
 
             # 发送活动配置信息给新连接的客户端
@@ -1683,9 +1683,9 @@ async def websocket_endpoint(websocket: WebSocket):
                     config_for_broadcast = restored_config_data.copy()
                     config_for_broadcast.pop('investment_strategy_instance', None)
                     
-                    # 确保新字段有默认值
-                    config_for_broadcast.setdefault('tradeStartTime', '')
-                    config_for_broadcast.setdefault('tradeEndTime', '')
+                    # 确保新字段有默认值，统一使用下划线格式
+                    config_for_broadcast.setdefault('trade_start_time', '')
+                    config_for_broadcast.setdefault('trade_end_time', '')
                     config_for_broadcast.setdefault('excluded_weekdays', [])
 
                     # 发送给客户端的 config_for_broadcast 不再包含实例
@@ -1803,10 +1803,9 @@ async def websocket_endpoint(websocket: WebSocket):
                         "current_balance": round(final_current_balance, 2),
                         "total_profit_loss_amount": round(final_total_profit_loss_amount, 2),
                         "created_at": created_at_to_use,
-                        # 新增：保存时间过滤字段
-                        "tradeStartTime": config_payload_data.get("trade_start_time", ""),
-                        "tradeEndTime": config_payload_data.get("trade_end_time", ""),
-                        # 修复：统一使用 excluded_weekdays 字段名
+                        # 新增：保存时间过滤字段，统一使用下划线格式
+                        "trade_start_time": config_payload_data.get("trade_start_time", ""),
+                        "trade_end_time": config_payload_data.get("trade_end_time", ""),
                         "excluded_weekdays": config_payload_data.get("excluded_weekdays", [])
                     }
                     running_live_test_configs[new_config_id] = full_config_to_store
