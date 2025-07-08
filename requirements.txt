@@ -1,9 +1,9 @@
-uvicorn
-fastapi
-requests
-pandas
+pandas=2.3.0
 numpy
 python-dotenv
-timezonefinder
+requests
 websocket-client
+fastapi
+pydantic
+uvicorn
 pandas-ta
