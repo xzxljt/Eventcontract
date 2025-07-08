@@ -45,6 +45,8 @@ const app = createApp({
 
         const backtestResults = ref(null);
         const loading = ref(false);
+        const cancelling = ref(false);
+        const currentBacktestId = ref(null);
         const error = ref(null); // 用于显示一般错误或回测API的文本错误
         const validationError = ref(null); // 用于显示Pydantic校验错误详情
 
@@ -171,7 +173,7 @@ const app = createApp({
                 allSavedParams.value = response.data || { prediction_strategies: {}, investment_strategies: {} };
             } catch (err) {
                 console.error('Failed to fetch all saved parameters:', err);
-                error.value = '加载已保存的策略参数失败。';
+                showErrorToast('加载失败', '加载已保存的策略参数失败。', 5000);
                 allSavedParams.value = { prediction_strategies: {}, investment_strategies: {} };
             }
         };
@@ -190,21 +192,30 @@ const app = createApp({
                         backtestParams.value.symbol = symbols.value[0];
                     }
                 }
-            } catch (err) { console.error('获取交易对失败:', err); error.value = '获取交易对失败'; }
+            } catch (err) {
+                console.error('获取交易对失败:', err);
+                showErrorToast('获取失败', '获取交易对失败', 5000);
+            }
         };
 
         const fetchPredictionStrategies = async () => {
             try {
                 const response = await axios.get('/api/prediction-strategies');
                 predictionStrategies.value = response.data;
-            } catch (err) { console.error('获取预测策略失败:', err); error.value = '获取预测策略失败'; }
+            } catch (err) {
+                console.error('获取预测策略失败:', err);
+                showErrorToast('获取失败', '获取预测策略失败', 5000);
+            }
         };
 
         const fetchInvestmentStrategies = async () => {
             try {
                 const response = await axios.get('/api/investment-strategies');
                 investmentStrategies.value = response.data;
-            } catch (err) { console.error('获取投资策略失败:', err); error.value = '获取投资策略失败'; }
+            } catch (err) {
+                console.error('获取投资策略失败:', err);
+                showErrorToast('获取失败', '获取投资策略失败', 5000);
+            }
         };
 
         // --- Strategy Parameter Management ---
@@ -308,7 +319,14 @@ const app = createApp({
 
         const runBacktest = async () => {
             loading.value = true; error.value = null; validationError.value = null; fieldErrors.value = {}; backtestResults.value = null; // 清空 fieldErrors
+            cancelling.value = false;
             calendarView.value.dailyPnlData = {}; calendarView.value.weeks = [];
+
+            // 生成唯一的回测任务ID
+            currentBacktestId.value = 'backtest_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+
+            // 显示开始回测的提示
+            showInfoToast('开始回测', '正在运行回测，请稍候...', 3000);
 
             try {
                 ensureGlobalInvestmentSettings();
@@ -336,6 +354,7 @@ const app = createApp({
                     prediction_strategy_params: finalPredictionParams,
                     event_period: backtestParams.value.eventPeriod,
                     confidence_threshold: parseFloat(backtestParams.value.confidence_threshold), // 确保是浮点数
+                    task_id: currentBacktestId.value, // 添加任务ID
                     investment: {
                         ...backtestParams.value.investment, // 包含 initial_balance, strategy_id 等
                         // investment_strategy_specific_params 已经由 watch(investmentStrategyParams) 更新并处理了类型
@@ -356,6 +375,11 @@ const app = createApp({
                 const response = await axios.post('/api/backtest', payload);
                 backtestResults.value = response.data;
 
+                // 检查是否被取消
+                if (response.data.cancelled) {
+                    showInfoToast('回测已取消', '回测任务已被用户取消，显示部分结果', 4000);
+                }
+
                 // FIX: Correctly display the entry price from `signal_price`.
                 if (backtestResults.value && backtestResults.value.predictions) {
                     backtestResults.value.predictions.forEach(prediction => {
@@ -365,6 +389,11 @@ const app = createApp({
                         // and populate it with the value from `signal_price`.
                         if (prediction.signal_price !== undefined) {
                             prediction.effective_signal_price_for_calc = prediction.signal_price;
+                        }
+                        // Debug: Log all result values to check for null/undefined issues
+                        console.log('Signal:', prediction.signal_time, 'result:', prediction.result, 'type:', typeof prediction.result, 'pnl:', prediction.pnl_amount, 'investment:', prediction.investment_amount);
+                        if (prediction.result == null) {
+                            console.log('Found unverified signal:', prediction.signal_time, 'result:', prediction.result, 'type:', typeof prediction.result);
                         }
                     });
                 }
@@ -380,10 +409,19 @@ const app = createApp({
                     }
                 });
                 resetFilters(); // 重置UI筛选条件
- 
+
+                // 显示成功提示
+                showSuccessToast('回测完成', `成功完成回测，共生成 ${backtestResults.value.predictions?.length || 0} 个预测信号`, 4000);
+
                 // The calendar is now driven by a watcher on filteredData
                 // so we don't need to call generateCalendar here directly.
                 } catch (err) {
+                    // 检查是否是因为取消导致的错误
+                    if (cancelling.value) {
+                        showInfoToast('回测已取消', '回测任务已成功取消', 3000);
+                        return; // 不显示错误信息
+                    }
+
                     console.error('Backtest failed:', err);
                     // console.log('Full error object for debugging:', JSON.stringify(err, Object.getOwnPropertyNames(err)));
                     // if (err.response) console.log('Error response data for debugging:', JSON.stringify(err.response.data));
@@ -447,36 +485,68 @@ const app = createApp({
                                 });
                                 fieldErrors.value = newFieldErrorsLocal;
                                 if (detailedMessagesLocal.length > 0) {
-                                    validationError.value = "表单校验失败，请检查以下字段：\n" + detailedMessagesLocal.join("\n");
+                                    const errorMessage = "表单校验失败，请检查以下字段：\n" + detailedMessagesLocal.join("\n");
+                                    showErrorToast('表单校验失败', errorMessage.replace(/\n/g, '<br>'), 8000);
                                 } else {
-                                    validationError.value = "表单校验失败，但未获取到详细错误信息。请检查控制台。";
+                                    showErrorToast('表单校验失败', '表单校验失败，但未获取到详细错误信息。请检查控制台。', 8000);
                                 }
                             } else if (typeof data.detail === 'string') {
                                 // Detail is a single string for 400/422 error
-                                validationError.value = data.detail;
+                                showErrorToast('校验错误', data.detail, 8000);
                             } else {
                                 // Status is 422/400, data.detail exists but is not a non-empty array or string (e.g. empty array [])
-                                validationError.value = `校验失败 (代码 ${status})，错误详情格式无法解析或为空。请查看API响应。`;
+                                showErrorToast('校验失败', `校验失败 (代码 ${status})，错误详情格式无法解析或为空。请查看API响应。`, 8000);
                             }
                         } else if (data && data.detail && typeof data.detail === 'string') {
                             // Non-422/400 error, but has a 'detail' string (e.g. 500 error with a message)
-                            error.value = data.detail;
+                            showErrorToast('回测错误', data.detail, 8000);
                         } else if (err.response.statusText) {
                             // Generic HTTP error without a specific 'detail' message
-                            error.value = `API 错误 ${status}: ${err.response.statusText}`;
+                            showErrorToast('API错误', `API 错误 ${status}: ${err.response.statusText}`, 8000);
                         } else {
                             // Fallback for err.response existing but no other info
-                            error.value = `发生HTTP错误 (代码 ${status})，无更多信息。`;
+                            showErrorToast('HTTP错误', `发生HTTP错误 (代码 ${status})，无更多信息。`, 8000);
                         }
                     } else {
                         // Network error or other error without a response object (e.g., err.request was made but no response received)
-                        error.value = '回测时发生网络错误或未知客户端错误，请检查网络连接和控制台。';
+                        showErrorToast('网络错误', '回测时发生网络错误或未知客户端错误，请检查网络连接和控制台。', 8000);
                     }
                 } finally {
                     loading.value = false;
+                    cancelling.value = false;
+                    currentBacktestId.value = null;
                 }
         };
-        
+
+        const cancelBacktest = async () => {
+            if (!currentBacktestId.value) {
+                showErrorToast('取消失败', '没有正在运行的回测任务', 3000);
+                return;
+            }
+
+            cancelling.value = true;
+            try {
+                const response = await fetch('/api/backtest/cancel', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ task_id: currentBacktestId.value })
+                });
+
+                if (response.ok) {
+                    showInfoToast('取消成功', '回测任务已取消', 3000);
+                    // 状态重置将在runBacktest的finally块中处理
+                } else {
+                    const errorData = await response.json();
+                    showErrorToast('取消失败', errorData.detail || '取消回测时发生错误', 5000);
+                }
+            } catch (err) {
+                console.error('Cancel backtest failed:', err);
+                showErrorToast('取消失败', '取消回测时发生网络错误', 5000);
+            } finally {
+                cancelling.value = false;
+            }
+        };
+
         const saveStrategyParameters = async () => {
             let savedCount = 0;
             let errorMessages = [];
@@ -739,7 +809,7 @@ const app = createApp({
             investmentStrategies, selectedInvestmentStrategy, investmentStrategyParams,
             allSavedParams,
             backtestParams,
-            backtestResults, loading, error, validationError, fieldErrors,
+            backtestResults, loading, cancelling, currentBacktestId, error, validationError, fieldErrors,
 
             // Filtering State & Methods
             filterStartTime,
@@ -750,7 +820,7 @@ const app = createApp({
 
             // Methods
             toggleFavorite, isFavorite,
-            runBacktest,
+            runBacktest, cancelBacktest,
             saveStrategyParameters,
             ensureGlobalInvestmentSettings,
             toggleWeekday, weekdays,

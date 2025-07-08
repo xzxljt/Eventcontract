@@ -71,7 +71,8 @@ self.onmessage = function(event) {
         }
         
         const pnl = pred.pnl_amount || 0;
-        const isWin = pnl > 0; // Recalculate result as a boolean
+        // Keep original result for unverified signals (null), only recalculate for verified signals
+        const isWin = pred.result === null ? null : (pnl > 0);
         // Calculate price change percentage correctly based on trade side
         let pnlPercentage = 0;
         if (pred.signal_price !== 0 && pred.end_price !== undefined && pred.end_price !== null) {
@@ -91,25 +92,27 @@ self.onmessage = function(event) {
         dailyPnl[dateStr].trades += 1;
         dailyPnl[dateStr].balance = currentBalance;
 
-        if (isWin) {
+        // Only count verified signals in statistics
+        if (isWin === true) {
             totalWins++;
             consecutiveWins++;
             consecutiveLosses = 0;
             maxConsecutiveWins = Math.max(maxConsecutiveWins, consecutiveWins);
             totalGrossProfit += pnl;
-        } else { // loss
+        } else if (isWin === false) { // loss
             consecutiveLosses++;
             consecutiveWins = 0;
             maxConsecutiveLosses = Math.max(maxConsecutiveLosses, consecutiveLosses);
             totalGrossLoss += Math.abs(pnl);
         }
+        // isWin === null (unverified) signals are not counted in win/loss statistics
 
         if (pred.signal === 1) {
             longPredictions++;
-            if (isWin) longWins++;
+            if (isWin === true) longWins++;
         } else if (pred.signal === -1) {
             shortPredictions++;
-            if (isWin) shortWins++;
+            if (isWin === true) shortWins++;
         }
 
         maxBalance = Math.max(maxBalance, currentBalance);
@@ -121,7 +124,7 @@ self.onmessage = function(event) {
             pnl_amount: pnl,
             pnl_percentage: pnlPercentage,
             confidence: normalizedConfidence, // Use normalized confidence
-            result: isWin, // Use recalculated boolean result
+            result: isWin, // Keep original result for unverified signals (null)
             balance_after_trade: currentBalance,
             final_balance: currentBalance
         });

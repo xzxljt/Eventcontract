@@ -168,6 +168,28 @@
     background-color: #F8F9FA !important; /* Consistent light bg */
     border-radius: var(--border-radius-base);
 }
+
+/* 回测参数卡片中的错误提示样式优化 */
+.card-body .alert-danger {
+    border-radius: var(--border-radius-base);
+    border-left: 4px solid #dc3545;
+    background-color: #f8d7da;
+    border-color: #f5c6cb;
+    font-size: 0.875rem;
+    line-height: 1.4;
+    animation: slideDown 0.3s ease-out;
+}
+
+@keyframes slideDown {
+    from {
+        opacity: 0;
+        transform: translateY(-10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
 .daily-return-pct {
     font-size: 0.7rem;
     font-weight: normal;
@@ -285,6 +307,133 @@
 }
 
 .scroller {
-  height: 800px; 
+  height: 800px;
   overflow-y: auto;
+}
+
+/* --- 回测占位符样式 --- */
+.backtest-placeholder {
+    background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%);
+    border: 2px dashed var(--border-color);
+    border-radius: var(--border-radius-lg);
+    transition: all 0.3s ease;
+}
+
+.backtest-placeholder:hover {
+    border-color: var(--primary-color);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+}
+
+.placeholder-content {
+    max-width: 600px;
+    margin: 0 auto;
+}
+
+.placeholder-icon {
+    font-size: 4rem;
+    color: var(--primary-color);
+    opacity: 0.8;
+}
+
+.placeholder-title {
+    color: var(--text-primary-color);
+    font-weight: 600;
+    font-size: 1.5rem;
+}
+
+.placeholder-description {
+    font-size: 1.1rem;
+    line-height: 1.6;
+    max-width: 400px;
+    margin: 0 auto;
+}
+
+.placeholder-features {
+    margin: 2rem 0;
+}
+
+.feature-item {
+    padding: 1.5rem 1rem;
+    background-color: rgba(255, 255, 255, 0.8);
+    border-radius: var(--border-radius-base);
+    border: 1px solid rgba(var(--primary-rgb), 0.1);
+    transition: all 0.3s ease;
+    height: 100%;
+}
+
+.feature-item:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    border-color: rgba(var(--primary-rgb), 0.2);
+}
+
+.feature-icon {
+    font-size: 2rem;
+    color: var(--primary-color);
+    margin-bottom: 0.75rem;
+    opacity: 0.8;
+}
+
+.feature-title {
+    color: var(--text-primary-color);
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+    font-size: 1rem;
+}
+
+.feature-desc {
+    color: var(--text-secondary-color);
+    font-size: 0.9rem;
+    line-height: 1.4;
+    margin-bottom: 0;
+}
+
+.placeholder-action {
+    padding: 1rem;
+    background-color: rgba(var(--primary-rgb), 0.05);
+    border-radius: var(--border-radius-base);
+    border: 1px solid rgba(var(--primary-rgb), 0.1);
+    font-weight: 500;
+    animation: pulse-subtle 2s infinite;
+}
+
+@keyframes pulse-subtle {
+    0%, 100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.8;
+    }
+}
+
+/* 响应式设计 */
+@media (max-width: 768px) {
+    .placeholder-icon {
+        font-size: 3rem;
+    }
+
+    .placeholder-title {
+        font-size: 1.3rem;
+    }
+
+    .placeholder-description {
+        font-size: 1rem;
+    }
+
+    .feature-item {
+        padding: 1rem 0.75rem;
+        margin-bottom: 1rem;
+    }
+
+    .feature-icon {
+        font-size: 1.5rem;
+    }
+
+    .feature-title {
+        font-size: 0.9rem;
+    }
+
+    .feature-desc {
+        font-size: 0.8rem;
+    }
 }

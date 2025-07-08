@@ -90,6 +90,10 @@ strategy_parameters_config: Dict[str, Any] = {
     "prediction_strategies": {},
     "investment_strategies": {}
 }
+
+# 回测任务管理
+active_backtest_tasks: Dict[str, Dict[str, Any]] = {}  # task_id -> task_info
+backtest_cancellation_flags: Dict[str, bool] = {}  # task_id -> should_cancel
 STRATEGY_PARAMS_FILE = "config/strategy_parameters.json" # 策略参数配置文件路径
 AUTOX_CLIENTS_FILE = "config/autox_clients_data.json" # AutoX 客户端数据文件路径
 
@@ -270,6 +274,7 @@ class BacktestRequest(BaseModel):
     prediction_strategy_params: Optional[Dict[str, Any]] = Field(None, description="预测策略参数")
     event_period: str = Field(..., description="事件合约周期")
     confidence_threshold: float = Field(0, description="预测置信度阈值, 0-100")
+    task_id: Optional[str] = Field(None, description="回测任务唯一标识符")
     investment: BacktestInvestmentSettings = Field(..., description="投资设置")
 
 class SymbolInfo(BaseModel):
@@ -316,6 +321,10 @@ class ClientNotesPayload(BaseModel):
 class DeleteSignalsRequest(BaseModel):
     model_config = {'arbitrary_types_allowed': True} # 允许任意类型
     signal_ids: List[str]
+
+class CancelBacktestRequest(BaseModel):
+    model_config = {'arbitrary_types_allowed': True} # 允许任意类型
+    task_id: str = Field(..., description="要取消的回测任务ID")
 
 # --- CORS, StaticFiles, BinanceClient ---
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
@@ -2303,7 +2312,18 @@ async def get_investment_strategies_endpoint(): # 基本不变
 
 @app.post("/api/backtest") # 修改：get_historical_klines 和 Backtester.run() 移至线程池
 async def run_backtest_endpoint(request: BacktestRequest):
-    global strategy_parameters_config # 读取是线程安全的
+    global strategy_parameters_config, active_backtest_tasks, backtest_cancellation_flags # 读取是线程安全的
+
+    # 注册任务
+    task_id = request.task_id or f"backtest_{int(time.time() * 1000)}"
+    active_backtest_tasks[task_id] = {
+        "status": "running",
+        "start_time": now_utc(),
+        "symbol": request.symbol,
+        "interval": request.interval
+    }
+    backtest_cancellation_flags[task_id] = False
+
     try:
         start_utc = to_utc(request.start_time); end_utc = to_utc(request.end_time)
         if start_utc >= end_utc or end_utc > now_utc() or start_utc > now_utc(): 
@@ -2374,22 +2394,62 @@ async def run_backtest_endpoint(request: BacktestRequest):
                 loss_rate_pct=request.investment.loss_rate_pct,
                 min_investment_amount=request.investment.min_investment_amount,
                 max_investment_amount=request.investment.max_investment_amount,
-                min_trade_interval_minutes=request.investment.min_trade_interval_minutes
+                min_trade_interval_minutes=request.investment.min_trade_interval_minutes,
+                task_id=task_id,  # 传递任务ID
+                cancellation_flags=backtest_cancellation_flags  # 传递取消标志字典
             )
             return backtester.run()
 
         results_data = await asyncio.to_thread(_run_backtest_in_thread)
         # --- 结束修改 ---
 
+        # 标记任务完成
+        active_backtest_tasks[task_id]["status"] = "completed"
+        active_backtest_tasks[task_id]["end_time"] = now_utc()
+
         # 结果处理（同步，但通常很快）
         for pred_item_data in results_data.get('predictions', []):
             for time_key_str in ['signal_time', 'end_time_expected', 'end_time_actual']:
                 if time_key_str in pred_item_data and isinstance(pred_item_data[time_key_str], datetime):
-                    pred_item_data[time_key_str] = format_for_display(pred_item_data[time_key_str]) 
+                    pred_item_data[time_key_str] = format_for_display(pred_item_data[time_key_str])
         return results_data
-    except HTTPException as http_exc: raise http_exc
+    except HTTPException as http_exc:
+        # 标记任务失败
+        if task_id in active_backtest_tasks:
+            active_backtest_tasks[task_id]["status"] = "failed"
+            active_backtest_tasks[task_id]["end_time"] = now_utc()
+            active_backtest_tasks[task_id]["error"] = str(http_exc.detail)
+        raise http_exc
     except Exception as exc:
+        # 标记任务失败
+        if task_id in active_backtest_tasks:
+            active_backtest_tasks[task_id]["status"] = "failed"
+            active_backtest_tasks[task_id]["end_time"] = now_utc()
+            active_backtest_tasks[task_id]["error"] = str(exc)
         error_detail_msg = f"回测过程中发生错误: {str(exc)}"; print(f"{error_detail_msg}\n{traceback.format_exc()}"); raise HTTPException(status_code=500, detail=error_detail_msg)
+    finally:
+        # 清理取消标志
+        if task_id in backtest_cancellation_flags:
+            del backtest_cancellation_flags[task_id]
+
+@app.post("/api/backtest/cancel")
+async def cancel_backtest_endpoint(request: CancelBacktestRequest):
+    global active_backtest_tasks, backtest_cancellation_flags
+
+    task_id = request.task_id
+    if task_id not in active_backtest_tasks:
+        raise HTTPException(status_code=404, detail=f"回测任务 {task_id} 不存在")
+
+    task_info = active_backtest_tasks[task_id]
+    if task_info["status"] != "running":
+        raise HTTPException(status_code=400, detail=f"回测任务 {task_id} 当前状态为 {task_info['status']}，无法取消")
+
+    # 设置取消标志
+    backtest_cancellation_flags[task_id] = True
+    task_info["status"] = "cancelling"
+    task_info["cancel_time"] = now_utc()
+
+    return {"message": f"回测任务 {task_id} 取消请求已发送", "task_id": task_id}
 
 @app.get("/api/live-signals") # 修改：确保线程安全地读取 live_signals
 async def get_live_signals_http_endpoint():

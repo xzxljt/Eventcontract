@@ -114,10 +114,29 @@ const app = createApp({
         });
 
 
-        // +++ START: PAGINATION STATE +++
-        const currentPage = ref(1);
-        const itemsPerPage = ref(20); // Default items per page
-        // +++ END: PAGINATION STATE +++
+
+        // --- Debounce Utility & Filter Logic ---
+        const debounce = (func, delay) => {
+            let timeoutId;
+            return (...args) => {
+                clearTimeout(timeoutId);
+                timeoutId = setTimeout(() => {
+                    func.apply(this, args);
+                }, delay);
+            };
+        };
+
+        // Create a debounced version of the filter. The UI will update the main filter immediately,
+        // but the computed property for display will depend on the debounced filter.
+        const debouncedSignalManagementFilter = ref(JSON.parse(JSON.stringify(signalManagementFilter.value)));
+
+        const updateDebouncedFilter = debounce(() => {
+            debouncedSignalManagementFilter.value = JSON.parse(JSON.stringify(signalManagementFilter.value));
+        }, 300); // 300ms debounce delay
+
+        watch(signalManagementFilter, () => {
+            updateDebouncedFilter();
+        }, { deep: true });
 
         // --- Computed Properties ---
         // 原 latestSignals 已被 displayedManagedSignals 取代主要功能
@@ -148,36 +167,36 @@ const app = createApp({
                  return [];
             }
 
-            // 应用筛选条件
-            if (signalManagementFilter.value.symbol !== 'all') {
-                if (signalManagementFilter.value.symbol === 'favorites') {
+            // 应用筛选条件 (use the debounced filter)
+            if (debouncedSignalManagementFilter.value.symbol !== 'all') {
+                if (debouncedSignalManagementFilter.value.symbol === 'favorites') {
                     filtered = filtered.filter(s => favoriteSymbols.value.includes(s.symbol));
                 } else {
-                    filtered = filtered.filter(s => s.symbol === signalManagementFilter.value.symbol);
+                    filtered = filtered.filter(s => s.symbol === debouncedSignalManagementFilter.value.symbol);
                 }
             }
-            if (signalManagementFilter.value.interval !== 'all') {
-                filtered = filtered.filter(s => s.interval === signalManagementFilter.value.interval);
+            if (debouncedSignalManagementFilter.value.interval !== 'all') {
+                filtered = filtered.filter(s => s.interval === debouncedSignalManagementFilter.value.interval);
             }
-            if (signalManagementFilter.value.direction !== 'all') {
-                const dir = signalManagementFilter.value.direction === 'long' ? 1 : -1;
+            if (debouncedSignalManagementFilter.value.direction !== 'all') {
+                const dir = debouncedSignalManagementFilter.value.direction === 'long' ? 1 : -1;
                 filtered = filtered.filter(s => s.signal === dir);
             }
-            if (signalManagementFilter.value.verifiedStatus !== 'all') {
-                const isVerified = signalManagementFilter.value.verifiedStatus === 'verified';
+            if (debouncedSignalManagementFilter.value.verifiedStatus !== 'all') {
+                const isVerified = debouncedSignalManagementFilter.value.verifiedStatus === 'verified';
                 filtered = filtered.filter(s => (s.verified || false) === isVerified); // 确保 s.verified 存在
             }
-            if (signalManagementFilter.value.minConfidence > 0 || signalManagementFilter.value.maxConfidence < 100) {
+            if (debouncedSignalManagementFilter.value.minConfidence > 0 || debouncedSignalManagementFilter.value.maxConfidence < 100) {
                 filtered = filtered.filter(s => {
                     const conf = parseFloat(s.confidence);
-                    return !isNaN(conf) && conf >= signalManagementFilter.value.minConfidence && conf <= signalManagementFilter.value.maxConfidence;
+                    return !isNaN(conf) && conf >= debouncedSignalManagementFilter.value.minConfidence && conf <= debouncedSignalManagementFilter.value.maxConfidence;
                 });
             }
             // 应用日期时间筛选
             let startDate = null;
-            if (signalManagementFilter.value.startDate) {
+            if (debouncedSignalManagementFilter.value.startDate) {
                 // 解析 YYYY-MM-DDTHH:mm 格式字符串为本地时间
-                const parts = signalManagementFilter.value.startDate.match(/(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+                const parts = debouncedSignalManagementFilter.value.startDate.match(/(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
                 if (parts) {
                     // parts[1]=年, parts[2]=月 (1-12), parts[3]=日, parts[4]=时, parts[5]=分
                     // Date 构造函数中的月份是 0-indexed (0-11)
@@ -186,9 +205,9 @@ const app = createApp({
             }
 
             let endDate = null;
-            if (signalManagementFilter.value.endDate) {
+            if (debouncedSignalManagementFilter.value.endDate) {
                  // 解析 YYYY-MM-DDTHH:mm 格式字符串为本地时间
-                 const parts = signalManagementFilter.value.endDate.match(/(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+                 const parts = debouncedSignalManagementFilter.value.endDate.match(/(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
                  if (parts) {
                      // Date 构造函数中的月份是 0-indexed (0-11)
                      endDate = new Date(parseInt(parts[1]), parseInt(parts[2]) - 1, parseInt(parts[3]), parseInt(parts[4]), parseInt(parts[5]));
@@ -248,17 +267,7 @@ const app = createApp({
             // .slice(0, 50); // 可选：如果信号过多，可以限制初始显示数量或实现分页
         });
 
-        // +++ START: PAGINATION COMPUTED +++
-        const totalPages = computed(() => {
-            return Math.ceil(displayedManagedSignals.value.length / itemsPerPage.value);
-        });
 
-        const paginatedSignals = computed(() => {
-            const start = (currentPage.value - 1) * itemsPerPage.value;
-            const end = start + itemsPerPage.value;
-            return displayedManagedSignals.value.slice(start, end);
-        });
-        // +++ END: PAGINATION COMPUTED +++
 
         // --- Computed Properties for Filtered Signals Stats ---
         const filteredWinRateStats = computed(() => {
@@ -340,10 +349,17 @@ const app = createApp({
 
         // --- Server Message Handling ---
         const showServerMessage = (message, isError = false, duration = 5000) => {
+            // 使用Toast通知替代原来的内联消息显示
+            if (isError) {
+                showErrorToast('操作失败', message, duration);
+                error.value = message;
+            } else {
+                showSuccessToast('操作成功', message, duration);
+                error.value = null;
+            }
+
+            // 保持原有的serverMessage逻辑，以防某些地方仍需要
             serverMessage.value = message;
-            if (isError) error.value = message;
-            else error.value = null;
-            
             if (serverMessageTimer) clearTimeout(serverMessageTimer);
             serverMessageTimer = setTimeout(() => {
                 serverMessage.value = '';
@@ -419,6 +435,26 @@ const app = createApp({
                 const response = await axios.get('/api/investment-strategies');
                 investmentStrategies.value = response.data;
             } catch (err) { console.error('获取投资策略失败:', err); showServerMessage('获取投资策略失败', true); }
+        };
+        
+        const fetchAllLiveSignals = async () => {
+            try {
+                console.log("Fetching all live signals via HTTP...");
+                const response = await axios.get('/api/live-signals');
+                if (response.data && Array.isArray(response.data)) {
+                    // 使用 handleInitialSignals 来处理和清洗数据
+                    handleInitialSignals(response.data);
+                    console.log(`Successfully loaded ${response.data.length} signals.`);
+                    showServerMessage(`成功加载 ${response.data.length} 条历史信号。`, false, 3000);
+                }
+            } catch (err) {
+                console.error('Failed to fetch all live signals:', err);
+                showServerMessage('加载全量历史信号失败。', true);
+                // 即使失败，也确保 liveSignals 是一个数组
+                if (!Array.isArray(liveSignals.value)) {
+                    liveSignals.value = [];
+                }
+            }
         };
         
         // --- UI Population from Server Config ---
@@ -584,9 +620,11 @@ const app = createApp({
         // --- WebSocket Logic ---
         const connectWebSocket = () => {
             if (socket.value && (socket.value.readyState === WebSocket.OPEN || socket.value.readyState === WebSocket.CONNECTING)) {
-                showServerMessage("WebSocket 已经连接或正在连接中。", false, 2000); return;
+                showInfoToast("连接提示", "WebSocket 已经连接或正在连接中。", 2000);
+                return;
             }
             error.value = null; serverMessage.value = '';
+            showInfoToast("连接中", "正在连接到实时监控服务器...", 3000);
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             const host = window.location.host;
             const wsUrl = `${protocol}//${host}/ws/live-test`;
@@ -607,14 +645,14 @@ const app = createApp({
             const attemptReconnect = () => {
                 if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
                     reconnectAttempts++;
-                    showServerMessage(`WebSocket 连接已关闭，将在 ${RECONNECT_DELAY / 1000} 秒后尝试重新连接 (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`, true, RECONNECT_DELAY);
+                    showWarningToast("重连中", `WebSocket 连接已关闭，将在 ${RECONNECT_DELAY / 1000} 秒后尝试重新连接 (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`, RECONNECT_DELAY);
                     setTimeout(() => {
                         if (socketStatus.value !== 'connected' && socketStatus.value !== 'connecting') {
                              connectWebSocket(); // 重新调用自身以尝试连接
                         }
                     }, RECONNECT_DELAY);
                 } else {
-                    showServerMessage(`WebSocket 自动重连失败已达上限 (${MAX_RECONNECT_ATTEMPTS} 次)。请手动尝试连接。`, true, 7000);
+                    showErrorToast("重连失败", `WebSocket 自动重连失败已达上限 (${MAX_RECONNECT_ATTEMPTS} 次)。请手动尝试连接。`, 7000);
                     reconnectAttempts = 0; // 重置尝试次数
                 }
             };
@@ -622,12 +660,11 @@ const app = createApp({
 
             socket.value = new WebSocket(wsUrl);
             socketStatus.value = 'connecting';
-            showServerMessage("WebSocket 正在连接...", false, CONNECTION_TIMEOUT + 1000); // 显示连接中消息
 
             connectTimeoutId = setTimeout(() => {
                 if (socket.value && socket.value.readyState !== WebSocket.OPEN) {
                     console.error(`LiveTest: WebSocket connection timed out after ${CONNECTION_TIMEOUT / 1000} seconds.`);
-                    showServerMessage(`WebSocket 连接超时 (${CONNECTION_TIMEOUT / 1000}秒)。请检查网络或服务器状态。`, true, 7000);
+                    showErrorToast("连接超时", `WebSocket 连接超时 (${CONNECTION_TIMEOUT / 1000}秒)。请检查网络或服务器状态。`, 7000);
                     socketStatus.value = 'error';
                     if (socket.value) {
                         socket.value.close(1000, "Connection timeout"); // 主动关闭
@@ -640,6 +677,7 @@ const app = createApp({
                 clearConnectTimeout();
                 reconnectAttempts = 0; // 连接成功，重置重连尝试次数
                 socketStatus.value = 'connected';
+                showSuccessToast("连接成功", "已连接到实时监控服务器", 3000);
                 showServerMessage("WebSocket 连接成功。", false, 3000);
                 const localConfigId = localStorage.getItem('liveTestConfigId');
                 if (localConfigId) {
@@ -657,7 +695,7 @@ const app = createApp({
                     applyingConfig.value = false; stoppingTest.value = false;
 
                     switch (message.type) {
-                        case "initial_signals": handleInitialSignals(message.data); break;
+                        // case "initial_signals": handleInitialSignals(message.data); break; // Replaced by HTTP call
                         case "initial_stats":
                         case "stats_update":
                             stats.value = { ...stats.value, ...message.data };
@@ -1328,7 +1366,7 @@ const app = createApp({
             });
         };
 
-        watch(paginatedSignals, () => {
+        watch(displayedManagedSignals, () => {
             initializePopovers();
         }, { deep: true, flush: 'post' });
 
@@ -1364,7 +1402,8 @@ const app = createApp({
                 await Promise.all([
                     fetchSymbols(),
                     fetchPredictionStrategies(),
-                    fetchInvestmentStrategies()
+                    fetchInvestmentStrategies(),
+                    fetchAllLiveSignals()
                 ]);
 
                 if (predictionStrategies.value.length > 0 && !selectedPredictionStrategy.value) {
@@ -1421,12 +1460,6 @@ const app = createApp({
             filteredWinRateStats, // Add the new computed property here
             filteredTotalProfitLossAmount, // Expose the new computed property
             dynamicFilteredBalance, // <-- 新增导出
-            // +++ START: PAGINATION RETURN +++
-            currentPage,
-            itemsPerPage,
-            totalPages,
-            paginatedSignals,
-            // +++ END: PAGINATION RETURN +++
             areAllDisplayedManagedSignalsSelected,
 
             // Methods
@@ -1457,5 +1490,10 @@ for (const key in utilsToRegister) {
         console.error(`utils.js: ${key} function is not defined globally.`);
     }
 }
+
+// Register vue-virtual-scroller components manually from the global object
+app.component('RecycleScroller', VueVirtualScroller.RecycleScroller);
+app.component('DynamicScroller', VueVirtualScroller.DynamicScroller);
+app.component('DynamicScrollerItem', VueVirtualScroller.DynamicScrollerItem);
 
 app.mount('#app');

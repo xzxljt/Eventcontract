@@ -33,7 +33,9 @@ class Backtester:
                  kline_fetch_limit_for_signal: int = 100,
                  use_close_for_end_price: bool = True,
                  slippage_pct: float = 0.0, # 默认滑点比例 (0.002%)
-                 min_trade_interval_minutes: float = 0
+                 min_trade_interval_minutes: float = 0,
+                 task_id: Optional[str] = None,  # 任务ID
+                 cancellation_flags: Optional[Dict[str, bool]] = None  # 取消标志字典
                 ):
         self.df = df.copy() # 原始数据副本
         self.df_index_price = df_index_price.copy() if df_index_price is not None else None
@@ -71,6 +73,10 @@ class Backtester:
         self.df_with_indicators = None # 将在此处存储带有全局指标的DataFrame
         self.binance_client = BinanceClient() # 初始化Binance客户端
 
+        # 任务管理相关
+        self.task_id = task_id
+        self.cancellation_flags = cancellation_flags or {}
+
         # 初始化日志
         print(f"初始化回测器: 事件周期={event_period} ({self.period_minutes}分钟), 预测策略={strategy.name}, 投资策略={self.investment_strategy.name}")
         print(f"  模拟实测信号生成窗口: {self.kline_fetch_limit_for_signal} 条K线")
@@ -92,6 +98,12 @@ class Backtester:
         elif period == '1h': return 60
         elif period == '1d': return 1440 # 24 * 60
         else: raise ValueError(f"不支持的事件周期: {period}")
+
+    def _should_cancel(self) -> bool:
+        """检查是否应该取消回测任务"""
+        if self.task_id and self.task_id in self.cancellation_flags:
+            return self.cancellation_flags[self.task_id]
+        return False
 
     def run(self) -> Dict[str, Any]:
         # logger.info("\n[DEBUG] --- Backtester Run Start ---")
@@ -176,6 +188,12 @@ class Backtester:
 
         # 主循环
         for i in range(start_index, len(self.df_with_indicators)):
+            # 检查是否应该取消回测
+            if self._should_cancel():
+                print(f"回测任务 {self.task_id} 被用户取消，停止执行")
+                # 返回已处理的部分结果
+                return self._calculate_statistics(predictions, max_drawdown, max_consecutive_wins, max_consecutive_losses, cancelled=True)
+
             current_kline_time = self.df_with_indicators.index[i]
             # logger.info(f"\n[DEBUG] Main loop: i={i}, current_kline_time={current_kline_time}")
             state_updated_this_step = False # 标记本轮K线中，投资策略的状态是否已被更新
@@ -373,7 +391,7 @@ class Backtester:
         # logger.info("[DEBUG] --- Backtester Run End ---")
         return self.results
 
-    def _calculate_statistics(self, predictions: List[Dict[str, Any]], max_drawdown_val: float, max_wins: int, max_losses: int) -> Dict[str, Any]:
+    def _calculate_statistics(self, predictions: List[Dict[str, Any]], max_drawdown_val: float, max_wins: int, max_losses: int, cancelled: bool = False) -> Dict[str, Any]:
         # 筛选出实际发生交易的预测记录
         actual_trades_predictions = [p for p in predictions if p.get('investment_amount', 0) > 0 and p.get('result') is not None]
 
@@ -602,6 +620,7 @@ class Backtester:
             'max_drawdown_percentage': float(round(max_drawdown_val * 100, 2)), # 最大回撤百分比
             'max_consecutive_wins': int(max_wins), # 最大连胜次数
             'max_consecutive_losses': int(max_losses), # 最大连败次数
+            'cancelled': cancelled,  # 是否被取消
             'predictions': processed_predictions_list, # 完整的预测/交易记录列表
             'daily_pnl': daily_pnl_summary # 包含每日盈亏、交易次数和每日结束余额的字典
         }
