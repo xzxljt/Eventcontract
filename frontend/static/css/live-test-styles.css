@@ -215,3 +215,97 @@
 .bg-danger-subtle {
     background-color: rgba(var(--bs-danger-rgb), 0.15) !important;
 }
+
+/* 信号过滤规则UI样式 */
+/* 排除星期几的按钮组 */
+.btn-group .btn-check:checked + .btn-outline-secondary {
+    background-color: var(--bs-danger);
+    color: white;
+    border-color: var(--bs-danger);
+    box-shadow: none; /* 移除选中时的默认阴影，使其更平坦 */
+}
+
+.btn-group .btn-outline-secondary {
+    /* 确保按钮在 flex 容器中均匀分布 */
+    flex-basis: 0;
+    flex-grow: 1;
+    /* 调整内边距和字体大小以适应小空间 */
+    padding: 0.25rem 0.5rem;
+    font-size: 0.8rem;
+    transition: background-color 0.15s ease-in-out, color 0.15s ease-in-out;
+}
+
+.btn-group .btn-outline-secondary:hover {
+    background-color: #e9ecef; /* 轻微的悬停效果 */
+    color: #212529;
+}
+
+/* 信号显示模式按钮组样式优化 - 防止切换时大小变化 */
+.signal-mode-buttons .btn {
+    /* 确保所有按钮状态下都有相同的边框宽度 */
+    border-width: 1px !important;
+    /* 固定内边距，减少横向空白 */
+    padding: 0.375rem 0.4rem !important;
+    /* 确保字体粗细一致 */
+    font-weight: 500 !important;
+    /* 平滑过渡效果 */
+    transition: all 0.15s ease-in-out;
+    /* 确保按钮高度一致 */
+    min-height: 38px;
+    /* 文字居中对齐 */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* 激活状态的按钮 */
+.signal-mode-buttons .btn.btn-primary {
+    background-color: var(--primary-color) !important;
+    border-color: var(--primary-color) !important;
+    color: white !important;
+    box-shadow: none !important;
+}
+
+/* 非激活状态的按钮 */
+.signal-mode-buttons .btn.btn-outline-primary {
+    background-color: transparent !important;
+    border-color: var(--primary-color) !important;
+    color: var(--primary-color) !important;
+    box-shadow: none !important;
+}
+
+/* 悬停效果 */
+.signal-mode-buttons .btn.btn-outline-primary:hover {
+    background-color: rgba(var(--primary-color-rgb, 58, 134, 255), 0.1) !important;
+    border-color: var(--primary-color) !important;
+    color: var(--primary-color) !important;
+}
+
+.signal-mode-buttons .btn.btn-primary:hover {
+    background-color: var(--primary-color-dark, #2563eb) !important;
+    border-color: var(--primary-color-dark, #2563eb) !important;
+    color: white !important;
+}
+
+/* 确保按钮组内的按钮无间隙 */
+.signal-mode-buttons {
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    border-radius: 0.375rem;
+    overflow: hidden;
+}
+
+.signal-mode-buttons .btn:first-child {
+    border-top-right-radius: 0 !important;
+    border-bottom-right-radius: 0 !important;
+}
+
+.signal-mode-buttons .btn:last-child {
+    border-top-left-radius: 0 !important;
+    border-bottom-left-radius: 0 !important;
+    border-left: none !important;
+}
+
+/* 图标样式 */
+.signal-mode-buttons .btn i {
+    font-size: 0.875rem;
+}

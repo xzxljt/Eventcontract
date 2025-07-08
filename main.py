@@ -1137,6 +1137,50 @@ async def handle_kline_data(kline_data: dict):
             current_confidence_threshold = live_test_config_data.get('confidence_threshold', 0)
 
             if sig_val != 0 and conf_val >= current_confidence_threshold:
+                # --- START: 时间过滤逻辑 ---
+                trade_start_time_str = live_test_config_data.get("tradeStartTime")
+                trade_end_time_str = live_test_config_data.get("tradeEndTime")
+                # 修复字段名不匹配问题：前端发送 excluded_weekdays，后端读取 excludedWeekdays
+                excluded_weekdays = live_test_config_data.get("excluded_weekdays", []) or live_test_config_data.get("excludedWeekdays", [])
+
+                # 只有在设置了有效的过滤条件时才执行
+                if (trade_start_time_str and trade_end_time_str) or (excluded_weekdays):
+                    now_in_china = now_china()
+                    current_weekday = now_in_china.weekday() # Monday is 0 and Sunday is 6
+
+                    # 1. 检查星期
+                    # 检查星期 (修正：将Python的weekday 0-6 转换为前端的 1-7 进行比较)
+                    if excluded_weekdays and (current_weekday + 1) in excluded_weekdays:
+                        logger.info(f"信号 (Config: {live_test_config_data.get('_config_id', 'N/A')}) 被星期过滤规则跳过。今天是星期 {current_weekday + 1}，在排除列表 {excluded_weekdays} 中。")
+                        continue # 使用 continue 跳到下一个配置
+
+                    # 2. 检查时间段
+                    if trade_start_time_str and trade_end_time_str:
+                        try:
+                            start_time = datetime.strptime(trade_start_time_str, '%H:%M').time()
+                            end_time = datetime.strptime(trade_end_time_str, '%H:%M').time()
+                            current_time = now_in_china.time()
+
+                            is_in_time_range = False
+                            if start_time <= end_time:
+                                # 时间段在同一天内 (e.g., 09:00 - 17:00)
+                                if start_time <= current_time <= end_time:
+                                    is_in_time_range = True
+                            else:
+                                # 时间段跨越午夜 (e.g., 22:00 - 04:00)
+                                if current_time >= start_time or current_time <= end_time:
+                                    is_in_time_range = True
+                            
+                            if not is_in_time_range:
+                                logger.info(f"信号 (Config: {live_test_config_data.get('_config_id', 'N/A')}) 被时间段过滤规则跳过。当前时间 {current_time.strftime('%H:%M')} 不在允许的 {trade_start_time_str}-{trade_end_time_str} 范围内。")
+                                continue # 使用 continue 跳到下一个配置
+                        except ValueError:
+                            logger.error(f"时间过滤错误 (Config: {live_test_config_data.get('_config_id', 'N/A')}): 无法解析时间字符串 '{trade_start_time_str}' 或 '{trade_end_time_str}'。")
+                            # 如果时间格式错误，默认不进行过滤，让信号通过
+                            pass
+
+                # --- END: 时间过滤逻辑 ---
+
                 sig_time_dt = now_utc()
                 
                 # --- 新增：最小开单间隔检查 ---
@@ -1560,6 +1604,12 @@ async def websocket_endpoint(websocket: WebSocket):
             # 在通过WebSocket发送前，移除不可序列化的策略实例
             config_for_broadcast = current_active_config.copy()
             config_for_broadcast.pop('investment_strategy_instance', None)
+
+            # 确保新字段有默认值
+            config_for_broadcast.setdefault('tradeStartTime', '')
+            config_for_broadcast.setdefault('tradeEndTime', '')
+            config_for_broadcast.setdefault('excluded_weekdays', [])
+
             # 发送活动配置信息给新连接的客户端
             await websocket.send_json({
                 "type": "active_config_notification",
@@ -1623,6 +1673,12 @@ async def websocket_endpoint(websocket: WebSocket):
                     # 在通过WebSocket发送前，移除不可序列化的策略实例
                     config_for_broadcast = restored_config_data.copy()
                     config_for_broadcast.pop('investment_strategy_instance', None)
+                    
+                    # 确保新字段有默认值
+                    config_for_broadcast.setdefault('tradeStartTime', '')
+                    config_for_broadcast.setdefault('tradeEndTime', '')
+                    config_for_broadcast.setdefault('excluded_weekdays', [])
+
                     # 发送给客户端的 config_for_broadcast 不再包含实例
                     await websocket.send_json({"type": "session_restored", "data": {"config_id": client_config_id, "config_details": config_for_broadcast}})
                     # After restoring session, immediately calculate and send the next investment amount
@@ -1737,7 +1793,12 @@ async def websocket_endpoint(websocket: WebSocket):
                         "autox_enabled": config_payload_data.get("autox_enabled", True),
                         "current_balance": round(final_current_balance, 2),
                         "total_profit_loss_amount": round(final_total_profit_loss_amount, 2),
-                        "created_at": created_at_to_use
+                        "created_at": created_at_to_use,
+                        # 新增：保存时间过滤字段
+                        "tradeStartTime": config_payload_data.get("trade_start_time", ""),
+                        "tradeEndTime": config_payload_data.get("trade_end_time", ""),
+                        # 修复：统一使用 excluded_weekdays 字段名
+                        "excluded_weekdays": config_payload_data.get("excluded_weekdays", [])
                     }
                     running_live_test_configs[new_config_id] = full_config_to_store
                     

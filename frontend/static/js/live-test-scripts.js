@@ -70,12 +70,17 @@ const app = createApp({
             total_profit_amount: 0
         });
 
+        const weekdays = ref(['一', '二', '三', '四', '五', '六', '日']);
+
         const monitorSettings = ref({
             symbol: 'all',
             interval: '1m', // Default to 1 minute interval
             confidence_threshold: 50,
             event_period: '10m',
             enableSound: false,
+            trade_start_time: '', // 新增
+            trade_end_time: '',   // 新增
+            excluded_weekdays: [], // 新增
             investment: {
                 amount: 20.0,
                 minAmount: 5.0,
@@ -471,6 +476,11 @@ const app = createApp({
             monitorSettings.value.interval = configDetails.interval || 'all';
             monitorSettings.value.confidence_threshold = configDetails.confidence_threshold ?? 50;
             monitorSettings.value.event_period = configDetails.event_period || '10m';
+
+            // 新增：填充信号过滤规则
+            monitorSettings.value.trade_start_time = configDetails.trade_start_time || '';
+            monitorSettings.value.trade_end_time = configDetails.trade_end_time || '';
+            monitorSettings.value.excluded_weekdays = configDetails.excluded_weekdays || [];
 
             const predStrategy = predictionStrategies.value.find(s => s.id === configDetails.prediction_strategy_id);
             if (predStrategy) {
@@ -928,7 +938,11 @@ const app = createApp({
                     event_period: monitorSettings.value.event_period,
                     symbol: monitorSettings.value.symbol,
                     interval: monitorSettings.value.interval,
-                    investment_settings: investmentSettingsPayload
+                    investment_settings: investmentSettingsPayload,
+                    // 新增：发送信号过滤规则
+                    trade_start_time: monitorSettings.value.trade_start_time || null,
+                    trade_end_time: monitorSettings.value.trade_end_time || null,
+                    excluded_weekdays: monitorSettings.value.excluded_weekdays
                 }
             };
 
@@ -1383,6 +1397,7 @@ const app = createApp({
 
         return {
             // State
+            weekdays, // 新增
             symbols, favoriteSymbols, sortedSymbols,
             predictionStrategies, selectedPredictionStrategy, predictionStrategyParams,
             investmentStrategies, selectedInvestmentStrategy, investmentStrategyParams,

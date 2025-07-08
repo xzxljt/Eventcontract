@@ -5,6 +5,7 @@
     --primary-color: #3A86FF; /* 主品牌色 - 清新蓝 */
     --primary-color-dark: #2F6DDB; /* 主品牌色深色 (例如按钮悬停) */
     --primary-color-light: #EBF2FF; /* 主品牌色浅色 (例如背景或高亮) */
+    --primary-color-rgb: 58, 134, 255; /* 主品牌色RGB值，用于透明度效果 */
 
     --success-color: #10B981; /* 成功 - 清新绿 */
     --error-color: #EF4444;   /* 错误 - 警示红 */

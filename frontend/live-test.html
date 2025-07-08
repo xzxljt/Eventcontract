@@ -259,6 +259,35 @@
                                     </div>
                                 </div>
                             </div>
+
+                            <hr>
+                            <h6 class="text-primary">信号过滤规则</h6>
+                            <!-- 交易时间段 -->
+                            <div class="mb-2">
+                                <label class="form-label small">交易时间段</label>
+                                <div class="row gx-2">
+                                    <div class="col">
+                                        <input type="time" class="form-control form-control-sm" v-model="monitorSettings.trade_start_time">
+                                    </div>
+                                    <div class="col">
+                                        <input type="time" class="form-control form-control-sm" v-model="monitorSettings.trade_end_time">
+                                    </div>
+                                </div>
+                                <small class="text-muted x-small">仅在此时间段内执行交易。留空则不限制。</small>
+                            </div>
+
+                            <!-- 排除星期几 -->
+                            <div class="mb-3">
+                                <label class="form-label small">排除星期几</label>
+                                <div class="btn-group d-flex" role="group">
+                                    <template v-for="(day, index) in weekdays" :key="index">
+                                        <input type="checkbox" class="btn-check" :id="'exclude_weekday_' + index" :value="index + 1" v-model="monitorSettings.excluded_weekdays">
+                                        <label class="btn btn-outline-secondary btn-sm flex-grow-1" :for="'exclude_weekday_' + index">{{ day }}</label>
+                                    </template>
+                                </div>
+                                <small class="text-muted x-small">选中的星期将不会执行交易。</small>
+                            </div>
+
                             <div class="mb-3">
                                 <label for="min_trade_interval_minutes_live" class="form-label small">最小开单间隔 (分钟)</label>
                                 <input type="number" class="form-control form-control-sm" id="min_trade_interval_minutes_live" v-model.number="monitorSettings.investment.min_trade_interval_minutes" min="0" step="1">
@@ -369,26 +398,33 @@
                                        </select>
                                    </div>
                                </div>
-                               <!-- 置信度范围和信号显示模式按钮 -->
-                               <div class="row gx-2 gy-1 mb-2 small align-items-end">
-                                   <div class="col-md-12 col-12 d-flex align-items-end">
-                                       <div class="btn-group me-3" role="group" aria-label="信号显示模式">
-                                           <button type="button" class="btn btn-sm"
-                                                   :class="{'btn-primary': signalDisplayMode === 'current', 'btn-outline-secondary': signalDisplayMode !== 'current'}"
+                               <!-- 信号显示模式按钮和置信度范围 -->
+                               <div class="row gx-2 gy-2 mb-3 small">
+                                   <!-- 信号显示模式按钮 -->
+                                   <div class="col-md-6 col-12">
+                                       <label class="form-label x-small mb-1">信号显示模式</label>
+                                       <div class="btn-group w-100 signal-mode-buttons" role="group" aria-label="信号显示模式">
+                                           <button type="button" class="btn btn-sm flex-fill"
+                                                   :class="{'btn-primary': signalDisplayMode === 'current', 'btn-outline-primary': signalDisplayMode !== 'current'}"
                                                    @click="signalDisplayMode = 'current'">
-                                               当前配置信号
+                                               <i class="bi bi-broadcast me-1"></i>
+                                               <span class="d-none d-sm-inline">当前配置</span>
+                                               <span class="d-sm-none">当前</span>
                                            </button>
-                                           <button type="button" class="btn btn-sm"
-                                                   :class="{'btn-primary': signalDisplayMode === 'historical', 'btn-outline-secondary': signalDisplayMode !== 'historical'}"
+                                           <button type="button" class="btn btn-sm flex-fill"
+                                                   :class="{'btn-primary': signalDisplayMode === 'historical', 'btn-outline-primary': signalDisplayMode !== 'historical'}"
                                                    @click="signalDisplayMode = 'historical'">
-                                               历史信号
+                                               <i class="bi bi-clock-history me-1"></i>
+                                               <span class="d-none d-sm-inline">历史信号</span>
+                                               <span class="d-sm-none">历史</span>
                                            </button>
                                        </div>
-                                       <div class="flex-grow-1">
-                                          <label class="form-label x-small">最低置信度 ({{ signalManagementFilter.minConfidence }})</label>
-                                          <input type="range" class="form-range form-range-sm" min="0" max="100" step="1"
-                                                 v-model.number="signalManagementFilter.minConfidence">
-                                       </div>
+                                   </div>
+                                   <!-- 置信度范围 -->
+                                   <div class="col-md-6 col-12">
+                                       <label class="form-label x-small mb-1">最低置信度 ({{ signalManagementFilter.minConfidence }}%)</label>
+                                       <input type="range" class="form-range" min="0" max="100" step="1"
+                                              v-model.number="signalManagementFilter.minConfidence">
                                    </div>
                                </div>
                                <!-- 开始时间, 结束时间 -->
