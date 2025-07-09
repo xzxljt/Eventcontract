@@ -1292,6 +1292,9 @@ class RsiBollingerBandsStrategy(Strategy):
             'use_rsi': True,
             'use_td_seq': False, # Default to off
 
+            # --- Trigger Logic Control ---
+            'use_continuous_trigger': False,  # False = 穿越触发(推荐), True = 持续触发(旧逻辑)
+
             # --- Bollinger Bands Params ---
             'bb_period': 20,
             'bb_std_dev': 2.0,
@@ -1344,6 +1347,10 @@ class RsiBollingerBandsStrategy(Strategy):
         if len(df_out) < 1:
             return df_out
 
+        # 对于穿越逻辑，需要至少2行数据
+        if not self.params.get('use_continuous_trigger', False) and len(df_out) < 2:
+            return df_out
+
         last_row = df_out.iloc[-1]
         active_signals = []
 
@@ -1355,18 +1362,62 @@ class RsiBollingerBandsStrategy(Strategy):
             std_dev_str = str(float(self.params['bb_std_dev']))
             bb_upper_col = f"BBU_{self.params['bb_period']}_{std_dev_str}"
             bb_lower_col = f"BBL_{self.params['bb_period']}_{std_dev_str}"
-            if all(c in last_row for c in [bb_upper_col, bb_lower_col, 'close']) and not last_row[[bb_upper_col, bb_lower_col, 'close']].isna().any():
-                if last_row['close'] <= last_row[bb_lower_col]: bb_signal = 1
-                elif last_row['close'] >= last_row[bb_upper_col]: bb_signal = -1
+
+            if self.params.get('use_continuous_trigger', False):
+                # 旧逻辑：持续触发
+                if all(c in last_row for c in [bb_upper_col, bb_lower_col, 'close']) and not last_row[[bb_upper_col, bb_lower_col, 'close']].isna().any():
+                    if last_row['close'] <= last_row[bb_lower_col]: bb_signal = 1
+                    elif last_row['close'] >= last_row[bb_upper_col]: bb_signal = -1
+            else:
+                # 新逻辑：穿越触发（布林带回归逻辑）
+                if len(df_out) >= 2:
+                    curr_row = df_out.iloc[-1]
+                    prev_row = df_out.iloc[-2]
+
+                    required_cols = [bb_upper_col, bb_lower_col, 'close']
+                    if (all(c in curr_row for c in required_cols) and all(c in prev_row for c in required_cols) and
+                        not curr_row[required_cols].isna().any() and not prev_row[required_cols].isna().any()):
+
+                        # 买入信号：价格从下轨下方回到上方（均值回归）
+                        if (prev_row['close'] <= prev_row[bb_lower_col] and
+                            curr_row['close'] > curr_row[bb_lower_col]):
+                            bb_signal = 1
+                        # 卖出信号：价格从上轨上方回到下方（均值回归）
+                        elif (prev_row['close'] >= prev_row[bb_upper_col] and
+                              curr_row['close'] < curr_row[bb_upper_col]):
+                            bb_signal = -1
+
             active_signals.append(bb_signal)
 
         # RSI Signal
         if self.params.get('use_rsi'):
             rsi_signal = 0
             rsi_col = f"RSI_{self.params['rsi_period']}"
-            if rsi_col in last_row and pd.notna(last_row[rsi_col]):
-                if last_row[rsi_col] <= self.params['rsi_oversold']: rsi_signal = 1
-                elif last_row[rsi_col] >= self.params['rsi_overbought']: rsi_signal = -1
+
+            if self.params.get('use_continuous_trigger', False):
+                # 旧逻辑：持续触发
+                if rsi_col in last_row and pd.notna(last_row[rsi_col]):
+                    if last_row[rsi_col] <= self.params['rsi_oversold']: rsi_signal = 1
+                    elif last_row[rsi_col] >= self.params['rsi_overbought']: rsi_signal = -1
+            else:
+                # 新逻辑：穿越触发
+                if len(df_out) >= 2:
+                    curr_row = df_out.iloc[-1]
+                    prev_row = df_out.iloc[-2]
+
+                    if (rsi_col in curr_row and rsi_col in prev_row and
+                        pd.notna(curr_row[rsi_col]) and pd.notna(prev_row[rsi_col])):
+
+                        curr_rsi = curr_row[rsi_col]
+                        prev_rsi = prev_row[rsi_col]
+
+                        # 买入信号：RSI 从超卖阈值以上穿越到以下（刚进入超卖）
+                        if curr_rsi <= self.params['rsi_oversold'] and prev_rsi > self.params['rsi_oversold']:
+                            rsi_signal = 1
+                        # 卖出信号：RSI 从超买阈值以下穿越到以上（刚进入超买）
+                        elif curr_rsi >= self.params['rsi_overbought'] and prev_rsi < self.params['rsi_overbought']:
+                            rsi_signal = -1
+
             active_signals.append(rsi_signal)
 
         # TD Sequential Signal
@@ -1381,14 +1432,24 @@ class RsiBollingerBandsStrategy(Strategy):
                 td_signal = -1
             active_signals.append(td_signal)
 
-        # --- Combine Signals (AND Logic) ---
+        # --- Combine Signals ---
         final_signal = 0
         if not active_signals: # No indicators enabled
             pass
-        elif all(s == 1 for s in active_signals):
-            final_signal = 1
-        elif all(s == -1 for s in active_signals):
-            final_signal = -1
+        elif len(active_signals) == 1:
+            # 只有一个指标启用，直接使用其信号
+            final_signal = active_signals[0]
+        else:
+            # 多个指标启用，使用状态确认逻辑
+            if self.params.get('use_continuous_trigger', False):
+                # 旧逻辑：AND 逻辑（同时穿越）
+                if all(s == 1 for s in active_signals):
+                    final_signal = 1
+                elif all(s == -1 for s in active_signals):
+                    final_signal = -1
+            else:
+                # 新逻辑：状态确认逻辑
+                final_signal = self._evaluate_state_confirmation_logic(df_out)
         
         # Simple confidence for now
         confidence = 100 if final_signal != 0 else 0
@@ -1397,6 +1458,112 @@ class RsiBollingerBandsStrategy(Strategy):
         df_out.iloc[-1, df_out.columns.get_loc('confidence')] = confidence
         
         return df_out
+
+    def _evaluate_state_confirmation_logic(self, df_out: pd.DataFrame) -> int:
+        """
+        状态确认逻辑：一个指标处于极值状态，另一个指标发生穿越即可触发信号
+
+        买入信号逻辑：
+        - RSI ≤ 30（处于超卖状态）且 布林带发生向上穿越
+        - 或 布林带 ≤ 下轨（处于超卖状态）且 RSI 发生向下穿越
+
+        卖出信号逻辑：
+        - RSI ≥ 70（处于超买状态）且 布林带发生向下穿越
+        - 或 布林带 ≥ 上轨（处于超买状态）且 RSI 发生向上穿越
+        """
+        if len(df_out) < 2:
+            return 0
+
+        curr_row = df_out.iloc[-1]
+        prev_row = df_out.iloc[-2]
+
+        # 检查各指标的状态和穿越情况
+        rsi_state = self._get_rsi_state_and_crossover(curr_row, prev_row)
+        bb_state = self._get_bb_state_and_crossover(curr_row, prev_row)
+
+        # 状态确认逻辑
+        # 买入信号：RSI超卖状态 + BB向上穿越，或 BB超卖状态 + RSI向下穿越
+        if ((rsi_state['is_oversold'] and bb_state['crossover'] == 1) or
+            (bb_state['is_oversold'] and rsi_state['crossover'] == 1)):
+            return 1
+
+        # 卖出信号：RSI超买状态 + BB向下穿越，或 BB超买状态 + RSI向上穿越
+        if ((rsi_state['is_overbought'] and bb_state['crossover'] == -1) or
+            (bb_state['is_overbought'] and rsi_state['crossover'] == -1)):
+            return -1
+
+        return 0
+
+    def _get_rsi_state_and_crossover(self, curr_row, prev_row):
+        """获取RSI的状态和穿越情况"""
+        result = {
+            'is_oversold': False,
+            'is_overbought': False,
+            'crossover': 0  # 1=向下穿越(进入超卖), -1=向上穿越(进入超买), 0=无穿越
+        }
+
+        if not self.params.get('use_rsi'):
+            return result
+
+        rsi_col = f"RSI_{self.params['rsi_period']}"
+        if (rsi_col not in curr_row or rsi_col not in prev_row or
+            pd.isna(curr_row[rsi_col]) or pd.isna(prev_row[rsi_col])):
+            return result
+
+        curr_rsi = curr_row[rsi_col]
+        prev_rsi = prev_row[rsi_col]
+
+        # 状态检查
+        result['is_oversold'] = curr_rsi <= self.params['rsi_oversold']
+        result['is_overbought'] = curr_rsi >= self.params['rsi_overbought']
+
+        # 穿越检查
+        if curr_rsi <= self.params['rsi_oversold'] and prev_rsi > self.params['rsi_oversold']:
+            result['crossover'] = 1  # 向下穿越进入超卖
+        elif curr_rsi >= self.params['rsi_overbought'] and prev_rsi < self.params['rsi_overbought']:
+            result['crossover'] = -1  # 向上穿越进入超买
+
+        return result
+
+    def _get_bb_state_and_crossover(self, curr_row, prev_row):
+        """获取布林带的状态和穿越情况"""
+        result = {
+            'is_oversold': False,
+            'is_overbought': False,
+            'crossover': 0  # 1=向上穿越(回归), -1=向下穿越(回归), 0=无穿越
+        }
+
+        if not self.params.get('use_bb'):
+            return result
+
+        std_dev_str = str(float(self.params['bb_std_dev']))
+        bb_upper_col = f"BBU_{self.params['bb_period']}_{std_dev_str}"
+        bb_lower_col = f"BBL_{self.params['bb_period']}_{std_dev_str}"
+
+        required_cols = [bb_upper_col, bb_lower_col, 'close']
+        if (not all(c in curr_row for c in required_cols) or
+            not all(c in prev_row for c in required_cols) or
+            curr_row[required_cols].isna().any() or prev_row[required_cols].isna().any()):
+            return result
+
+        curr_close = curr_row['close']
+        prev_close = prev_row['close']
+        curr_bb_upper = curr_row[bb_upper_col]
+        curr_bb_lower = curr_row[bb_lower_col]
+        prev_bb_upper = prev_row[bb_upper_col]
+        prev_bb_lower = prev_row[bb_lower_col]
+
+        # 状态检查
+        result['is_oversold'] = curr_close <= curr_bb_lower
+        result['is_overbought'] = curr_close >= curr_bb_upper
+
+        # 穿越检查（布林带回归逻辑）
+        if prev_close <= prev_bb_lower and curr_close > curr_bb_lower:
+            result['crossover'] = 1  # 从下轨下方回到上方
+        elif prev_close >= prev_bb_upper and curr_close < curr_bb_upper:
+            result['crossover'] = -1  # 从上轨上方回到下方
+
+        return result
 
     def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
         # This method is for full backtesting. The main logic is in the windowed version.
@@ -1414,9 +1581,27 @@ class RsiBollingerBandsStrategy(Strategy):
             std_dev_str = str(float(self.params['bb_std_dev']))
             bb_upper_col = f"BBU_{self.params['bb_period']}_{std_dev_str}"
             bb_lower_col = f"BBL_{self.params['bb_period']}_{std_dev_str}"
+
             if all(c in df_signaled.columns for c in [bb_upper_col, bb_lower_col]):
-                buy_conditions &= (df_signaled['close'] <= df_signaled[bb_lower_col])
-                sell_conditions &= (df_signaled['close'] >= df_signaled[bb_upper_col])
+                if self.params.get('use_continuous_trigger', False):
+                    # 旧逻辑：持续触发
+                    buy_conditions &= (df_signaled['close'] <= df_signaled[bb_lower_col])
+                    sell_conditions &= (df_signaled['close'] >= df_signaled[bb_upper_col])
+                else:
+                    # 新逻辑：穿越触发（布林带回归逻辑）
+                    prev_close = df_signaled['close'].shift(1)
+                    prev_bb_upper = df_signaled[bb_upper_col].shift(1)
+                    prev_bb_lower = df_signaled[bb_lower_col].shift(1)
+
+                    # 买入：价格从下轨下方回到上方
+                    bb_buy_condition = ((prev_close <= prev_bb_lower) &
+                                       (df_signaled['close'] > df_signaled[bb_lower_col]))
+                    # 卖出：价格从上轨上方回到下方
+                    bb_sell_condition = ((prev_close >= prev_bb_upper) &
+                                        (df_signaled['close'] < df_signaled[bb_upper_col]))
+
+                    buy_conditions &= bb_buy_condition
+                    sell_conditions &= bb_sell_condition
             else: # If column missing, condition is false
                 buy_conditions &= False
                 sell_conditions &= False
@@ -1425,8 +1610,23 @@ class RsiBollingerBandsStrategy(Strategy):
         if self.params.get('use_rsi'):
             rsi_col = f"RSI_{self.params['rsi_period']}"
             if rsi_col in df_signaled.columns:
-                buy_conditions &= (df_signaled[rsi_col] <= self.params['rsi_oversold'])
-                sell_conditions &= (df_signaled[rsi_col] >= self.params['rsi_overbought'])
+                if self.params.get('use_continuous_trigger', False):
+                    # 旧逻辑：持续触发
+                    buy_conditions &= (df_signaled[rsi_col] <= self.params['rsi_oversold'])
+                    sell_conditions &= (df_signaled[rsi_col] >= self.params['rsi_overbought'])
+                else:
+                    # 新逻辑：穿越触发
+                    prev_rsi = df_signaled[rsi_col].shift(1)
+
+                    # 买入：RSI 从超卖阈值以上穿越到以下
+                    rsi_buy_condition = ((df_signaled[rsi_col] <= self.params['rsi_oversold']) &
+                                        (prev_rsi > self.params['rsi_oversold']))
+                    # 卖出：RSI 从超买阈值以下穿越到以上
+                    rsi_sell_condition = ((df_signaled[rsi_col] >= self.params['rsi_overbought']) &
+                                         (prev_rsi < self.params['rsi_overbought']))
+
+                    buy_conditions &= rsi_buy_condition
+                    sell_conditions &= rsi_sell_condition
             else:
                 buy_conditions &= False
                 sell_conditions &= False
@@ -1445,9 +1645,19 @@ class RsiBollingerBandsStrategy(Strategy):
                 sell_conditions &= False
         
         # Apply signals
-        df_signaled.loc[buy_conditions, 'signal'] = 1
-        df_signaled.loc[sell_conditions, 'signal'] = -1
-        df_signaled.loc[buy_conditions | sell_conditions, 'confidence'] = 100
+        if not self.params.get('use_continuous_trigger', False) and len([p for p in [self.params.get('use_bb'), self.params.get('use_rsi')] if p]) > 1:
+            # 对于状态确认逻辑，使用逐行处理（因为向量化实现较复杂）
+            for i in range(1, len(df_signaled)):
+                window_df = df_signaled.iloc[i-1:i+1].copy()
+                result_df = self.generate_signals_from_indicators_on_window(window_df)
+                if len(result_df) > 0:
+                    df_signaled.iloc[i, df_signaled.columns.get_loc('signal')] = result_df.iloc[-1]['signal']
+                    df_signaled.iloc[i, df_signaled.columns.get_loc('confidence')] = result_df.iloc[-1]['confidence']
+        else:
+            # 使用原有的向量化逻辑
+            df_signaled.loc[buy_conditions, 'signal'] = 1
+            df_signaled.loc[sell_conditions, 'signal'] = -1
+            df_signaled.loc[buy_conditions | sell_conditions, 'confidence'] = 100
 
         return df_signaled
 
@@ -1562,11 +1772,14 @@ def get_available_strategies() -> List[Dict[str, Any]]:
                 {'name': 'use_bb', 'type': 'boolean', 'default': True, 'description': '启用布林带指标'},
                 {'name': 'use_rsi', 'type': 'boolean', 'default': True, 'description': '启用RSI指标'},
                 {'name': 'use_td_seq', 'type': 'boolean', 'default': False, 'description': '启用TD Sequential指标'},
-                
+
+                # --- Trigger Logic Control ---
+                {'name': 'use_continuous_trigger', 'type': 'boolean', 'default': False, 'description': '使用持续触发逻辑（不推荐，可能导致频繁信号）'},
+
                 # --- BB Params ---
                 {'name': 'bb_period', 'type': 'int', 'default': 20, 'min': 10, 'max': 50, 'description': '布林带周期'},
                 {'name': 'bb_std_dev', 'type': 'float', 'default': 2.0, 'min': 1.5, 'max': 3.0, 'step': 0.1, 'description': '布林带标准差'},
-                
+
                 # --- RSI Params ---
                 {'name': 'rsi_period', 'type': 'int', 'default': 14, 'min': 5, 'max': 30, 'description': 'RSI周期'},
                 {'name': 'rsi_overbought', 'type': 'int', 'default': 70, 'min': 55, 'max': 99, 'description': 'RSI超买阈值'},

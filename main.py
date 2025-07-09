@@ -1277,22 +1277,28 @@ async def handle_kline_data(kline_data: dict):
                 continue
 
             # Create a new row from WebSocket data for the latest kline
+            # Ensure data types match the API DataFrame structure
             ws_row_data = {
-                'open': ws_kline_data['open'],
-                'high': ws_kline_data['high'],
-                'low': ws_kline_data['low'],
-                'close': ws_kline_data['close'],
-                'volume': ws_kline_data['volume'],
+                'open': float(ws_kline_data['open']),
+                'high': float(ws_kline_data['high']),
+                'low': float(ws_kline_data['low']),
+                'close': float(ws_kline_data['close']),
+                'volume': float(ws_kline_data['volume']),
                 'close_time': ws_kline_data['close_time'],
-                'quote_asset_volume': ws_kline_data['quote_asset_volume'],
-                'number_of_trades': ws_kline_data['number_of_trades'],
-                'taker_buy_base_asset_volume': ws_kline_data['taker_buy_base_asset_volume'],
-                'taker_buy_quote_asset_volume': ws_kline_data['taker_buy_quote_asset_volume'],
+                'quote_asset_volume': float(ws_kline_data['quote_asset_volume']),
+                'number_of_trades': int(ws_kline_data['number_of_trades']),
+                'taker_buy_base_asset_volume': float(ws_kline_data['taker_buy_base_asset_volume']),
+                'taker_buy_quote_asset_volume': float(ws_kline_data['taker_buy_quote_asset_volume']),
                 'ignore': 0
             }
 
-            # Create a new DataFrame row with WebSocket data
+            # Create a new DataFrame row with WebSocket data, matching API structure
             ws_df = pd.DataFrame([ws_row_data], index=[ws_kline_data['open_time']])
+            ws_df.index.name = 'open_time'  # Ensure index name matches
+
+            # Ensure column order matches the historical DataFrame
+            if not df_historical.empty:
+                ws_df = ws_df.reindex(columns=df_historical.columns, fill_value=0)
 
             # Combine historical data with WebSocket data
             df_klines = pd.concat([df_historical, ws_df], ignore_index=False)
@@ -1302,8 +1308,33 @@ async def handle_kline_data(kline_data: dict):
             df_klines = df_klines[~df_klines.index.duplicated(keep='last')]
 
             logger.info(f"[HYBRID_DATA] Config {live_test_config_data['_config_id']}: "
-                       f"Combined {len(df_historical)} API klines + 1 WebSocket kline = {len(df_klines)} total. "
+                       f"API klines: {len(df_historical)}, WebSocket kline: 1, Final total: {len(df_klines)}. "
                        f"Latest: {ws_kline_data['open_time'].strftime('%H:%M:%S')} Close={ws_kline_data['close']:.4f}")
+
+            # Debug: Check if WebSocket kline was actually added
+            if len(df_klines) == len(df_historical):
+                logger.warning(f"[HYBRID_DATA] WebSocket kline may have been dropped due to duplicate timestamp!")
+
+                if not df_historical.empty:
+                    hist_last_time = df_historical.index[-1]
+                    ws_time = ws_kline_data['open_time']
+                    logger.debug(f"[HYBRID_DATA] Historical last time: {hist_last_time}")
+                    logger.debug(f"[HYBRID_DATA] WebSocket time: {ws_time}")
+
+                    # Check if timestamps are exactly the same
+                    if hist_last_time == ws_time:
+                        # Replace the last historical kline with WebSocket data
+                        df_klines.iloc[-1] = ws_df.iloc[0]
+                        logger.info(f"[HYBRID_DATA] Replaced duplicate timestamp kline with WebSocket data. Total: {len(df_klines)}")
+                    else:
+                        # Different timestamps, force add
+                        df_klines = pd.concat([df_klines, ws_df], ignore_index=False)
+                        df_klines = df_klines.sort_index()
+                        logger.info(f"[HYBRID_DATA] Force added WebSocket kline with different timestamp. New total: {len(df_klines)}")
+                else:
+                    # No historical data, just use WebSocket data
+                    df_klines = ws_df.copy()
+                    logger.info(f"[HYBRID_DATA] No historical data, using only WebSocket kline. Total: {len(df_klines)}")
             # --- END MODIFICATION ---
             
             if df_klines.empty:
@@ -1315,18 +1346,43 @@ async def handle_kline_data(kline_data: dict):
                 print(f"Config ID {live_test_config_data['_config_id']}: 未找到预测策略 {pred_strat_id}，跳过。")
                 continue
             
+            # Debug: Check input data before strategy calculation
+            logger.debug(f"[STRATEGY_INPUT] Config {live_test_config_data['_config_id']}: "
+                        f"Input klines count: {len(df_klines)}, "
+                        f"Columns: {list(df_klines.columns)}, "
+                        f"Last close: {df_klines['close'].iloc[-1]:.4f}")
+
             signal_df = pred_strat_info['class'](params=final_pred_params).generate_signals(df_klines.copy()) # 策略计算（如 generate_signals）通常是CPU密集型操作。如果耗时较长，建议后续使用 await asyncio.to_thread() 将其移出事件循环执行，以避免阻塞。
+
+            # Debug: Check output data after strategy calculation
+            logger.debug(f"[STRATEGY_OUTPUT] Config {live_test_config_data['_config_id']}: "
+                        f"Output signal_df count: {len(signal_df) if not signal_df.empty else 0}, "
+                        f"Columns: {list(signal_df.columns) if not signal_df.empty else 'EMPTY'}")
+
 # --- START LOGGING LATEST K-LINE DATA ---
             try:
-                if not signal_df.empty and 'rsi' in signal_df.columns and 'close' in signal_df.columns:
-                    latest_data = signal_df.tail(3)
-                    log_message = f"[{live_test_config_data.get('_config_id', 'N/A')}] 最新3条K线数据:"
-                    for index, row in latest_data.iterrows():
-                        timestamp_str = index.strftime('%Y-%m-%d %H:%M:%S') if isinstance(index, pd.Timestamp) else str(index)
-                        log_message += f"\n  - 时间: {timestamp_str}, 价格: {row['close']:.4f}, RSI: {row['rsi']:.2f}"
-                    logger.info(log_message)
+                if not signal_df.empty and 'close' in signal_df.columns:
+                    # Find RSI column (could be 'rsi', 'RSI_14', etc.)
+                    rsi_col = None
+                    for col in signal_df.columns:
+                        if col.lower() == 'rsi' or col.startswith('RSI_'):
+                            rsi_col = col
+                            break
+
+                    if rsi_col:
+                        latest_data = signal_df.tail(3)
+                        log_message = f"[{live_test_config_data.get('_config_id', 'N/A')}] 最新3条K线数据:"
+                        for index, row in latest_data.iterrows():
+                            timestamp_str = index.strftime('%Y-%m-%d %H:%M:%S') if isinstance(index, pd.Timestamp) else str(index)
+                            log_message += f"\n  - 时间: {timestamp_str}, 价格: {row['close']:.4f}, RSI: {row[rsi_col]:.2f}"
+                        logger.info(log_message)
+                    else:
+                        logger.warning(f"[{live_test_config_data.get('_config_id', 'N/A')}] No RSI column found. "
+                                     f"Available columns: {list(signal_df.columns)}")
                 else:
-                    logger.debug(f"[{live_test_config_data.get('_config_id', 'N/A')}] K-line data logging skipped: DataFrame is empty or missing 'rsi'/'close' columns.")
+                    logger.warning(f"[{live_test_config_data.get('_config_id', 'N/A')}] K-line data logging skipped: "
+                                 f"signal_df empty: {signal_df.empty}, "
+                                 f"has 'close': {'close' in signal_df.columns if not signal_df.empty else False}")
             except Exception as e:
                 logger.error(f"[{live_test_config_data.get('_config_id', 'N/A')}] Error during K-line data logging: {e}", exc_info=True)
             # --- END LOGGING LATEST K-LINE DATA ---
