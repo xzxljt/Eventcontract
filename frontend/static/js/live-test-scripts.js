@@ -850,6 +850,9 @@ const app = createApp({
                                 nextInvestmentAmount.value = message.data.next_amount;
                             }
                             break;
+                        case "signal_price_update":
+                            handleSignalPriceUpdate(message.data);
+                            break;
 
                         case "signals_deleted_notification":
                             if (message.data && Array.isArray(message.data.deleted_ids)) {
@@ -1232,7 +1235,7 @@ const app = createApp({
         const handleVerifiedSignal = (signalData) => {
             // ... (这部分逻辑保持不变)
             const verifiedSignal = sanitizeSignal(signalData);
-            verifiedSignal.verified = true; 
+            verifiedSignal.verified = true;
             const index = liveSignals.value.findIndex(s => s.id === verifiedSignal.id);
             if (index !== -1) {
                 liveSignals.value[index] = { ...liveSignals.value[index], ...verifiedSignal };
@@ -1241,6 +1244,27 @@ const app = createApp({
                  if (liveSignals.value.length > 2000) { liveSignals.value.splice(1000); }
             }
             updateAllTimeRemaining();
+        };
+
+        const handleSignalPriceUpdate = (updateData) => {
+            if (!updateData || !updateData.signal_id) return;
+
+            const signalId = updateData.signal_id;
+            const newEntryPrice = updateData.new_entry_price;
+            const oldEntryPrice = updateData.old_entry_price;
+
+            // Find and update the signal in liveSignals
+            const index = liveSignals.value.findIndex(s => s.id === signalId);
+            if (index !== -1) {
+                liveSignals.value[index].signal_price = newEntryPrice;
+                console.log(`Updated entry price for signal ${signalId}: ${oldEntryPrice} -> ${newEntryPrice}`);
+
+                // Force reactivity update
+                liveSignals.value = [...liveSignals.value];
+
+                // Show a brief notification to user
+                showServerMessage(`信号 ${signalId.split('_').slice(-1)[0]} 入场价格已更新为下一分钟开盘价: ${newEntryPrice.toFixed(4)}`, false, 3000);
+            }
         };
 
         // --- 新增: 信号管理方法 ---

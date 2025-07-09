@@ -246,6 +246,8 @@ h6 { font-size: 1rem; }
 .btn-outline-info:hover { background-color: var(--info-color); color: white; }
 .btn-outline-success { border-color: var(--success-color); color: var(--success-color); }
 .btn-outline-success:hover { background-color: var(--success-color); color: white; }
+.btn-outline-danger { border-color: var(--error-color); color: var(--error-color); }
+.btn-outline-danger:hover { background-color: var(--error-color); color: white; }
 
 
 .btn:focus, .btn.focus {

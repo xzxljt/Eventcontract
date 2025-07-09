@@ -368,6 +368,35 @@ const app = Vue.createApp({
                 this.showToast('手动交易失败', error.message, 'danger');
             }
         },
+        confirmDeleteClient(client) {
+            const truncatedId = this.truncateId(client.client_id, 12);
+            const confirmationMessage = `您确定要删除客户端 "${truncatedId}" 吗？\n\n此操作将从服务器的持久化存储中删除该客户端的记录。\n\n请注意：\n- 如果对应的 AutoX.js 脚本仍在运行，它可能会在下次心跳时重新注册。\n- 此操作不可撤销。`;
+            
+            if (window.confirm(confirmationMessage)) {
+                this.deleteClient(client.client_id);
+            }
+        },
+        async deleteClient(clientId) {
+            try {
+                const response = await fetch(`/api/autox/clients/${clientId}`, {
+                    method: 'DELETE',
+                });
+                
+                if (!response.ok) {
+                    const result = await response.json().catch(() => ({ detail: `HTTP ${response.status}` }));
+                    throw new Error(result.detail || `HTTP ${response.status}`);
+                }
+
+                // Optimistically remove the client from the list for immediate UI feedback.
+                // The WebSocket update will eventually provide the source of truth.
+                this.clients = this.clients.filter(c => c.client_id !== clientId);
+                
+                this.showToast('删除成功', `客户端 ${this.truncateId(clientId)} 已被删除。`, 'success');
+            } catch (error) {
+                console.error(`删除客户端 ${clientId} 失败:`, error);
+                this.showToast('删除失败', `删除客户端时发生错误: ${error.message}`, 'danger');
+            }
+        },
         showToast(title, message, type = 'success') {
             this.toast.title = title;
             this.toast.message = message; // HTML is allowed via v-html in template

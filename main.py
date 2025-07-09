@@ -226,7 +226,7 @@ class ConnectionManager:
         
         broadcast_overall_elapsed = time.time() - broadcast_overall_start_time
         logger.info(
-            # f"异步WebSocket广播完成 - 总耗时: {broadcast_overall_elapsed:.4f}秒, "
+            f"异步WebSocket广播完成 - 总耗时: {broadcast_overall_elapsed:.4f}秒, "
             f"目标客户端数: {total_targeted_connections}, 成功: {success_count}, 失败: {error_count}"
         )
         
@@ -780,21 +780,59 @@ async def background_signal_verifier():
                 # we need the kline that starts at 10:04:00.
                 kline_start_time_utc = end_time_utc - timedelta(minutes=1)
 
-                # --- MODIFICATION: Use Index Price for validation ---
+                # --- MODIFICATION: Use Index Price for validation (OPEN price with precise time range and retry) ---
                 logger.info(f"Verifying signal {signal_copy_to_verify['id']} using index price.")
                 actual_price = None
-                try:
-                    kline_df = await asyncio.to_thread(
-                        binance_client.get_index_price_klines,
-                        signal_copy_to_verify['symbol'], '1m',
-                        start_time=int(kline_start_time_utc.timestamp() * 1000), limit=1
-                    )
-                    if not kline_df.empty:
-                        actual_price = float(kline_df.iloc[0]['close'])
-                    else:
-                        logger.warning(f"验证 {signal_copy_to_verify['id']}: 未能获取到 {end_time_utc.isoformat()} 的指数价格K线。验证失败。")
-                except Exception as e_idx_verify:
-                    logger.error(f"验证 {signal_copy_to_verify['id']} 时获取指数价格失败: {e_idx_verify}")
+                max_verify_retries = 3
+
+                # Wait for historical data to be available (2 minutes after verification time)
+                current_time = datetime.now(timezone.utc)
+                time_since_verify = (current_time - kline_start_time_utc).total_seconds()
+
+                if time_since_verify < 120:  # Less than 2 minutes
+                    wait_time = 120 - time_since_verify
+                    logger.info(f"验证 {signal_copy_to_verify['id']}: 等待 {wait_time:.1f} 秒让历史数据可用")
+                    await asyncio.sleep(wait_time)
+
+                for verify_attempt in range(max_verify_retries):
+                    try:
+                        logger.info(f"验证 {signal_copy_to_verify['id']}: 尝试 {verify_attempt + 1}/{max_verify_retries}")
+
+                        # Use precise time range to get the exact verification minute kline
+                        verify_start_time_ms = int(kline_start_time_utc.timestamp() * 1000)
+                        verify_end_time_ms = int((kline_start_time_utc + timedelta(minutes=1)).timestamp() * 1000)
+
+                        logger.info(f"验证 {signal_copy_to_verify['id']}: 获取验证时间 {kline_start_time_utc} 的指数K线")
+
+                        kline_df = await asyncio.to_thread(
+                            binance_client.get_index_price_klines,
+                            signal_copy_to_verify['symbol'], '1m',
+                            start_time=verify_start_time_ms,
+                            end_time=verify_end_time_ms,
+                            limit=1
+                        )
+
+                        if not kline_df.empty:
+                            # Use OPEN price instead of CLOSE price for verification
+                            actual_price = float(kline_df.iloc[0]['open'])
+                            verify_time_str = kline_df.index[0].strftime('%H:%M')
+                            logger.info(f"验证 {signal_copy_to_verify['id']}: 使用 {verify_time_str} 验证时间点指数开盘价 {actual_price}")
+                            break  # Success, exit retry loop
+                        else:
+                            logger.warning(f"验证 {signal_copy_to_verify['id']}: 未能获取到 {kline_start_time_utc.isoformat()} 的指数价格K线 (尝试 {verify_attempt + 1})")
+                            if verify_attempt < max_verify_retries - 1:
+                                await asyncio.sleep(2 ** verify_attempt)  # Exponential backoff
+                                continue
+                            else:
+                                logger.error(f"验证 {signal_copy_to_verify['id']}: 经过 {max_verify_retries} 次尝试后仍无法获取指数价格K线")
+
+                    except Exception as e_idx_verify:
+                        logger.error(f"验证 {signal_copy_to_verify['id']} 时获取指数价格失败 (尝试 {verify_attempt + 1}): {e_idx_verify}")
+                        if verify_attempt < max_verify_retries - 1:
+                            await asyncio.sleep(2 ** verify_attempt)  # Exponential backoff
+                            continue
+                        else:
+                            logger.error(f"验证 {signal_copy_to_verify['id']}: 经过 {max_verify_retries} 次尝试后仍然失败")
                 # --- END MODIFICATION ---
 
                 if actual_price is None:
@@ -1004,6 +1042,104 @@ def _create_and_store_investment_strategy_instance(config_data: Dict[str, Any]) 
         return None
 
 
+async def update_signal_entry_price(signal_id: str, symbol: str, signal_time_dt: datetime, interval: str, max_retries: int = 3):
+    """
+    异步更新信号的入场价格为下一分钟的指数开盘价
+    支持重试机制，等待历史数据可用
+    """
+    # Wait for historical data to be available (2 minutes after signal time)
+    entry_time = signal_time_dt.replace(second=0, microsecond=0)
+    current_time = datetime.now(timezone.utc)
+    time_since_entry = (current_time - entry_time).total_seconds()
+
+    if time_since_entry < 120:  # Less than 2 minutes
+        wait_time = 120 - time_since_entry
+        # logger.info(f"[update_signal_entry_price] Waiting {wait_time:.1f} seconds for historical data to be available for signal {signal_id}")
+        await asyncio.sleep(wait_time)
+
+    for attempt in range(max_retries):
+        try:
+            # logger.info(f"[update_signal_entry_price] Attempt {attempt + 1}/{max_retries} - Starting price update for signal {signal_id}")
+            # logger.info(f"[update_signal_entry_price] Signal time: {signal_time_dt}, Symbol: {symbol}, Interval: {interval}")
+
+            # The signal_time_dt is already the entry time (e.g., 7:52:01 for a signal triggered at 7:51 close)
+            # We need to get the index open price for this exact minute, so round down to minute boundary
+            entry_time_ms = int(entry_time.timestamp() * 1000)
+
+            # logger.info(f"[update_signal_entry_price] Entry time (rounded to minute): {entry_time}, timestamp: {entry_time_ms}")
+            # logger.info(f"[update_signal_entry_price] Original signal time: {signal_time_dt}")
+
+            # Use historical klines to get the exact open price for the entry minute
+            # logger.info(f"[update_signal_entry_price] Fetching historical kline for {symbol} at {entry_time}")
+
+            # Calculate the end time (entry_time + 1 minute)
+            from datetime import timedelta
+            end_time = entry_time + timedelta(minutes=1)
+            end_time_ms = int(end_time.timestamp() * 1000)
+
+            index_price_df = await asyncio.to_thread(
+                binance_client.get_index_price_klines,
+                symbol, interval,
+                start_time=entry_time_ms,
+                end_time=end_time_ms,
+                limit=1
+            )
+
+            # logger.info(f"[update_signal_entry_price] Fetched kline data: empty={index_price_df.empty}, shape={index_price_df.shape if not index_price_df.empty else 'N/A'}")
+
+            if not index_price_df.empty:
+                # Use the OPEN price of the entry minute as entry price
+                new_entry_price = float(index_price_df.iloc[0]['open'])
+                # logger.info(f"[update_signal_entry_price] New entry price (entry minute open): {new_entry_price}")
+
+                # Update the signal in live_signals
+                signal_found = False
+                with live_signals_lock:
+                    for i, signal in enumerate(live_signals):
+                        if signal.get('id') == signal_id:
+                            old_price = signal.get('signal_price')
+                            live_signals[i]['signal_price'] = new_entry_price
+                            signal_found = True
+                            # logger.info(f"[update_signal_entry_price] Updated entry price for signal {signal_id}: {old_price} -> {new_entry_price}")
+                            break
+
+                if signal_found:
+                    # Broadcast the price update to clients
+                    # logger.info(f"[update_signal_entry_price] Broadcasting price update to clients")
+                    await manager.broadcast_json({
+                        "type": "signal_price_update",
+                        "data": {
+                            "signal_id": signal_id,
+                            "new_entry_price": new_entry_price,
+                            "old_entry_price": old_price
+                        }
+                    })
+                    # logger.info(f"[update_signal_entry_price] Price update completed successfully")
+                    return  # Success, exit retry loop
+                else:
+                    # logger.warning(f"[update_signal_entry_price] Signal {signal_id} not found in live_signals")
+                    return  # Signal not found, no point retrying
+            else:
+                # logger.warning(f"[update_signal_entry_price] Could not fetch index price data for signal {signal_id} (attempt {attempt + 1})")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2 ** attempt)  # Exponential backoff
+                    continue
+                else:
+                    # logger.error(f"[update_signal_entry_price] Failed to fetch price after {max_retries} attempts. Entry price remains as trigger price.")
+                    return
+
+        except Exception as e:
+            logger.error(f"[update_signal_entry_price] Error on attempt {attempt + 1}: {e}")
+            if attempt < max_retries - 1:
+                await asyncio.sleep(2 ** attempt)  # Exponential backoff
+                continue
+            else:
+                logger.error(f"[update_signal_entry_price] Final attempt failed for signal {signal_id}")
+                import traceback
+                logger.error(f"[update_signal_entry_price] Traceback: {traceback.format_exc()}")
+                return
+
+
 async def broadcast_next_investment_amount(config_id: str):
     """
     Calculates and broadcasts the next potential investment amount for a given config.
@@ -1070,6 +1206,26 @@ async def handle_kline_data(kline_data: dict):
         if not (kline_symbol and kline_interval and is_kline_closed):
             return
 
+        # Extract WebSocket kline data for use as the latest kline
+        ws_kline_data = {
+            'open_time': datetime.fromtimestamp(kline_data.get('kline_start_time', 0) / 1000, tz=timezone.utc),
+            'open': kline_data.get('open', 0),
+            'high': kline_data.get('high', 0),
+            'low': kline_data.get('low', 0),
+            'close': kline_data.get('close', 0),
+            'volume': kline_data.get('volume', 0),
+            'close_time': datetime.fromtimestamp(kline_data.get('kline_close_time', 0) / 1000, tz=timezone.utc),
+            'quote_asset_volume': kline_data.get('quote_asset_volume', 0),
+            'number_of_trades': kline_data.get('number_of_trades', 0),
+            'taker_buy_base_asset_volume': kline_data.get('taker_buy_base_asset_volume', 0),
+            'taker_buy_quote_asset_volume': kline_data.get('taker_buy_quote_asset_volume', 0)
+        }
+
+        logger.debug(f"[WS_KLINE] {kline_symbol}_{kline_interval}: "
+                    f"Time={ws_kline_data['open_time'].strftime('%H:%M:%S')}, "
+                    f"OHLC={ws_kline_data['open']:.4f}/{ws_kline_data['high']:.4f}/"
+                    f"{ws_kline_data['low']:.4f}/{ws_kline_data['close']:.4f}")
+
         active_test_configs_for_this_kline = []
         with running_live_test_configs_lock: # 保护读取
             for config_id, config_content in running_live_test_configs.items():
@@ -1105,12 +1261,50 @@ async def handle_kline_data(kline_data: dict):
             
             if final_pred_params is None: final_pred_params = {} # 最终回退
 
-            df_klines = await asyncio.to_thread( # IO密集型操作，放入线程池
+            # --- MODIFICATION: Hybrid approach - API for history + WebSocket for latest ---
+            # Get 99 historical klines from API (stable data)
+            # Use WebSocket kline as the 100th (latest) kline for consistency
+
+            df_historical = await asyncio.to_thread(
                 binance_client.get_historical_klines,
                 live_test_config_data['symbol'],
                 live_test_config_data['interval'],
-                None, None, 100
+                None, None, 99  # Get 99 historical klines
             )
+
+            if df_historical.empty:
+                logger.warning(f"Config {live_test_config_data['_config_id']}: No historical klines available")
+                continue
+
+            # Create a new row from WebSocket data for the latest kline
+            ws_row_data = {
+                'open': ws_kline_data['open'],
+                'high': ws_kline_data['high'],
+                'low': ws_kline_data['low'],
+                'close': ws_kline_data['close'],
+                'volume': ws_kline_data['volume'],
+                'close_time': ws_kline_data['close_time'],
+                'quote_asset_volume': ws_kline_data['quote_asset_volume'],
+                'number_of_trades': ws_kline_data['number_of_trades'],
+                'taker_buy_base_asset_volume': ws_kline_data['taker_buy_base_asset_volume'],
+                'taker_buy_quote_asset_volume': ws_kline_data['taker_buy_quote_asset_volume'],
+                'ignore': 0
+            }
+
+            # Create a new DataFrame row with WebSocket data
+            ws_df = pd.DataFrame([ws_row_data], index=[ws_kline_data['open_time']])
+
+            # Combine historical data with WebSocket data
+            df_klines = pd.concat([df_historical, ws_df], ignore_index=False)
+            df_klines = df_klines.sort_index()  # Ensure proper time ordering
+
+            # Remove any duplicate timestamps (in case API already included the latest kline)
+            df_klines = df_klines[~df_klines.index.duplicated(keep='last')]
+
+            logger.info(f"[HYBRID_DATA] Config {live_test_config_data['_config_id']}: "
+                       f"Combined {len(df_historical)} API klines + 1 WebSocket kline = {len(df_klines)} total. "
+                       f"Latest: {ws_kline_data['open_time'].strftime('%H:%M:%S')} Close={ws_kline_data['close']:.4f}")
+            # --- END MODIFICATION ---
             
             if df_klines.empty:
                 print(f"Config ID {live_test_config_data['_config_id']}: 获取历史K线数据为空，跳过。")
@@ -1144,6 +1338,39 @@ async def handle_kline_data(kline_data: dict):
             sig_val = int(latest_sig_data.get('signal', 0))
             conf_val = float(latest_sig_data.get('confidence', 0))
             current_confidence_threshold = live_test_config_data.get('confidence_threshold', 0)
+
+            # --- COMPREHENSIVE SIGNAL DEBUGGING ---
+            if sig_val != 0 and conf_val >= current_confidence_threshold and not signal_df.empty:
+                # Signal triggered - log detailed information
+                last_row = signal_df.iloc[-1]
+                last_time = signal_df.index[-1].strftime('%H:%M:%S') if hasattr(signal_df.index[-1], 'strftime') else str(signal_df.index[-1])
+
+                debug_info = f"[SIGNAL_TRIGGERED] {live_test_config_data['symbol']}_{live_test_config_data['interval']} at {last_time}:\n"
+                debug_info += f"  Signal={sig_val}, Confidence={conf_val:.2f} (threshold: {current_confidence_threshold})\n"
+                debug_info += f"  Strategy: {pred_strat_id}, Params: {final_pred_params}\n"
+                debug_info += f"  Last kline: Close={last_row.get('close', 'N/A'):.4f}"
+
+                if 'rsi' in last_row:
+                    debug_info += f", RSI={last_row.get('rsi', 'N/A'):.2f}"
+                if 'volume' in last_row:
+                    debug_info += f", Volume={last_row.get('volume', 'N/A'):.0f}"
+
+                # Add data source information for debugging
+                debug_info += f"\n  Data info: Total klines={len(signal_df)}, "
+                debug_info += f"First={signal_df.index[0].strftime('%H:%M:%S')}, "
+                debug_info += f"Last={signal_df.index[-1].strftime('%H:%M:%S')}"
+
+                # Add WebSocket trigger info
+                current_time = datetime.now(timezone.utc)
+                trigger_delay = (current_time - signal_df.index[-1]).total_seconds()
+                debug_info += f"\n  Trigger delay: {trigger_delay:.1f}s from kline close"
+
+                logger.info(debug_info)
+
+            elif sig_val != 0:  # Signal generated but below threshold
+                logger.debug(f"[SIGNAL_BELOW_THRESHOLD] {live_test_config_data['symbol']}_{live_test_config_data['interval']}: "
+                           f"Signal={sig_val}, Conf={conf_val:.2f} < {current_confidence_threshold}")
+            # --- END SIGNAL DEBUGGING ---
 
             if sig_val != 0 and conf_val >= current_confidence_threshold:
                 # --- START: 时间过滤逻辑 ---
@@ -1215,33 +1442,10 @@ async def handle_kline_data(kline_data: dict):
                 
                 exp_end_time_dt = sig_time_dt + timedelta(minutes=event_period_minutes)
                 
-                # --- MODIFICATION: Use Index Price for recording signal price ---
-                sig_price = float(latest_sig_data['close']) # Fallback value
-                try:
-                    # The signal is on the last kline, get its open time to fetch the corresponding index kline
-                    kline_open_time_ms = int(latest_sig_data.name.timestamp() * 1000)
-                    
-                    # Fetch the single index price kline for the same period
-                    index_price_df = await asyncio.to_thread(
-                        binance_client.get_index_price_klines,
-                        live_test_config_data['symbol'],
-                        live_test_config_data['interval'],
-                        start_time=kline_open_time_ms,
-                        limit=1
-                    )
-                    
-                    if not index_price_df.empty:
-                        # Check if the fetched kline matches the time
-                        fetched_kline_open_time_ms = int(index_price_df.index[0].timestamp() * 1000)
-                        if fetched_kline_open_time_ms == kline_open_time_ms:
-                            sig_price = float(index_price_df.iloc[0]['close'])
-                            logger.info(f"[handle_kline_data] Successfully fetched index price {sig_price} for signal recording. Market price was {float(latest_sig_data['close'])}.")
-                        else:
-                            logger.warning(f"Index price kline time mismatch. Expected: {kline_open_time_ms}, Got: {fetched_kline_open_time_ms}. Falling back to market price.")
-                    else:
-                        logger.warning(f"Could not fetch index price kline for {live_test_config_data['symbol']} at {kline_open_time_ms}. Falling back to market price.")
-                except Exception as e_idx_price:
-                    logger.error(f"Error fetching index price for signal recording: {e_idx_price}. Falling back to market price.")
+                # --- MODIFICATION: Use trigger price first, then update with next minute's index open price ---
+                # Use trigger price as initial entry price (current kline's close price)
+                sig_price = float(latest_sig_data['close']) # Initial value using trigger price
+                # logger.info(f"[handle_kline_data] Initial signal price set to trigger price: {sig_price}")
                 # --- END MODIFICATION ---
                 
                 inv_amount = 20.0; profit_pct = 80.0; loss_pct = 100.0
@@ -1439,6 +1643,15 @@ async def handle_kline_data(kline_data: dict):
                     {"type": "new_signal", "data": new_live_signal},
                     filter_func=lambda c: websocket_to_config_id_map.get(c) == new_live_signal['origin_config_id']
                 )
+
+                # --- MODIFICATION: Schedule async update of entry price to next minute's index open price ---
+                asyncio.create_task(update_signal_entry_price(
+                    signal_id_str,
+                    live_test_config_data['symbol'],
+                    sig_time_dt,
+                    live_test_config_data['interval']
+                ))
+                # --- END MODIFICATION ---
     except Exception as e:
         print(f"处理K线数据时发生严重错误: {e}\n{traceback.format_exc()}")
 
@@ -2456,17 +2669,121 @@ async def get_live_signals_http_endpoint():
         # 返回副本，避免外部修改影响全局状态
         return [s.copy() for s in live_signals] 
 
+@app.get("/api/debug-signal-data")
+async def debug_signal_data(symbol: str = "BTCUSDT", interval: str = "1m", strategy_id: str = "simple_rsi"):
+    """
+    调试API：对比实时信号数据获取和回测数据获取的差异
+    """
+    try:
+        current_time_utc = datetime.now(timezone.utc)
+
+        # 1. 模拟实时信号的数据获取方式
+        end_time_for_klines = current_time_utc.replace(second=0, microsecond=0)
+        if interval == '5m':
+            end_time_for_klines = current_time_utc.replace(minute=(current_time_utc.minute // 5) * 5, second=0, microsecond=0)
+        elif interval == '15m':
+            end_time_for_klines = current_time_utc.replace(minute=(current_time_utc.minute // 15) * 15, second=0, microsecond=0)
+        elif interval == '1h':
+            end_time_for_klines = current_time_utc.replace(minute=0, second=0, microsecond=0)
+
+        end_time_ms = int(end_time_for_klines.timestamp() * 1000)
+
+        live_data = await asyncio.to_thread(
+            binance_client.get_historical_klines,
+            symbol, interval, None, end_time_ms, 100
+        )
+
+        # 2. 模拟回测的数据获取方式（获取相同时间范围的完整数据）
+        if not live_data.empty:
+            start_time_for_backtest = live_data.index[0]
+            end_time_for_backtest = live_data.index[-1]
+            start_ms = int(start_time_for_backtest.timestamp() * 1000)
+            end_ms = int(end_time_for_backtest.timestamp() * 1000)
+
+            backtest_data = await asyncio.to_thread(
+                binance_client.get_historical_klines,
+                symbol, interval, start_ms, end_ms
+            )
+        else:
+            backtest_data = pd.DataFrame()
+
+        # 3. 对比数据
+        comparison = {
+            "current_time": current_time_utc.isoformat(),
+            "end_time_used": end_time_for_klines.isoformat(),
+            "live_data": {
+                "count": len(live_data),
+                "first_time": live_data.index[0].isoformat() if not live_data.empty else None,
+                "last_time": live_data.index[-1].isoformat() if not live_data.empty else None,
+                "last_3_closes": live_data['close'].tail(3).tolist() if not live_data.empty else []
+            },
+            "backtest_data": {
+                "count": len(backtest_data),
+                "first_time": backtest_data.index[0].isoformat() if not backtest_data.empty else None,
+                "last_time": backtest_data.index[-1].isoformat() if not backtest_data.empty else None,
+                "last_3_closes": backtest_data['close'].tail(3).tolist() if not backtest_data.empty else []
+            },
+            "data_consistency": {
+                "same_count": len(live_data) == len(backtest_data),
+                "same_last_time": (live_data.index[-1] == backtest_data.index[-1]) if not live_data.empty and not backtest_data.empty else False
+            }
+        }
+
+        return comparison
+
+    except Exception as e:
+        return {"error": f"Debug failed: {str(e)}"}
+
 @app.get("/api/test-signal") # 修改：保存操作改为异步
 async def generate_test_signal():
     current_time = now_utc(); signal_time = current_time; end_time = current_time + timedelta(minutes=10)
     symbol = random.choice(["BTCUSDT", "ETHUSDT", "BNBUSDT"])
-    
-    try: 
+
+    try:
         # get_latest_price 是同步的，如果币安API慢，这里会阻塞
         # 理想情况也应改为异步
         price_val = await asyncio.to_thread(binance_client.get_latest_price, symbol)
-    except: 
+    except:
         price_val = random.uniform(100, 70000)
+
+@app.get("/api/test-price-update/{signal_id}")
+async def test_price_update(signal_id: str):
+    """测试价格更新功能"""
+    try:
+        # 查找信号
+        signal_found = None
+        with live_signals_lock:
+            for signal in live_signals:
+                if signal.get('id') == signal_id:
+                    signal_found = signal
+                    break
+
+        if not signal_found:
+            return {"error": f"Signal {signal_id} not found"}
+
+        # 手动触发价格更新
+        signal_time_str = signal_found.get('signal_time')
+        if signal_time_str:
+            signal_time_dt = parse_frontend_datetime(signal_time_str)
+            if not signal_time_dt.tzinfo:
+                signal_time_dt = signal_time_dt.replace(tzinfo=timezone.utc)
+            else:
+                signal_time_dt = signal_time_dt.astimezone(timezone.utc)
+
+            # 创建异步任务来更新价格
+            asyncio.create_task(update_signal_entry_price(
+                signal_id,
+                signal_found.get('symbol'),
+                signal_time_dt,
+                signal_found.get('interval')
+            ))
+
+            return {"message": f"Price update task created for signal {signal_id}"}
+        else:
+            return {"error": "Signal time not found"}
+
+    except Exception as e:
+        return {"error": f"Error: {str(e)}"}
 
     pred_id_test = "simple_rsi"; 
     # 读取 strategy_parameters_config 是安全的，因为它通常只在启动时修改
@@ -2653,6 +2970,55 @@ async def update_client_notes_endpoint(client_id: str, notes_payload: ClientNote
 
     # 返回 Pydantic 模型确保响应格式正确
     return AutoXClientInfo(**updated_client_info_dict) if updated_client_info_dict else None
+
+
+@app.delete("/api/autox/clients/{client_id}", response_model=Dict[str, Any])
+async def delete_autox_client_endpoint(client_id: str):
+    """
+    从持久化存储中删除一个AutoX客户端记录，并断开其活动的WebSocket连接。
+    """
+    global persistent_autox_clients_data, active_autox_clients
+    
+    ws_to_close: Optional[WebSocket] = None
+    client_found_and_deleted = False
+
+    with autox_clients_lock:
+        # 1. 从持久化数据中移除
+        if client_id in persistent_autox_clients_data:
+            del persistent_autox_clients_data[client_id]
+            client_found_and_deleted = True
+            logger.info(f"已从持久化存储中删除客户端: {client_id}")
+
+        # 2. 查找并标记要关闭的活动WebSocket连接
+        for ws, active_info in active_autox_clients.items():
+            if active_info.get("client_id") == client_id:
+                ws_to_close = ws
+                break # 找到后即可退出循环
+
+    if not client_found_and_deleted:
+        raise HTTPException(status_code=404, detail=f"未在持久化存储中找到 Client ID 为 {client_id} 的客户端记录。")
+
+    # 3. 在锁外执行可能耗时的操作 (关闭连接)
+    if ws_to_close:
+        logger.info(f"准备断开已删除客户端 {client_id} 的活动WebSocket连接。")
+        try:
+            # 从管理器中断开连接，这将阻止未来的广播
+            autox_manager.disconnect(ws_to_close)
+            # 从活动客户端字典中移除
+            with autox_clients_lock:
+                active_autox_clients.pop(ws_to_close, None)
+            # 尝试优雅地关闭连接
+            await ws_to_close.close(code=1000, reason="客户端记录已被管理员删除")
+            logger.info(f"已成功关闭客户端 {client_id} 的WebSocket连接。")
+        except Exception as e:
+            logger.error(f"关闭客户端 {client_id} 的WebSocket连接时出错: {e}", exc_info=True)
+            # 即使关闭失败，我们仍然继续执行，因为记录已经被删除了
+
+    # 4. 保存更改并广播更新
+    await save_autox_clients_to_file()
+    await debounced_broadcast_autox_clients_status()
+
+    return {"status": "success", "message": f"客户端 {client_id} 已成功删除。"}
 
 
 @app.post("/api/live-signals/delete-batch", response_model=Dict[str, Any])
