@@ -639,6 +639,374 @@ class RsiBollingerBandsStrategy(Strategy):
         return df_signaled
 
 
+# --- EnhancedRSIStrategy ---
+class EnhancedRSIStrategy(Strategy):
+    """
+    加强版RSI策略：能够识别市场趋势并相应调整交易方向
+    - 上涨趋势：只做多，过滤做空信号
+    - 下跌趋势：只做空，过滤做多信号
+    - 震荡市场：传统RSI逆势交易
+    """
+    def __init__(self, params: Dict[str, Any] = None):
+        default_params = {
+            # RSI参数 (针对1分钟K线优化)
+            'rsi_period': 9,        # 缩短至9周期，更敏感
+            'rsi_overbought': 75,   # 提高阈值，减少假信号
+            'rsi_oversold': 25,     # 降低阈值，减少假信号
+
+            # 趋势识别参数 (针对10分钟事件合约优化)
+            'ema_fast': 5,          # 5分钟快线，捕捉短期趋势
+            'ema_slow': 15,         # 15分钟慢线，确认中期趋势
+            'adx_period': 8,        # 缩短ADX周期，更快响应
+            'adx_threshold': 20,    # 降低阈值，适应短期波动
+
+            # 辅助指标参数 (短期优化)
+            'macd_fast': 5,         # 快速MACD设置
+            'macd_slow': 13,        # 适合1分钟K线
+            'macd_signal': 4,       # 更快的信号线
+            'volume_period': 10,    # 10分钟成交量均线
+            'roc_period': 5,        # 5分钟动量
+            'atr_period': 8,        # 8分钟波动率
+
+            # 顺势交易RSI阈值 (针对短期调整)
+            'trend_rsi_buy_min': 35,   # 上涨趋势中RSI回调到此值以上才考虑做多
+            'trend_rsi_buy_max': 55,   # 上涨趋势中RSI在此值以下才考虑做多
+            'trend_rsi_sell_min': 45,  # 下跌趋势中RSI反弹到此值以上才考虑做空
+            'trend_rsi_sell_max': 65,  # 下跌趋势中RSI在此值以下才考虑做空
+
+            # 置信度权重 (强化趋势和动量权重)
+            'trend_weight': 0.35,      # 提高趋势权重
+            'rsi_weight': 0.25,
+            'macd_weight': 0.2,
+            'volume_weight': 0.1,      # 降低成交量权重(1分钟成交量噪音大)
+            'momentum_weight': 0.1,
+
+            # 10分钟事件合约特殊参数
+            'min_confidence_threshold': 65,  # 最低置信度阈值
+            'trend_confirmation_periods': 3, # 趋势确认需要的周期数
+        }
+        if params: default_params.update(params)
+        super().__init__(default_params)
+        self.name = "加强版RSI策略"
+        self.min_history_periods = max(
+            self.params['rsi_period'],
+            self.params['ema_slow'],
+            self.params['adx_period'],
+            self.params['volume_period']
+        ) + 5
+
+    def calculate_all_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
+        try:
+            df = super().calculate_all_indicators(df)
+
+            # 确保数据有效
+            if 'close' not in df.columns or len(df) < self.min_history_periods:
+                logger.warning(f"({self.name}) 数据不足或缺少close列")
+                return self._add_default_indicators(df)
+
+            # 1. RSI指标
+            df.ta.rsi(length=self.params['rsi_period'], append=True)
+
+            # 2. EMA均线
+            df.ta.ema(length=self.params['ema_fast'], append=True)
+            df.ta.ema(length=self.params['ema_slow'], append=True)
+
+            # 3. ADX趋势强度
+            df.ta.adx(length=self.params['adx_period'], append=True)
+
+            # 4. MACD
+            df.ta.macd(fast=self.params['macd_fast'],
+                      slow=self.params['macd_slow'],
+                      signal=self.params['macd_signal'], append=True)
+
+            # 5. 成交量指标
+            if 'volume' in df.columns:
+                df.ta.sma(close=df['volume'], length=self.params['volume_period'], append=True)
+                # 重命名成交量均线列
+                volume_sma_col = f"SMA_{self.params['volume_period']}"
+                if volume_sma_col in df.columns:
+                    df[f"Volume_SMA_{self.params['volume_period']}"] = df[volume_sma_col]
+
+            # 6. 价格动量ROC
+            df.ta.roc(length=self.params['roc_period'], append=True)
+
+            # 7. ATR波动率
+            df.ta.atr(length=self.params['atr_period'], append=True)
+
+            # 8. 计算自定义指标
+            self._calculate_custom_indicators(df)
+
+        except Exception as e:
+            logger.error(f"({self.name}) 计算指标时发生错误: {e}", exc_info=True)
+            return self._add_default_indicators(df)
+
+        return df
+
+    def _add_default_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
+        """添加默认指标值以防计算失败"""
+        default_indicators = {
+            f'RSI_{self.params["rsi_period"]}': 50.0,
+            f'EMA_{self.params["ema_fast"]}': df['close'].iloc[-1] if len(df) > 0 else 0,
+            f'EMA_{self.params["ema_slow"]}': df['close'].iloc[-1] if len(df) > 0 else 0,
+            f'ADX_{self.params["adx_period"]}': 20.0,
+            f'MACD_{self.params["macd_fast"]}_{self.params["macd_slow"]}_{self.params["macd_signal"]}': 0.0,
+            f'MACDs_{self.params["macd_fast"]}_{self.params["macd_slow"]}_{self.params["macd_signal"]}': 0.0,
+            f'ROC_{self.params["roc_period"]}': 0.0,
+            f'ATRr_{self.params["atr_period"]}': 1.0,
+            'market_regime': 'sideways',
+            'trend_strength': 0.0
+        }
+
+        for col, default_val in default_indicators.items():
+            if col not in df.columns:
+                df[col] = default_val
+
+        return df
+
+    def _calculate_custom_indicators(self, df: pd.DataFrame) -> None:
+        """计算自定义指标 - 针对1分钟K线优化"""
+        try:
+            # 市场形态识别
+            ema_fast_col = f'EMA_{self.params["ema_fast"]}'
+            ema_slow_col = f'EMA_{self.params["ema_slow"]}'
+            adx_col = f'ADX_{self.params["adx_period"]}'
+
+            # 初始化
+            df['market_regime'] = 'sideways'
+            df['trend_strength'] = 0.0
+            df['trend_confirmed'] = False
+
+            if all(col in df.columns for col in [ema_fast_col, ema_slow_col, adx_col]):
+                # 趋势强度 (标准化ADX，针对短期调整)
+                df['trend_strength'] = np.clip(df[adx_col] / 40.0, 0, 1)  # 降低分母适应短期
+
+                # 基础趋势条件
+                ema_bullish = df[ema_fast_col] > df[ema_slow_col]
+                ema_bearish = df[ema_fast_col] < df[ema_slow_col]
+                strong_trend = df[adx_col] > self.params['adx_threshold']
+                price_above_fast = df['close'] > df[ema_fast_col]
+                price_below_fast = df['close'] < df[ema_fast_col]
+
+                # 计算价格相对于均线的距离（过滤噪音）
+                price_ema_distance = abs(df['close'] - df[ema_fast_col]) / df[ema_fast_col]
+                significant_distance = price_ema_distance > 0.002  # 0.2%以上的距离
+
+                # 趋势确认：需要连续几个周期满足条件
+                confirmation_periods = self.params.get('trend_confirmation_periods', 3)
+
+                # 上涨趋势条件（更严格）
+                uptrend_base = ema_bullish & strong_trend & price_above_fast & significant_distance
+                # 下跌趋势条件（更严格）
+                downtrend_base = ema_bearish & strong_trend & price_below_fast & significant_distance
+
+                # 使用滚动窗口确认趋势
+                if len(df) >= confirmation_periods:
+                    uptrend_confirmed = uptrend_base.rolling(window=confirmation_periods, min_periods=confirmation_periods).sum() >= confirmation_periods
+                    downtrend_confirmed = downtrend_base.rolling(window=confirmation_periods, min_periods=confirmation_periods).sum() >= confirmation_periods
+
+                    df.loc[uptrend_confirmed, 'market_regime'] = 'uptrend'
+                    df.loc[downtrend_confirmed, 'market_regime'] = 'downtrend'
+                    df.loc[uptrend_confirmed | downtrend_confirmed, 'trend_confirmed'] = True
+
+                # 额外的趋势强度计算（结合价格动量）
+                if 'close' in df.columns and len(df) > 1:
+                    price_momentum = df['close'].pct_change(periods=5).fillna(0)  # 5分钟动量
+                    momentum_strength = np.clip(abs(price_momentum) * 100, 0, 1)  # 标准化动量强度
+                    df['trend_strength'] = np.maximum(df['trend_strength'], momentum_strength)
+
+        except Exception as e:
+            logger.warning(f"({self.name}) 计算自定义指标失败: {e}")
+
+    def generate_signals_from_indicators_on_window(self, df_window_with_indicators: pd.DataFrame) -> pd.DataFrame:
+        df_out = df_window_with_indicators.copy()
+        if 'signal' not in df_out.columns: df_out['signal'] = 0
+        if 'confidence' not in df_out.columns: df_out['confidence'] = 0
+
+        if len(df_out) < 2:
+            return df_out
+
+        # 获取当前和前一行数据
+        curr_row = df_out.iloc[-1]
+        prev_row = df_out.iloc[-2]
+
+        # 获取指标列名
+        rsi_col = f'RSI_{self.params["rsi_period"]}'
+        macd_col = f'MACD_{self.params["macd_fast"]}_{self.params["macd_slow"]}_{self.params["macd_signal"]}'
+        macd_signal_col = f'MACDs_{self.params["macd_fast"]}_{self.params["macd_slow"]}_{self.params["macd_signal"]}'
+
+        # 检查必要指标是否存在
+        if not all(col in curr_row for col in [rsi_col, 'market_regime']):
+            return df_out
+
+        # 获取市场形态和RSI值
+        market_regime = curr_row['market_regime']
+        curr_rsi = curr_row[rsi_col]
+        prev_rsi = prev_row[rsi_col] if rsi_col in prev_row else curr_rsi
+
+        if pd.isna(curr_rsi) or pd.isna(prev_rsi):
+            return df_out
+
+        # 根据市场形态生成信号
+        signal = 0
+        confidence_components = {}
+
+        # 检查趋势确认（针对1分钟K线的噪音过滤）
+        trend_confirmed = curr_row.get('trend_confirmed', False)
+
+        if market_regime == 'uptrend' and trend_confirmed:
+            signal, confidence_components = self._generate_uptrend_signal(curr_row, prev_row, curr_rsi, prev_rsi)
+        elif market_regime == 'downtrend' and trend_confirmed:
+            signal, confidence_components = self._generate_downtrend_signal(curr_row, prev_row, curr_rsi, prev_rsi)
+        else:  # sideways or unconfirmed trend
+            signal, confidence_components = self._generate_sideways_signal(curr_row, prev_row, curr_rsi, prev_rsi)
+
+        # 计算综合置信度
+        confidence = self._calculate_confidence(confidence_components, curr_row)
+
+        # 应用最低置信度阈值（10分钟事件合约需要高置信度）
+        min_confidence = self.params.get('min_confidence_threshold', 65)
+        if confidence < min_confidence:
+            signal = 0  # 置信度不足，不产生信号
+            confidence = 0
+
+        df_out.iloc[-1, df_out.columns.get_loc('signal')] = signal
+        df_out.iloc[-1, df_out.columns.get_loc('confidence')] = int(max(0, min(100, confidence)))
+
+        return df_out
+
+    def _generate_uptrend_signal(self, curr_row, prev_row, curr_rsi, prev_rsi):
+        """上涨趋势中的信号生成 - 只做多"""
+        signal = 0
+        confidence_components = {'trend': 1.0, 'rsi': 0.0, 'macd': 0.0, 'volume': 0.0, 'momentum': 0.0}
+
+        # 在上涨趋势中，只在RSI回调时寻找做多机会
+        if (self.params['trend_rsi_buy_min'] <= curr_rsi <= self.params['trend_rsi_buy_max'] and
+            prev_rsi < curr_rsi):  # RSI开始回升
+            signal = 1
+            # RSI置信度：越接近买入区间中值越好
+            rsi_optimal = (self.params['trend_rsi_buy_min'] + self.params['trend_rsi_buy_max']) / 2
+            rsi_distance = abs(curr_rsi - rsi_optimal)
+            confidence_components['rsi'] = max(0, 1 - rsi_distance / 20)
+
+        return signal, confidence_components
+
+    def _generate_downtrend_signal(self, curr_row, prev_row, curr_rsi, prev_rsi):
+        """下跌趋势中的信号生成 - 只做空"""
+        signal = 0
+        confidence_components = {'trend': 1.0, 'rsi': 0.0, 'macd': 0.0, 'volume': 0.0, 'momentum': 0.0}
+
+        # 在下跌趋势中，只在RSI反弹时寻找做空机会
+        if (self.params['trend_rsi_sell_min'] <= curr_rsi <= self.params['trend_rsi_sell_max'] and
+            prev_rsi > curr_rsi):  # RSI开始回落
+            signal = -1
+            # RSI置信度：越接近卖出区间中值越好
+            rsi_optimal = (self.params['trend_rsi_sell_min'] + self.params['trend_rsi_sell_max']) / 2
+            rsi_distance = abs(curr_rsi - rsi_optimal)
+            confidence_components['rsi'] = max(0, 1 - rsi_distance / 20)
+
+        return signal, confidence_components
+
+    def _generate_sideways_signal(self, curr_row, prev_row, curr_rsi, prev_rsi):
+        """震荡市场中的信号生成 - 传统RSI逆势"""
+        signal = 0
+        confidence_components = {'trend': 0.5, 'rsi': 0.0, 'macd': 0.0, 'volume': 0.0, 'momentum': 0.0}
+
+        # 传统RSI逆势交易
+        if curr_rsi < self.params['rsi_oversold'] and prev_rsi >= self.params['rsi_oversold']:
+            signal = 1
+            rsi_distance = self.params['rsi_oversold'] - curr_rsi
+            confidence_components['rsi'] = min(1.0, rsi_distance / 20)
+        elif curr_rsi > self.params['rsi_overbought'] and prev_rsi <= self.params['rsi_overbought']:
+            signal = -1
+            rsi_distance = curr_rsi - self.params['rsi_overbought']
+            confidence_components['rsi'] = min(1.0, rsi_distance / 20)
+
+        return signal, confidence_components
+
+    def _calculate_confidence(self, confidence_components, curr_row):
+        """计算综合置信度"""
+        try:
+            # 基础置信度
+            base_confidence = 50
+
+            # 各组件置信度加权
+            weighted_confidence = (
+                confidence_components.get('trend', 0) * self.params['trend_weight'] +
+                confidence_components.get('rsi', 0) * self.params['rsi_weight'] +
+                confidence_components.get('macd', 0) * self.params['macd_weight'] +
+                confidence_components.get('volume', 0) * self.params['volume_weight'] +
+                confidence_components.get('momentum', 0) * self.params['momentum_weight']
+            ) * 50  # 转换为0-50的加分
+
+            # 添加MACD确认
+            macd_col = f'MACD_{self.params["macd_fast"]}_{self.params["macd_slow"]}_{self.params["macd_signal"]}'
+            macd_signal_col = f'MACDs_{self.params["macd_fast"]}_{self.params["macd_slow"]}_{self.params["macd_signal"]}'
+
+            if all(col in curr_row for col in [macd_col, macd_signal_col]):
+                macd_val = curr_row[macd_col]
+                macd_signal = curr_row[macd_signal_col]
+                if not (pd.isna(macd_val) or pd.isna(macd_signal)):
+                    if macd_val > macd_signal:  # MACD金叉
+                        confidence_components['macd'] = 0.8
+                    elif macd_val < macd_signal:  # MACD死叉
+                        confidence_components['macd'] = 0.8
+
+            # 添加成交量确认
+            volume_sma_col = f"Volume_SMA_{self.params['volume_period']}"
+            if 'volume' in curr_row and volume_sma_col in curr_row:
+                if not (pd.isna(curr_row['volume']) or pd.isna(curr_row[volume_sma_col])):
+                    volume_ratio = curr_row['volume'] / curr_row[volume_sma_col]
+                    if volume_ratio > 1.2:  # 放量
+                        confidence_components['volume'] = min(1.0, volume_ratio / 2)
+
+            # 添加动量确认
+            roc_col = f'ROC_{self.params["roc_period"]}'
+            if roc_col in curr_row and not pd.isna(curr_row[roc_col]):
+                roc_val = abs(curr_row[roc_col])
+                confidence_components['momentum'] = min(1.0, roc_val / 5)  # ROC绝对值越大动量越强
+
+            # 重新计算加权置信度
+            weighted_confidence = (
+                confidence_components.get('trend', 0) * self.params['trend_weight'] +
+                confidence_components.get('rsi', 0) * self.params['rsi_weight'] +
+                confidence_components.get('macd', 0) * self.params['macd_weight'] +
+                confidence_components.get('volume', 0) * self.params['volume_weight'] +
+                confidence_components.get('momentum', 0) * self.params['momentum_weight']
+            ) * 50
+
+            # 趋势强度调整
+            if 'trend_strength' in curr_row and not pd.isna(curr_row['trend_strength']):
+                trend_bonus = curr_row['trend_strength'] * 10
+                weighted_confidence += trend_bonus
+
+            return base_confidence + weighted_confidence
+
+        except Exception as e:
+            logger.warning(f"({self.name}) 计算置信度失败: {e}")
+            return 50
+
+    def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
+        """完整的信号生成方法"""
+        df_with_indicators = self.calculate_all_indicators(df.copy())
+        df_signaled = df_with_indicators.copy()
+        if 'signal' not in df_signaled.columns: df_signaled['signal'] = 0
+        if 'confidence' not in df_signaled.columns: df_signaled['confidence'] = 0
+
+        # 逐行生成信号（从有足够历史数据开始）
+        for i in range(self.min_history_periods, len(df_signaled)):
+            # 创建窗口数据
+            window_start = max(0, i - 1)
+            window_df = df_signaled.iloc[window_start:i+1].copy()
+
+            # 生成信号
+            result_df = self.generate_signals_from_indicators_on_window(window_df)
+
+            if len(result_df) > 0:
+                df_signaled.iloc[i, df_signaled.columns.get_loc('signal')] = result_df.iloc[-1]['signal']
+                df_signaled.iloc[i, df_signaled.columns.get_loc('confidence')] = result_df.iloc[-1]['confidence']
+
+        return df_signaled
+
 # --- get_available_strategies (no change needed, but ensure it lists these classes) ---
 def get_available_strategies() -> List[Dict[str, Any]]:
     """获取所有可用策略的列表"""
@@ -650,6 +1018,41 @@ def get_available_strategies() -> List[Dict[str, Any]]:
                 {'name': 'rsi_period', 'type': 'int', 'default': 14, 'min': 5, 'max': 30, 'description': 'RSI周期'},
                 {'name': 'rsi_overbought', 'type': 'int', 'default': 70, 'min': 1, 'max': 99, 'description': 'RSI超买阈值'},
                 {'name': 'rsi_oversold', 'type': 'int', 'default': 30, 'min': 1, 'max': 99, 'description': 'RSI超卖阈值'},
+            ]
+        },
+
+        {
+            'id': 'enhanced_rsi', 'name': '加强版RSI策略(1分钟K线)', 'class': EnhancedRSIStrategy,
+            'description': '专为1分钟K线和10分钟事件合约优化。智能识别市场趋势，在上涨趋势中只做多，下跌趋势中只做空，震荡市场中做逆势交易。结合快速MACD、成交量等多个指标提高胜率。',
+            'parameters': [
+                # --- RSI参数 (1分钟K线优化) ---
+                {'name': 'rsi_period', 'type': 'int', 'default': 9, 'min': 5, 'max': 15, 'description': 'RSI周期(推荐9，适合1分钟)'},
+                {'name': 'rsi_overbought', 'type': 'int', 'default': 75, 'min': 70, 'max': 85, 'description': 'RSI超买阈值（震荡市场）'},
+                {'name': 'rsi_oversold', 'type': 'int', 'default': 25, 'min': 15, 'max': 30, 'description': 'RSI超卖阈值（震荡市场）'},
+
+                # --- 趋势识别参数 (短期优化) ---
+                {'name': 'ema_fast', 'type': 'int', 'default': 5, 'min': 3, 'max': 8, 'description': '快速EMA周期(5分钟)'},
+                {'name': 'ema_slow', 'type': 'int', 'default': 15, 'min': 10, 'max': 20, 'description': '慢速EMA周期(15分钟)'},
+                {'name': 'adx_period', 'type': 'int', 'default': 8, 'min': 6, 'max': 12, 'description': 'ADX周期(快速响应)'},
+                {'name': 'adx_threshold', 'type': 'int', 'default': 20, 'min': 15, 'max': 30, 'description': 'ADX趋势阈值'},
+
+                # --- 顺势交易RSI阈值 (10分钟事件合约优化) ---
+                {'name': 'trend_rsi_buy_min', 'type': 'int', 'default': 35, 'min': 25, 'max': 45, 'description': '上涨趋势RSI买入下限'},
+                {'name': 'trend_rsi_buy_max', 'type': 'int', 'default': 55, 'min': 45, 'max': 65, 'description': '上涨趋势RSI买入上限'},
+                {'name': 'trend_rsi_sell_min', 'type': 'int', 'default': 45, 'min': 35, 'max': 55, 'description': '下跌趋势RSI卖出下限'},
+                {'name': 'trend_rsi_sell_max', 'type': 'int', 'default': 65, 'min': 55, 'max': 75, 'description': '下跌趋势RSI卖出上限'},
+
+                # --- 快速辅助指标参数 ---
+                {'name': 'macd_fast', 'type': 'int', 'default': 5, 'min': 3, 'max': 8, 'description': 'MACD快线周期(快速设置)'},
+                {'name': 'macd_slow', 'type': 'int', 'default': 13, 'min': 10, 'max': 18, 'description': 'MACD慢线周期'},
+                {'name': 'macd_signal', 'type': 'int', 'default': 4, 'min': 3, 'max': 6, 'description': 'MACD信号线周期'},
+                {'name': 'volume_period', 'type': 'int', 'default': 10, 'min': 5, 'max': 15, 'description': '成交量均线周期(10分钟)'},
+                {'name': 'roc_period', 'type': 'int', 'default': 5, 'min': 3, 'max': 8, 'description': '价格动量周期(5分钟)'},
+                {'name': 'atr_period', 'type': 'int', 'default': 8, 'min': 5, 'max': 12, 'description': 'ATR周期'},
+
+                # --- 10分钟事件合约特殊参数 ---
+                {'name': 'min_confidence_threshold', 'type': 'int', 'default': 65, 'min': 50, 'max': 80, 'description': '最低置信度阈值(%)'},
+                {'name': 'trend_confirmation_periods', 'type': 'int', 'default': 3, 'min': 2, 'max': 5, 'description': '趋势确认周期数'},
             ]
         },
 
