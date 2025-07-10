@@ -123,21 +123,22 @@
                                                     <input type="number" class="form-control form-control-sm"
                                                            :placeholder="`最小值 (${param.min})`"
                                                            v-model.number="parameterRanges[param.name].min"
-                                                           :step="param.step || 1">
+                                                           :step="param.type === 'int' ? 1 : (param.step || 0.01)">
                                                     <small class="text-muted">最小</small>
                                                 </div>
                                                 <div class="col-4">
                                                     <input type="number" class="form-control form-control-sm"
                                                            :placeholder="`最大值 (${param.max})`"
                                                            v-model.number="parameterRanges[param.name].max"
-                                                           :step="param.step || 1">
+                                                           :step="param.type === 'int' ? 1 : (param.step || 0.01)">
                                                     <small class="text-muted">最大</small>
                                                 </div>
                                                 <div class="col-4">
                                                     <input type="number" class="form-control form-control-sm"
                                                            :placeholder="`步长 (${param.step || 1})`"
                                                            v-model.number="parameterRanges[param.name].step"
-                                                           :step="param.step || 1" min="0.01">
+                                                           :step="param.type === 'int' ? 1 : (param.step || 0.01)"
+                                                           :min="param.type === 'int' ? 1 : 0.01">
                                                     <small class="text-muted">步长</small>
                                                 </div>
                                             </div>
