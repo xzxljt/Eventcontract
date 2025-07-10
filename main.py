@@ -27,6 +27,9 @@ import uuid # 唯一ID生成
 
 import logging
 
+# 导入优化引擎
+from optimization_engine import get_optimization_engine
+
 # 配置日志记录
 # 可以配置输出到文件和控制台
 import sys
@@ -2545,6 +2548,14 @@ async def read_autox_manager():
     except FileNotFoundError:
         return HTMLResponse(content="<html><head><title>AutoX Manager</title></head><body><h1>AutoX Manager</h1><p>管理页面HTML文件 (autox-manager.html) 未找到。</p></body></html>", status_code=404)
 
+@app.get("/optimization", response_class=HTMLResponse)
+async def read_optimization():
+    try:
+        with open("frontend/optimization.html", "r", encoding="utf-8") as f:
+            return HTMLResponse(content=f.read())
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="optimization.html not found")
+
 
 # --- API 端点 ---
 @app.get("/api/symbols", response_model=List[str])
@@ -2577,6 +2588,186 @@ async def get_prediction_strategies_endpoint(): # 基本不变，get_available_s
 async def get_investment_strategies_endpoint(): # 基本不变
     try: return [{'id': s['id'], 'name': s['name'], 'description': s['description'], 'parameters': s['parameters']} for s in get_available_investment_strategies()]
     except Exception as e: raise HTTPException(status_code=500, detail=f"获取投资策略失败: {str(e)}")
+
+# --- 策略参数优化相关API ---
+
+class OptimizationRequest(BaseModel):
+    """优化请求模型"""
+    symbol: str = Field(..., description="交易对")
+    interval: str = Field(..., description="K线周期")
+    start_date: str = Field(..., description="开始日期")
+    end_date: str = Field(..., description="结束日期")
+    strategy_id: str = Field(..., description="策略ID")
+    strategy_params_ranges: Dict[str, Dict[str, Any]] = Field(..., description="策略参数范围")
+    event_period: str = Field(default="10m", description="事件周期")
+    investment_strategy_id: str = Field(default="fixed", description="投资策略ID")
+    investment_strategy_params: Optional[Dict[str, Any]] = Field(default=None, description="投资策略参数")
+    exclude_time_ranges: Optional[List[Dict[str, str]]] = Field(default=None, description="排除时间段")
+    exclude_weekdays: Optional[List[int]] = Field(default=None, description="排除星期")
+    max_combinations: int = Field(default=10000, description="最大组合数")
+    min_trades: int = Field(default=10, description="最小交易次数")
+    evaluation_weights: Optional[Dict[str, float]] = Field(default=None, description="评估权重")
+
+@app.post("/api/optimization/start")
+async def start_optimization(request: OptimizationRequest):
+    """启动策略参数优化"""
+    try:
+        engine = get_optimization_engine()
+
+        # 转换请求为配置字典
+        config = {
+            'symbol': request.symbol,
+            'interval': request.interval,
+            'start_date': request.start_date,
+            'end_date': request.end_date,
+            'strategy_id': request.strategy_id,
+            'strategy_params_ranges': request.strategy_params_ranges,
+            'event_period': request.event_period,
+            'investment_strategy_id': request.investment_strategy_id,
+            'investment_strategy_params': request.investment_strategy_params or {'amount': 20.0},
+            'exclude_time_ranges': request.exclude_time_ranges or [],
+            'exclude_weekdays': request.exclude_weekdays or [],
+            'max_combinations': request.max_combinations,
+            'min_trades': request.min_trades,
+            'evaluation_weights': request.evaluation_weights
+        }
+
+        optimization_id = engine.optimize_strategy(config)
+
+        return {
+            'status': 'success',
+            'optimization_id': optimization_id,
+            'message': '优化任务已启动'
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"启动优化失败: {str(e)}")
+
+@app.get("/api/optimization/progress/{optimization_id}")
+async def get_optimization_progress(optimization_id: str):
+    """获取优化进度"""
+    try:
+        engine = get_optimization_engine()
+        progress = engine.get_optimization_progress(optimization_id)
+
+        if progress is None:
+            raise HTTPException(status_code=404, detail="优化任务不存在")
+
+        return progress
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取进度失败: {str(e)}")
+
+@app.post("/api/optimization/stop/{optimization_id}")
+async def stop_optimization(optimization_id: str):
+    """停止优化"""
+    try:
+        engine = get_optimization_engine()
+        success = engine.stop_optimization(optimization_id)
+
+        if success:
+            return {'status': 'success', 'message': '优化已停止'}
+        else:
+            return {'status': 'error', 'message': '停止优化失败'}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"停止优化失败: {str(e)}")
+
+@app.get("/api/optimization/results/{optimization_id}")
+async def get_optimization_results(optimization_id: str, limit: Optional[int] = Query(None, description="结果数量限制")):
+    """获取优化结果"""
+    try:
+        engine = get_optimization_engine()
+        results = engine.get_optimization_results(optimization_id, limit)
+
+        if 'error' in results:
+            raise HTTPException(status_code=404, detail=results['error'])
+
+        return results
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取结果失败: {str(e)}")
+
+@app.get("/api/strategies/{strategy_id}/parameter_ranges")
+async def get_strategy_parameter_ranges(strategy_id: str):
+    """获取策略参数范围"""
+    try:
+        engine = get_optimization_engine()
+        ranges = engine.get_strategy_parameter_ranges(strategy_id)
+
+        if 'error' in ranges:
+            raise HTTPException(status_code=404, detail=ranges['error'])
+
+        return ranges
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取参数范围失败: {str(e)}")
+
+@app.get("/api/strategies/{strategy_id}/parameter_presets")
+async def get_strategy_parameter_presets(strategy_id: str):
+    """获取策略参数预设"""
+    try:
+        engine = get_optimization_engine()
+        presets = engine.get_parameter_presets(strategy_id)
+
+        if 'error' in presets:
+            raise HTTPException(status_code=404, detail=presets['error'])
+
+        return presets
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取参数预设失败: {str(e)}")
+
+@app.post("/api/optimization/export/{optimization_id}")
+async def export_optimization_results(optimization_id: str, format: str = Query("csv", description="导出格式")):
+    """导出优化结果"""
+    try:
+        engine = get_optimization_engine()
+
+        # 生成文件路径
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"optimization_results_{optimization_id}_{timestamp}.{format}"
+        file_path = os.path.join("logs", filename)
+
+        success = engine.export_optimization_results(optimization_id, file_path, format)
+
+        if success:
+            return {
+                'status': 'success',
+                'file_path': file_path,
+                'message': '结果导出成功'
+            }
+        else:
+            return {
+                'status': 'error',
+                'message': '结果导出失败'
+            }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"导出结果失败: {str(e)}")
+
+@app.delete("/api/optimization/{optimization_id}")
+async def cleanup_optimization(optimization_id: str):
+    """清理优化数据"""
+    try:
+        engine = get_optimization_engine()
+        engine.cleanup_optimization(optimization_id)
+
+        return {
+            'status': 'success',
+            'message': '优化数据已清理'
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"清理数据失败: {str(e)}")
 
 @app.post("/api/backtest") # 修改：get_historical_klines 和 Backtester.run() 移至线程池
 async def run_backtest_endpoint(request: BacktestRequest):

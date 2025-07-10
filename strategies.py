@@ -1015,9 +1015,9 @@ def get_available_strategies() -> List[Dict[str, Any]]:
             'id': 'simple_rsi', 'name': '简单RSI策略', 'class': SimpleRSIStrategy,
             'description': '使用RSI指标判断超买超卖',
             'parameters': [
-                {'name': 'rsi_period', 'type': 'int', 'default': 14, 'min': 5, 'max': 30, 'description': 'RSI周期'},
-                {'name': 'rsi_overbought', 'type': 'int', 'default': 70, 'min': 1, 'max': 99, 'description': 'RSI超买阈值'},
-                {'name': 'rsi_oversold', 'type': 'int', 'default': 30, 'min': 1, 'max': 99, 'description': 'RSI超卖阈值'},
+                {'name': 'rsi_period', 'type': 'int', 'default': 14, 'min': 5, 'max': 30, 'step': 1, 'description': 'RSI周期'},
+                {'name': 'rsi_overbought', 'type': 'int', 'default': 70, 'min': 1, 'max': 99, 'step': 1, 'description': 'RSI超买阈值'},
+                {'name': 'rsi_oversold', 'type': 'int', 'default': 30, 'min': 1, 'max': 99, 'step': 1, 'description': 'RSI超卖阈值'},
             ]
         },
 
