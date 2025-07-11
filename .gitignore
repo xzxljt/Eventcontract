@@ -51,3 +51,7 @@ optimizer.py
 SignalConfluence.md
 
 venv-py311/
+
+# Database files
+*.db
+data/*.db
