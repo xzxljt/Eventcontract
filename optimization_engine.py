@@ -79,21 +79,38 @@ class ParameterValidator:
             param_ranges = config['strategy_params_ranges']
             if not isinstance(param_ranges, dict) or not param_ranges:
                 return False, "策略参数范围不能为空"
-            
+
+            # 检查是否至少有一个参数启用优化或有固定值
+            has_optimization_param = False
+            has_any_param = False
+
             for param_name, param_range in param_ranges.items():
                 if not isinstance(param_range, dict):
                     return False, f"参数 {param_name} 的范围定义必须是字典"
-                
-                required_range_fields = ['min', 'max', 'step']
-                for field in required_range_fields:
-                    if field not in param_range:
-                        return False, f"参数 {param_name} 缺少范围字段: {field}"
-                
-                if param_range['min'] > param_range['max']:
-                    return False, f"参数 {param_name} 的最小值不能大于最大值"
-                
-                if param_range['step'] <= 0:
-                    return False, f"参数 {param_name} 的步长必须大于0"
+
+                has_any_param = True
+
+                # 检查参数是否启用优化
+                if param_range.get('enabled', True):
+                    # 启用优化的参数需要验证范围字段
+                    has_optimization_param = True
+                    required_range_fields = ['min', 'max', 'step']
+                    for field in required_range_fields:
+                        if field not in param_range:
+                            return False, f"参数 {param_name} 缺少范围字段: {field}"
+
+                    if param_range['min'] > param_range['max']:
+                        return False, f"参数 {param_name} 的最小值不能大于最大值"
+
+                    if param_range['step'] <= 0:
+                        return False, f"参数 {param_name} 的步长必须大于0"
+                else:
+                    # 固定值参数需要验证fixed_value字段
+                    if 'fixed_value' not in param_range:
+                        return False, f"固定参数 {param_name} 缺少 fixed_value 字段"
+
+            if not has_any_param:
+                return False, "至少需要配置一个参数"
             
             return True, "验证通过"
             
@@ -102,17 +119,26 @@ class ParameterValidator:
     
     @staticmethod
     def calculate_total_combinations(param_ranges: Dict[str, Dict[str, Any]]) -> int:
-        """计算参数组合总数"""
+        """计算参数组合总数，只计算启用优化的参数"""
         total = 1
+        optimization_param_count = 0
+
         for param_name, param_range in param_ranges.items():
-            min_val = param_range['min']
-            max_val = param_range['max']
-            step = param_range['step']
-            
-            # 计算该参数的可能值数量
-            count = int((max_val - min_val) / step) + 1
-            total *= count
-        
+            # 只计算启用优化的参数
+            if param_range.get('enabled', True):
+                optimization_param_count += 1
+                min_val = param_range['min']
+                max_val = param_range['max']
+                step = param_range['step']
+
+                # 计算该参数的可能值数量
+                count = int((max_val - min_val) / step) + 1
+                total *= count
+
+        # 如果没有启用优化的参数，返回1（只有一个固定值组合）
+        if optimization_param_count == 0:
+            return 1
+
         return total
     
     @staticmethod
@@ -349,13 +375,37 @@ class GridSearchOptimizer:
         self._lock = threading.Lock()
 
     def generate_parameter_combinations(self, param_ranges: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """生成所有参数组合"""
+        """生成所有参数组合，支持部分参数固定值"""
         try:
-            param_names = list(param_ranges.keys())
+            # 分离优化参数和固定参数
+            optimization_params = {}
+            fixed_params = {}
+
+            for param_name, param_config in param_ranges.items():
+                if param_config.get('enabled', True):
+                    # 启用优化的参数
+                    optimization_params[param_name] = param_config
+                else:
+                    # 固定值参数
+                    fixed_params[param_name] = param_config.get('fixed_value', 0)
+
+            logger.info(f"优化参数: {list(optimization_params.keys())}")
+            logger.info(f"固定参数: {list(fixed_params.keys())}")
+
+            # 如果没有需要优化的参数，返回单个组合（全部固定值）
+            if not optimization_params:
+                if fixed_params:
+                    return [fixed_params]
+                else:
+                    logger.warning("没有任何参数配置")
+                    return []
+
+            # 生成优化参数的组合
+            param_names = list(optimization_params.keys())
             param_values = []
 
             for param_name in param_names:
-                param_range = param_ranges[param_name]
+                param_range = optimization_params[param_name]
                 min_val = param_range['min']
                 max_val = param_range['max']
                 step = param_range['step']
@@ -372,7 +422,9 @@ class GridSearchOptimizer:
             # 生成所有组合
             combinations = []
             for combination in itertools.product(*param_values):
+                # 创建参数字典，包含优化参数和固定参数
                 param_dict = dict(zip(param_names, combination))
+                param_dict.update(fixed_params)  # 添加固定参数
                 combinations.append(param_dict)
 
             logger.info(f"生成了 {len(combinations)} 个参数组合")
@@ -910,27 +962,76 @@ class OptimizationEngine:
             return None, None
 
     def _apply_time_exclusions(self, df: pd.DataFrame, optimization_config: Dict[str, Any]) -> pd.DataFrame:
-        """应用时间排除逻辑"""
+        """应用时间过滤逻辑"""
         try:
             if df.empty:
                 return df
 
-            # 排除特定时间段
+            # 处理包含时间段（新增逻辑）
+            include_time_ranges = optimization_config.get('include_time_ranges', [])
+            if include_time_ranges:
+                # 如果设置了包含时间段，只保留这些时间段内的数据
+                combined_mask = pd.Series([False] * len(df), index=df.index)
+
+                for time_range in include_time_ranges:
+                    start_time = time_range['start']
+                    end_time = time_range['end']
+
+                    try:
+                        # 解析时间字符串
+                        start_time_obj = pd.to_datetime(start_time).time()
+                        end_time_obj = pd.to_datetime(end_time).time()
+
+                        # 处理跨天情况
+                        if start_time_obj <= end_time_obj:
+                            # 正常情况：开始时间 <= 结束时间
+                            mask = (df.index.time >= start_time_obj) & (df.index.time <= end_time_obj)
+                        else:
+                            # 跨天情况：开始时间 > 结束时间
+                            mask = (df.index.time >= start_time_obj) | (df.index.time <= end_time_obj)
+
+                        combined_mask = combined_mask | mask
+                        logger.info(f"添加包含时间段 {start_time}-{end_time}")
+
+                    except Exception as time_error:
+                        logger.warning(f"解析包含时间范围 {start_time}-{end_time} 时发生错误: {time_error}")
+                        continue
+
+                df = df[combined_mask]
+                logger.info(f"应用包含时间段过滤后，剩余数据: {len(df)} 条")
+
+            # 排除特定时间段（保留原有逻辑，用于向后兼容）
             exclude_time_ranges = optimization_config.get('exclude_time_ranges', [])
             for time_range in exclude_time_ranges:
                 start_time = time_range['start']
                 end_time = time_range['end']
 
-                # 过滤时间段
-                mask = ~((df.index.time >= pd.to_datetime(start_time).time()) &
-                        (df.index.time <= pd.to_datetime(end_time).time()))
-                df = df[mask]
+                try:
+                    # 解析时间字符串
+                    start_time_obj = pd.to_datetime(start_time).time()
+                    end_time_obj = pd.to_datetime(end_time).time()
+
+                    # 处理跨天情况
+                    if start_time_obj <= end_time_obj:
+                        # 正常情况：开始时间 <= 结束时间
+                        mask = ~((df.index.time >= start_time_obj) & (df.index.time <= end_time_obj))
+                    else:
+                        # 跨天情况：开始时间 > 结束时间
+                        mask = ~((df.index.time >= start_time_obj) | (df.index.time <= end_time_obj))
+
+                    df = df[mask]
+                    logger.info(f"应用排除时间段 {start_time}-{end_time}，剩余数据: {len(df)} 条")
+
+                except Exception as time_error:
+                    logger.warning(f"解析排除时间范围 {start_time}-{end_time} 时发生错误: {time_error}")
+                    continue
 
             # 排除特定星期
             exclude_weekdays = optimization_config.get('exclude_weekdays', [])
             if exclude_weekdays:
                 mask = ~df.index.weekday.isin(exclude_weekdays)
                 df = df[mask]
+                logger.info(f"应用星期过滤 {exclude_weekdays}，剩余数据: {len(df)} 条")
 
             return df
 

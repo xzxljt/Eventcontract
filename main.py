@@ -2603,6 +2603,7 @@ class OptimizationRequest(BaseModel):
     investment_strategy_id: str = Field(default="fixed", description="投资策略ID")
     investment_strategy_params: Optional[Dict[str, Any]] = Field(default=None, description="投资策略参数")
     exclude_time_ranges: Optional[List[Dict[str, str]]] = Field(default=None, description="排除时间段")
+    include_time_ranges: Optional[List[Dict[str, str]]] = Field(default=None, description="包含时间段")
     exclude_weekdays: Optional[List[int]] = Field(default=None, description="排除星期")
     max_combinations: int = Field(default=10000, description="最大组合数")
     min_trades: int = Field(default=10, description="最小交易次数")
@@ -2626,6 +2627,7 @@ async def start_optimization(request: OptimizationRequest):
             'investment_strategy_id': request.investment_strategy_id,
             'investment_strategy_params': request.investment_strategy_params or {'amount': 20.0},
             'exclude_time_ranges': request.exclude_time_ranges or [],
+            'include_time_ranges': request.include_time_ranges or [],
             'exclude_weekdays': request.exclude_weekdays or [],
             'max_combinations': request.max_combinations,
             'min_trades': request.min_trades,

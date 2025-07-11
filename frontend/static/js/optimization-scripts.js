@@ -39,11 +39,27 @@
                         min_trades: 10
                     },
 
+                    // 时间和星期过滤
+                    timeFilter: {
+                        startTime: '',
+                        endTime: ''
+                    },
+                    excludedWeekdays: [], // 默认不排除任何星期
+                    weekdays: [
+                        { label: '一', value: '1' }, { label: '二', value: '2' },
+                        { label: '三', value: '3' }, { label: '四', value: '4' },
+                        { label: '五', value: '5' }, { label: '六', value: '6' },
+                        { label: '日', value: '0' }
+                    ],
+
                     // 策略相关
                     selectedStrategy: null,
                     selectedPreset: '',
                     parameterRanges: {},
                     strategyPresets: {},
+
+                    // 参数优化配置 - 新增
+                    parameterOptimizationConfig: {}, // 存储每个参数的启用状态和固定值
 
                     // 优化状态
                     isOptimizing: false,
@@ -93,8 +109,11 @@
                     for (const param of this.selectedStrategy.parameters) {
                         // 确保param存在且有name属性
                         if (param && param.name) {
+                            const config = this.parameterOptimizationConfig[param.name];
                             const range = this.parameterRanges[param.name];
-                            if (range && typeof range.min === 'number' && typeof range.max === 'number' && range.step > 0) {
+
+                            // 只计算启用优化的参数
+                            if (config?.enabled && range && typeof range.min === 'number' && typeof range.max === 'number' && range.step > 0) {
                                 const count = Math.floor((range.max - range.min) / range.step) + 1;
                                 total *= Math.max(1, count);
                             }
@@ -173,6 +192,16 @@
                     return this.favoriteSymbols.includes(symbol);
                 },
 
+                toggleWeekday(dayValue) {
+                    // excludedWeekdays存储的是要排除的星期
+                    const index = this.excludedWeekdays.indexOf(dayValue);
+                    if (index > -1) {
+                        this.excludedWeekdays.splice(index, 1); // 取消排除
+                    } else {
+                        this.excludedWeekdays.push(dayValue); // 添加到排除列表
+                    }
+                },
+
                 toggleFavorite(symbol) {
                     if (!symbol) return;
 
@@ -191,11 +220,13 @@
                 async onStrategyChange() {
                     if (!this.selectedStrategy) {
                         this.parameterRanges = {};
+                        this.parameterOptimizationConfig = {};
                         return;
                     }
 
                     // 立即初始化参数范围，避免模板访问undefined
                     this.parameterRanges = {};
+                    this.parameterOptimizationConfig = {};
 
                     // 确保parameters存在且是数组
                     if (Array.isArray(this.selectedStrategy.parameters)) {
@@ -208,12 +239,21 @@
                                     max: typeof param.max === 'number' ? param.max : 100,
                                     step: typeof param.step === 'number' ? param.step : 1
                                 };
+
+                                // 初始化参数优化配置 - 默认启用所有参数
+                                this.parameterOptimizationConfig[param.name] = {
+                                    enabled: true,
+                                    fixedValue: typeof param.default === 'number' ? param.default :
+                                              (typeof param.min === 'number' ? param.min : 0)
+                                };
+
                                 console.log(`初始化参数 ${param.name}:`, this.parameterRanges[param.name]);
                             }
                         });
                     }
 
                     console.log('初始化后的parameterRanges:', this.parameterRanges);
+                    console.log('初始化后的parameterOptimizationConfig:', this.parameterOptimizationConfig);
 
                     try {
                         // 获取策略参数范围
@@ -272,6 +312,50 @@
                     showToast('成功', `已应用${this.selectedPreset}型参数预设`, 'success');
                 },
 
+                // 新增：切换参数优化状态
+                toggleParameterOptimization(paramName) {
+                    console.log(`切换参数 ${paramName} 的优化状态`);
+
+                    if (!this.parameterOptimizationConfig[paramName]) {
+                        console.log(`参数 ${paramName} 的配置不存在`);
+                        return;
+                    }
+
+                    const currentConfig = this.parameterOptimizationConfig[paramName];
+                    const newEnabled = !currentConfig.enabled;
+
+                    console.log(`当前状态: ${currentConfig.enabled}, 新状态: ${newEnabled}`);
+
+                    // 直接修改对象属性（Vue 3中对象是响应式的）
+                    this.parameterOptimizationConfig[paramName].enabled = newEnabled;
+
+                    // 如果禁用优化，确保有固定值
+                    if (!newEnabled) {
+                        const range = this.parameterRanges[paramName];
+                        if (range && this.parameterOptimizationConfig[paramName].fixedValue === undefined) {
+                            this.parameterOptimizationConfig[paramName].fixedValue = range.min;
+                        }
+                    }
+
+                    console.log(`参数 ${paramName} 优化状态已切换为:`, this.parameterOptimizationConfig[paramName].enabled);
+                },
+
+                // 新增：设置参数固定值
+                setParameterFixedValue(paramName, value) {
+                    if (!this.parameterOptimizationConfig[paramName]) return;
+
+                    this.parameterOptimizationConfig[paramName].fixedValue = parseFloat(value) || 0;
+                    console.log(`参数 ${paramName} 固定值设置为:`, this.parameterOptimizationConfig[paramName].fixedValue);
+                },
+
+                // 测试方法：检查参数配置状态
+                testParameterConfig() {
+                    console.log('当前参数配置状态:');
+                    console.log('parameterOptimizationConfig:', this.parameterOptimizationConfig);
+                    console.log('parameterRanges:', this.parameterRanges);
+                    console.log('selectedStrategy:', this.selectedStrategy);
+                },
+
                 async startOptimization() {
                     this.fieldErrors = {};
 
@@ -282,16 +366,66 @@
                     }
 
                     try {
+                        // 构建包含优化配置的参数范围数据
+                        const strategyParamsRanges = {};
+                        for (const paramName in this.parameterRanges) {
+                            const range = this.parameterRanges[paramName];
+                            const config = this.parameterOptimizationConfig[paramName];
+
+                            if (config?.enabled) {
+                                // 启用优化的参数，发送范围配置
+                                strategyParamsRanges[paramName] = {
+                                    min: range.min,
+                                    max: range.max,
+                                    step: range.step,
+                                    enabled: true
+                                };
+                            } else {
+                                // 禁用优化的参数，发送固定值配置
+                                strategyParamsRanges[paramName] = {
+                                    enabled: false,
+                                    fixed_value: config?.fixedValue || range.min
+                                };
+                            }
+                        }
+
                         const requestData = {
                             symbol: this.optimizationParams.symbol,
                             interval: this.optimizationParams.interval,
                             start_date: this.optimizationParams.start_date,
                             end_date: this.optimizationParams.end_date,
                             strategy_id: this.selectedStrategy.id,
-                            strategy_params_ranges: this.parameterRanges,
+                            strategy_params_ranges: strategyParamsRanges,
                             max_combinations: this.optimizationParams.max_combinations,
                             min_trades: this.optimizationParams.min_trades
                         };
+
+                        // 添加时间过滤参数 - 现在是包含逻辑，需要转换为排除逻辑
+                        if (this.timeFilter.startTime && this.timeFilter.endTime) {
+                            // 前端设置的是交易时间段，后端需要的是排除时间段
+                            // 我们需要计算出要排除的时间段（即非交易时间段）
+                            const startTime = this.timeFilter.startTime;
+                            const endTime = this.timeFilter.endTime;
+
+                            // 如果设置了交易时间段，我们需要排除其他时间段
+                            // 这里简化处理：将交易时间段作为包含时间段发送给后端
+                            // 后端需要相应修改逻辑来处理包含而非排除
+                            requestData.include_time_ranges = [{
+                                start: startTime,
+                                end: endTime
+                            }];
+                        }
+
+                        // 添加星期过滤参数 - excludedWeekdays存储的是要排除的星期
+                        if (this.excludedWeekdays.length > 0) {
+                            // 将前端的星期值(0-6)转换为Python的weekday值(0-6，Monday=0)
+                            // 前端: 0=周日, 1=周一, ..., 6=周六
+                            // Python: 0=周一, 1=周二, ..., 6=周日
+                            requestData.exclude_weekdays = this.excludedWeekdays.map(day => {
+                                const dayNum = parseInt(day);
+                                return dayNum === 0 ? 6 : dayNum - 1; // 0(周日)->6, 1(周一)->0, ..., 6(周六)->5
+                            });
+                        }
 
                         const response = await fetch('/api/optimization/start', {
                             method: 'POST',

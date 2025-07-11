@@ -120,32 +120,65 @@
                                     <label class="form-label">参数范围配置</label>
                                     <div class="parameter-range-container">
                                         <template v-for="(param, index) in selectedStrategy.parameters" :key="param?.name || index">
-                                            <div v-if="param && param.name && parameterRanges[param.name]" class="mb-3">
-                                            <label class="form-label small fw-bold">{{ param?.description || param?.name || '参数' }}</label>
-                                            <div class="row g-2">
-                                                <div class="col-4">
-                                                    <input type="number" class="form-control form-control-sm"
-                                                           :placeholder="`最小值 (${param?.min || 0})`"
-                                                           v-model.number="parameterRanges[param.name].min"
-                                                           :step="param?.type === 'int' ? 1 : (param?.step || 0.01)">
-                                                    <small class="text-muted">最小</small>
+                                            <div v-if="param && param.name && parameterRanges[param.name] && parameterOptimizationConfig[param.name]" class="mb-3">
+                                                <!-- 参数标题和启用开关 -->
+                                                <div class="d-flex justify-content-between align-items-center mb-2">
+                                                    <label class="form-label small fw-bold mb-0">{{ param?.description || param?.name || '参数' }}</label>
+                                                    <div class="form-check form-switch">
+                                                        <input class="form-check-input" type="checkbox"
+                                                               :id="`param-switch-${param.name}`"
+                                                               :checked="parameterOptimizationConfig[param.name].enabled"
+                                                               @change="toggleParameterOptimization(param.name)">
+                                                        <label class="form-check-label small" :for="`param-switch-${param.name}`">
+                                                            {{ parameterOptimizationConfig[param.name].enabled ? '优化' : '固定' }}
+                                                        </label>
+                                                    </div>
                                                 </div>
-                                                <div class="col-4">
-                                                    <input type="number" class="form-control form-control-sm"
-                                                           :placeholder="`最大值 (${param?.max || 100})`"
-                                                           v-model.number="parameterRanges[param.name].max"
-                                                           :step="param?.type === 'int' ? 1 : (param?.step || 0.01)">
-                                                    <small class="text-muted">最大</small>
+
+                                                <!-- 优化模式：显示范围配置 -->
+                                                <div v-if="parameterOptimizationConfig[param.name].enabled" class="row g-2">
+                                                    <div class="col-4">
+                                                        <input type="number" class="form-control form-control-sm"
+                                                               :placeholder="`最小值 (${param?.min || 0})`"
+                                                               v-model.number="parameterRanges[param.name].min"
+                                                               :step="param?.type === 'int' ? 1 : (param?.step || 0.01)">
+                                                        <small class="text-muted">最小</small>
+                                                    </div>
+                                                    <div class="col-4">
+                                                        <input type="number" class="form-control form-control-sm"
+                                                               :placeholder="`最大值 (${param?.max || 100})`"
+                                                               v-model.number="parameterRanges[param.name].max"
+                                                               :step="param?.type === 'int' ? 1 : (param?.step || 0.01)">
+                                                        <small class="text-muted">最大</small>
+                                                    </div>
+                                                    <div class="col-4">
+                                                        <input type="number" class="form-control form-control-sm"
+                                                               :placeholder="`步长 (${param?.step || 1})`"
+                                                               v-model.number="parameterRanges[param.name].step"
+                                                               :step="param?.type === 'int' ? 1 : (param?.step || 0.01)"
+                                                               :min="param?.type === 'int' ? 1 : 0.01">
+                                                        <small class="text-muted">步长</small>
+                                                    </div>
                                                 </div>
-                                                <div class="col-4">
-                                                    <input type="number" class="form-control form-control-sm"
-                                                           :placeholder="`步长 (${param?.step || 1})`"
-                                                           v-model.number="parameterRanges[param.name].step"
-                                                           :step="param?.type === 'int' ? 1 : (param?.step || 0.01)"
-                                                           :min="param?.type === 'int' ? 1 : 0.01">
-                                                    <small class="text-muted">步长</small>
+
+                                                <!-- 固定模式：显示固定值配置 -->
+                                                <div v-else class="row g-2">
+                                                    <div class="col-6">
+                                                        <input type="number" class="form-control form-control-sm"
+                                                               :placeholder="`固定值 (${param?.min || 0}-${param?.max || 100})`"
+                                                               v-model.number="parameterOptimizationConfig[param.name].fixedValue"
+                                                               :step="param?.type === 'int' ? 1 : (param?.step || 0.01)"
+                                                               :min="param?.min || 0"
+                                                               :max="param?.max || 100">
+                                                        <small class="text-muted">固定值</small>
+                                                    </div>
+                                                    <div class="col-6 d-flex align-items-center">
+                                                        <small class="text-muted">
+                                                            <i class="bi bi-info-circle me-1"></i>
+                                                            此参数将使用固定值，不参与优化
+                                                        </small>
+                                                    </div>
                                                 </div>
-                                            </div>
                                             </div>
                                         </template>
                                         <div class="mt-2">
@@ -153,6 +186,51 @@
                                                 <i class="bi bi-info-circle"></i>
                                                 预计组合数: {{ estimatedCombinations }}
                                             </small>
+                                            <!-- 调试按钮 -->
+                                            <button type="button" class="btn btn-sm btn-outline-secondary ms-2" @click="testParameterConfig">
+                                                调试
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- 高级过滤设置 -->
+                                <div class="mb-3">
+                                    <label class="form-label">高级过滤设置</label>
+                                    <div class="card">
+                                        <div class="card-body p-3">
+                                            <!-- 时间段过滤 -->
+                                            <div class="mb-3">
+                                                <label class="form-label small">交易时间段</label>
+                                                <div class="row g-2">
+                                                    <div class="col-6">
+                                                        <input type="time" class="form-control form-control-sm"
+                                                               v-model="timeFilter.startTime"
+                                                               placeholder="开始时间">
+                                                    </div>
+                                                    <div class="col-6">
+                                                        <input type="time" class="form-control form-control-sm"
+                                                               v-model="timeFilter.endTime"
+                                                               placeholder="结束时间">
+                                                    </div>
+                                                </div>
+                                                <small class="text-muted x-small">设置后仅在此时间段内的数据参与策略优化，留空表示全天交易</small>
+                                            </div>
+
+                                            <!-- 星期过滤 -->
+                                            <div class="mb-0">
+                                                <label class="form-label small">排除星期</label>
+                                                <div class="weekday-selector">
+                                                    <button v-for="day in weekdays" :key="day.value"
+                                                            type="button"
+                                                            class="weekday-btn"
+                                                            :class="{ 'active': excludedWeekdays.includes(String(day.value)) }"
+                                                            @click="toggleWeekday(String(day.value))">
+                                                        {{ day.label }}
+                                                    </button>
+                                                </div>
+                                                <small class="text-muted x-small">选中的星期几将被排除，不参与策略优化</small>
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
