@@ -4,22 +4,20 @@
 """
 
 import os
-import time
 import uuid
 import logging
 import itertools
 import threading
 import numpy as np
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Dict, Any, List, Optional, Callable, Tuple, Union
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 # 导入现有模块
-from backtester import Backtester, run_single_backtest
+from backtester import run_single_backtest
 from strategies import get_available_strategies
-from investment_strategies import get_available_investment_strategies
 from binance_client import BinanceClient
 
 # 配置日志
@@ -163,14 +161,14 @@ class EvaluationMetrics:
             # 计算夏普比率
             metrics['sharpe_ratio'] = self._calculate_sharpe_ratio(backtest_result)
             
-            # 计算年化收益率
-            metrics['annualized_return'] = self._calculate_annualized_return(backtest_result)
+
             
             # 计算波动率
             metrics['volatility'] = self._calculate_volatility(backtest_result)
-            
-            # 计算平均交易持续时间
-            metrics['avg_trade_duration'] = self._calculate_avg_trade_duration(backtest_result)
+
+            # 多单和空单胜率
+            metrics['long_win_rate'] = backtest_result.get('long_win_rate', 0.0)
+            metrics['short_win_rate'] = backtest_result.get('short_win_rate', 0.0)
             
             # 计算VaR
             metrics['var_95'] = self._calculate_var(backtest_result)
@@ -266,35 +264,7 @@ class EvaluationMetrics:
             logger.warning(f"计算夏普比率失败: {e}")
             return 0.0
     
-    def _calculate_annualized_return(self, backtest_result: Dict[str, Any]) -> float:
-        """计算年化收益率"""
-        try:
-            total_return = backtest_result.get('roi_percentage', 0.0) / 100.0
-            
-            # 估算交易天数（简化处理）
-            predictions = backtest_result.get('predictions', [])
-            if not predictions:
-                return 0.0
-            
-            # 从第一笔到最后一笔交易的天数
-            first_trade = min(predictions, key=lambda x: x.get('signal_time', ''))
-            last_trade = max(predictions, key=lambda x: x.get('signal_time', ''))
-            
-            first_date = pd.to_datetime(first_trade.get('signal_time'))
-            last_date = pd.to_datetime(last_trade.get('signal_time'))
-            
-            days = (last_date - first_date).days
-            if days <= 0:
-                return 0.0
-            
-            years = days / 365.25
-            annualized_return = (1 + total_return) ** (1 / years) - 1
-            
-            return round(annualized_return * 100, 2)
-            
-        except Exception as e:
-            logger.warning(f"计算年化收益率失败: {e}")
-            return 0.0
+
     
     def _calculate_volatility(self, backtest_result: Dict[str, Any]) -> float:
         """计算波动率"""
@@ -324,30 +294,7 @@ class EvaluationMetrics:
             logger.warning(f"计算波动率失败: {e}")
             return 0.0
     
-    def _calculate_avg_trade_duration(self, backtest_result: Dict[str, Any]) -> float:
-        """计算平均交易持续时间（分钟）"""
-        try:
-            predictions = backtest_result.get('predictions', [])
-            if not predictions:
-                return 0.0
-            
-            durations = []
-            for trade in predictions:
-                signal_time = pd.to_datetime(trade.get('signal_time'))
-                end_time = pd.to_datetime(trade.get('end_time_actual', trade.get('end_time_expected')))
-                
-                if pd.notna(signal_time) and pd.notna(end_time):
-                    duration = (end_time - signal_time).total_seconds() / 60  # 转换为分钟
-                    durations.append(duration)
-            
-            if not durations:
-                return 0.0
-            
-            return round(np.mean(durations), 2)
-            
-        except Exception as e:
-            logger.warning(f"计算平均交易持续时间失败: {e}")
-            return 0.0
+
     
     def _calculate_var(self, backtest_result: Dict[str, Any], confidence: float = 0.95) -> float:
         """计算VaR (Value at Risk)"""
@@ -385,9 +332,9 @@ class EvaluationMetrics:
             'max_drawdown': 0.0,
             'profit_factor': 0.0,
             'total_trades': 0,
-            'annualized_return': 0.0,
             'volatility': 0.0,
-            'avg_trade_duration': 0.0,
+            'long_win_rate': 0.0,
+            'short_win_rate': 0.0,
             'var_95': 0.0
         }
 
@@ -841,7 +788,8 @@ class OptimizationEngine:
                     'parameters': best_result.parameters,
                     'metrics': best_result.metrics,
                     'composite_score': best_result.composite_score,
-                    'rank': best_result.rank
+                    'rank': best_result.rank,
+                    'backtest_details': best_result.backtest_details
                 }
 
             # 添加所有结果（如果请求）
@@ -851,7 +799,8 @@ class OptimizationEngine:
                         'parameters': result.parameters,
                         'metrics': result.metrics,
                         'composite_score': result.composite_score,
-                        'rank': result.rank
+                        'rank': result.rank,
+                        'backtest_details': result.backtest_details
                     }
                     for result in results
                 ]

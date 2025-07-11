@@ -20,17 +20,10 @@ const app = Vue.createApp({
                 amount: '5',
                 signal_id: ''
             },
-            toast: {
-                title: '',
-                message: '',
-                type: 'success', // 'success', 'danger', 'warning', 'info'
-                time: ''
-            },
             websocket: null,
             reconnectInterval: null,
             testCommandModalInstance: null,
             triggerTradeModalInstance: null,
-            toastInstance: null,
             // wsClientIdMap: new Map(), // To track client notes edits without overwriting props from WS
         };
     },
@@ -51,7 +44,7 @@ const app = Vue.createApp({
     methods: {
         connectWebSocket() {
             if (this.websocket && (this.websocket.readyState === WebSocket.OPEN || this.websocket.readyState === WebSocket.CONNECTING)) {
-                this.showToast('连接提示', 'WebSocket 已经连接或正在连接中。', 'info');
+                showToast('连接提示', 'WebSocket 已经连接或正在连接中。', 'info');
                 return;
             }
 
@@ -59,7 +52,7 @@ const app = Vue.createApp({
             const url = `${protocol}//${window.location.host}/ws/autox_status`;
             
             this.loadingClients = true; // Set loading true when attempting to connect
-            this.showToast('连接中...', '正在尝试连接到 AutoX 状态服务器...', 'info');
+            showToast('连接中...', '正在尝试连接到 AutoX 状态服务器...', 'info');
 
             let connectTimeoutId = null;
             const CONNECTION_TIMEOUT = 15000; // 15 秒连接超时
@@ -75,7 +68,7 @@ const app = Vue.createApp({
             connectTimeoutId = setTimeout(() => {
                 if (this.websocket && this.websocket.readyState !== WebSocket.OPEN) {
                     console.error(`AutoX Status WebSocket: Connection timed out after ${CONNECTION_TIMEOUT / 1000} seconds.`);
-                    this.showToast('连接超时', `WebSocket 连接超时 (${CONNECTION_TIMEOUT / 1000}秒)。请检查网络或服务器状态。`, 'danger');
+                    showToast('连接超时', `WebSocket 连接超时 (${CONNECTION_TIMEOUT / 1000}秒)。请检查网络或服务器状态。`, 'danger');
                     if (this.websocket) {
                         this.websocket.close(1000, "Connection timeout"); // Actively close
                     }
@@ -93,7 +86,7 @@ const app = Vue.createApp({
             this.websocket.onopen = () => {
                 clearConnectTimeout();
                 console.log('AutoX Status WebSocket 连接成功:', url);
-                this.showToast('连接成功', '已连接到 AutoX 状态服务器。', 'success');
+                showToast('连接成功', '已连接到 AutoX 状态服务器。', 'success');
                 // loadingClients will be set to false once the first client update is received
                 // Reset reconnect attempts if any were made by scheduleReconnect
                 if (this.reconnectAttempts) this.reconnectAttempts = 0;
@@ -118,7 +111,7 @@ const app = Vue.createApp({
                     }
                 } catch (error) {
                     console.error('处理WebSocket消息失败:', error);
-                    this.showToast('消息处理错误', `处理来自服务器的消息时出错: ${error.message}`, 'danger');
+                    showToast('消息处理错误', `处理来自服务器的消息时出错: ${error.message}`, 'danger');
                 }
             };
 
@@ -131,7 +124,7 @@ const app = Vue.createApp({
                 if (errorEvent && errorEvent.message) { errorMsg += ` 详情: ${errorEvent.message}`; }
                 else if (errorEvent && errorEvent.type) { errorMsg += ` 类型: ${errorEvent.type}`; }
                 
-                this.showToast('连接错误', `${errorMsg} 将尝试自动重连...`, 'danger');
+                showToast('连接错误', `${errorMsg} 将尝试自动重连...`, 'danger');
                 // onerror is usually followed by onclose. Reconnect logic is primarily in onclose.
                 // Ensure socket is nulled if it exists and isn't closed, to allow scheduleReconnect to work.
                 if (this.websocket && this.websocket.readyState !== WebSocket.CLOSED) {
@@ -151,9 +144,9 @@ const app = Vue.createApp({
                     // This was a client-side timeout, message already shown.
                     // Proceed to scheduleReconnect.
                 } else if (!event.wasClean) {
-                    this.showToast('连接断开', `WebSocket 连接已断开 (${closeReasonMsg})。尝试自动重连...`, 'warning');
+                    showToast('连接断开', `WebSocket 连接已断开 (${closeReasonMsg})。尝试自动重连...`, 'warning');
                 } else {
-                    this.showToast('连接已关闭', `WebSocket 连接已正常关闭 (${closeReasonMsg})。`, 'info');
+                    showToast('连接已关闭', `WebSocket 连接已正常关闭 (${closeReasonMsg})。`, 'info');
                     // If it was a clean closure initiated by client (e.g. unmount), don't auto-reconnect.
                     // However, if it's a server-initiated clean close (e.g. server restart), we might still want to.
                     // For simplicity, we'll attempt reconnect unless it's a specific "unmounting" reason.
@@ -180,11 +173,11 @@ const app = Vue.createApp({
                     if (this.reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
                         this.reconnectAttempts++;
                         console.log(`尝试重新连接WebSocket... (尝试 ${this.reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
-                        this.showToast('重连中...', `尝试重新连接 (${this.reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`, 'info');
+                        showToast('重连中...', `尝试重新连接 (${this.reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`, 'info');
                         this.connectWebSocket(); // Attempt to reconnect
                     } else {
                         console.log('已达到最大重连次数。停止自动重连。');
-                        this.showToast('重连失败', `已达到最大重连次数 (${MAX_RECONNECT_ATTEMPTS})。请手动刷新或检查服务。`, 'danger');
+                        showToast('重连失败', `已达到最大重连次数 (${MAX_RECONNECT_ATTEMPTS})。请手动刷新或检查服务。`, 'danger');
                         clearInterval(this.reconnectInterval);
                         this.reconnectInterval = null;
                         this.reconnectAttempts = 0; // Reset for future manual attempts
@@ -211,11 +204,11 @@ const app = Vue.createApp({
                 const logs = await response.json();
                 this.tradeLogs = logs.map(log => ({ ...log, showPayload: false }));
                 if (userInitiated) {
-                    this.showToast('日志已刷新', `成功获取 ${this.tradeLogs.length} 条最新交易日志。`, 'success');
+                    showToast('日志已刷新', `成功获取 ${this.tradeLogs.length} 条最新交易日志。`, 'success');
                 }
             } catch (error) {
                 console.error("获取交易日志失败:", error);
-                this.showToast('获取日志失败', `获取交易日志时发生错误: ${error.message}`, 'danger');
+                showToast('获取日志失败', `获取交易日志时发生错误: ${error.message}`, 'danger');
             } finally {
                 this.loadingLogs = false;
             }
@@ -223,7 +216,7 @@ const app = Vue.createApp({
         refreshClientsManually() {
             this.loadingClients = true;
             if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
-                 this.showToast('刷新提示', '客户端列表由服务器实时推送更新。', 'info');
+                 showToast('刷新提示', '客户端列表由服务器实时推送更新。', 'info');
                  // Give a small delay to allow any pending WS messages to arrive.
                  // If no messages arrive, loadingClients might stay true if clients list is empty.
                  // This will be reset to false when 'autox_clients_update' is received.
@@ -236,7 +229,7 @@ const app = Vue.createApp({
                  }, 2000);
 
             } else {
-                this.showToast('无法刷新', 'WebSocket 未连接。请检查连接状态。', 'warning');
+                showToast('无法刷新', 'WebSocket 未连接。请检查连接状态。', 'warning');
                 // If not connected, loadingClients remains true, and scheduleReconnect should be active
             }
         },
@@ -262,10 +255,10 @@ const app = Vue.createApp({
                         notes_edit: result.notes || '' // Ensure notes_edit reflects the saved notes
                     };
                 }
-                this.showToast('备注已保存', `客户端 ${this.truncateId(clientId)} 的备注已更新。`, 'success');
+                showToast('备注已保存', `客户端 ${this.truncateId(clientId)} 的备注已更新。`, 'success');
             } catch (error) {
                 console.error(`更新客户端 ${clientId} 备注失败:`, error);
-                this.showToast('备注保存失败', `更新备注时发生错误: ${error.message}`, 'danger');
+                showToast('备注保存失败', `更新备注时发生错误: ${error.message}`, 'danger');
                 // Optionally, find the client and reset its notes_edit to its 'notes' field
                 // to discard the failed edit, if desired.
                  const clientToRevert = this.clients.find(c => c.client_id === clientId);
@@ -284,7 +277,7 @@ const app = Vue.createApp({
         async sendTestCommand() {
             if (!this.currentClientForModal || !this.testCommand.type) return;
             if (this.testCommand.payload_error) { // Check for pre-validated JSON error
-                this.showToast('Payload错误', '请修正Payload中的JSON格式错误。', 'warning');
+                showToast('Payload错误', '请修正Payload中的JSON格式错误。', 'warning');
                 return;
             }
 
@@ -296,7 +289,7 @@ const app = Vue.createApp({
                 } catch (e) {
                     // Should have been caught by watcher, but a final check.
                     this.testCommand.payload_error = '无效的 JSON 格式。';
-                    this.showToast('Payload错误', '请修正Payload中的JSON格式错误。', 'warning');
+                    showToast('Payload错误', '请修正Payload中的JSON格式错误。', 'warning');
                     return;
                 }
             }
@@ -314,12 +307,12 @@ const app = Vue.createApp({
                 if (!response.ok) {
                     throw new Error(result.detail || `HTTP ${response.status}`);
                 }
-                this.showToast('测试指令已发送', `成功向 ${this.truncateId(clientId)} 发送指令 '${this.testCommand.type}'.`, 'success');
+                showToast('测试指令已发送', `成功向 ${this.truncateId(clientId)} 发送指令 '${this.testCommand.type}'.`, 'success');
                 if (this.testCommandModalInstance) this.testCommandModalInstance.hide();
                 this.fetchTradeLogs(true, true); // Refresh logs to see command and its processing
             } catch (error) {
                 console.error("发送测试指令失败:", error);
-                this.showToast('测试指令发送失败', error.message, 'danger');
+                showToast('测试指令发送失败', error.message, 'danger');
             }
         },
         openTriggerTradeModal(client) {
@@ -337,10 +330,10 @@ const app = Vue.createApp({
             
             // Basic validation
             if (!this.manualTrade.symbol || !this.manualTrade.symbol.trim()) {
-                this.showToast('输入无效', '交易对不能为空。', 'warning'); return;
+                showToast('输入无效', '交易对不能为空。', 'warning'); return;
             }
             if (!this.manualTrade.amount || isNaN(parseFloat(this.manualTrade.amount)) || parseFloat(this.manualTrade.amount) <= 0) {
-                this.showToast('输入无效', '请输入一个有效的正数金额。', 'warning'); return;
+                showToast('输入无效', '请输入一个有效的正数金额。', 'warning'); return;
             }
 
             const payload = {
@@ -360,12 +353,12 @@ const app = Vue.createApp({
                 if (!response.ok) {
                     throw new Error(result.detail || `HTTP ${response.status}`);
                 }
-                this.showToast('交易指令已发送', `成功向 ${this.truncateId(clientId)} 发送交易指令. Signal ID: ${result.sent_command?.payload?.signal_id || 'N/A'}`, 'success');
+                showToast('交易指令已发送', `成功向 ${this.truncateId(clientId)} 发送交易指令. Signal ID: ${result.sent_command?.payload?.signal_id || 'N/A'}`, 'success');
                 if (this.triggerTradeModalInstance) this.triggerTradeModalInstance.hide();
                 this.fetchTradeLogs(true, true); // Refresh logs to see the command
             } catch (error) {
                 console.error("手动触发交易失败:", error);
-                this.showToast('手动交易失败', error.message, 'danger');
+                showToast('手动交易失败', error.message, 'danger');
             }
         },
         confirmDeleteClient(client) {
@@ -391,26 +384,13 @@ const app = Vue.createApp({
                 // The WebSocket update will eventually provide the source of truth.
                 this.clients = this.clients.filter(c => c.client_id !== clientId);
                 
-                this.showToast('删除成功', `客户端 ${this.truncateId(clientId)} 已被删除。`, 'success');
+                showToast('删除成功', `客户端 ${this.truncateId(clientId)} 已被删除。`, 'success');
             } catch (error) {
                 console.error(`删除客户端 ${clientId} 失败:`, error);
-                this.showToast('删除失败', `删除客户端时发生错误: ${error.message}`, 'danger');
+                showToast('删除失败', `删除客户端时发生错误: ${error.message}`, 'danger');
             }
         },
-        showToast(title, message, type = 'success') {
-            this.toast.title = title;
-            this.toast.message = message; // HTML is allowed via v-html in template
-            this.toast.type = type;
-            this.toast.time = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-            
-            const toastEl = document.getElementById('appToast');
-            if (!this.toastInstance && toastEl) {
-                this.toastInstance = new bootstrap.Toast(toastEl, { delay: 5000 });
-            }
-            if (this.toastInstance) {
-                 this.toastInstance.show();
-            }
-        },
+
         togglePayloadVisibility(log) {
             log.showPayload = !log.showPayload;
         },
@@ -479,9 +459,7 @@ const app = Vue.createApp({
         const triggerModalEl = document.getElementById('triggerTradeModal');
         if (triggerModalEl) this.triggerTradeModalInstance = new bootstrap.Modal(triggerModalEl);
 
-        // Toast must be initialized after the element is in the DOM
-        const toastEl = document.getElementById('appToast');
-        if (toastEl) this.toastInstance = new bootstrap.Toast(toastEl, {delay: 5000});
+
 
         this.connectWebSocket();
         await this.fetchTradeLogs(true); // Initial log fetch
@@ -497,7 +475,6 @@ const app = Vue.createApp({
         // Dispose Bootstrap components
         if (this.testCommandModalInstance) this.testCommandModalInstance.dispose();
         if (this.triggerTradeModalInstance) this.triggerTradeModalInstance.dispose();
-        if (this.toastInstance) this.toastInstance.dispose();
     }
 });
 

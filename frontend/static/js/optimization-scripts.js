@@ -1,0 +1,727 @@
+        // 加载导航栏
+        fetch('/templates/navbar.html')
+            .then(response => response.text())
+            .then(html => {
+                document.getElementById('navbar-container').innerHTML = html;
+                // 设置当前页面为活跃状态
+                const navLinks = document.querySelectorAll('.navbar-nav .nav-link');
+                navLinks.forEach(link => {
+                    if (link.getAttribute('href') === '/optimization') {
+                        link.classList.add('active');
+                    }
+                });
+            })
+            .catch(error => console.error('Error loading navbar:', error));
+
+
+
+        const { createApp } = Vue;
+
+        createApp({
+            data() {
+                return {
+                    // 基础数据
+                    symbols: [],
+                    strategies: [],
+                    favoriteSymbols: JSON.parse(localStorage.getItem('favoriteSymbols') || '[]'),
+
+                    // 优化参数
+                    optimizationParams: {
+                        symbol: '',
+                        interval: '1m',
+                        start_date: (() => {
+                            const date = new Date();
+                            date.setDate(date.getDate() - 7);
+                            return date.toISOString().split('T')[0];
+                        })(),
+                        end_date: new Date().toISOString().split('T')[0],
+                        max_combinations: 1000,
+                        min_trades: 10
+                    },
+
+                    // 策略相关
+                    selectedStrategy: null,
+                    selectedPreset: '',
+                    parameterRanges: {},
+                    strategyPresets: {},
+
+                    // 优化状态
+                    isOptimizing: false,
+                    currentOptimizationId: null,
+                    optimizationProgress: null,
+                    optimizationResults: null,
+                    progressInterval: null,
+
+                    // 结果显示和排序
+                    sortBy: 'composite_score',
+                    sortOrder: 'desc',
+                    displayedResults: [],
+                    selectedResult: null,
+
+                    // 表单验证
+                    fieldErrors: {},
+
+                    // 图表
+                    scatterChart: null
+                }
+            },
+
+            computed: {
+                sortedSymbols() {
+                    return [...this.symbols].sort((a, b) => {
+                        const aIsFav = this.isFavorite(a);
+                        const bIsFav = this.isFavorite(b);
+                        if (aIsFav && !bIsFav) return -1;
+                        if (!aIsFav && bIsFav) return 1;
+                        return 0; // 保持原有顺序
+                    });
+                },
+
+                canStartOptimization() {
+                    return this.selectedStrategy &&
+                           this.optimizationParams.symbol &&
+                           this.optimizationParams.interval &&
+                           this.optimizationParams.start_date &&
+                           this.optimizationParams.end_date &&
+                           Object.keys(this.parameterRanges).length > 0;
+                },
+
+                estimatedCombinations() {
+                    if (!Array.isArray(this.selectedStrategy?.parameters) || !Object.keys(this.parameterRanges).length) return 0;
+
+                    let total = 1;
+                    for (const param of this.selectedStrategy.parameters) {
+                        // 确保param存在且有name属性
+                        if (param && param.name) {
+                            const range = this.parameterRanges[param.name];
+                            if (range && typeof range.min === 'number' && typeof range.max === 'number' && range.step > 0) {
+                                const count = Math.floor((range.max - range.min) / range.step) + 1;
+                                total *= Math.max(1, count);
+                            }
+                        }
+                    }
+                    return total;
+                },
+
+                // 确保参数范围的安全访问
+                safeParameterRanges() {
+                    const safe = {};
+                    if (this.selectedStrategy?.parameters) {
+                        this.selectedStrategy.parameters.forEach(param => {
+                            if (param?.name) {
+                                safe[param.name] = this.parameterRanges[param.name] || {
+                                    min: param.min || 0,
+                                    max: param.max || 100,
+                                    step: param.step || 1
+                                };
+                            }
+                        });
+                    }
+                    return safe;
+                }
+            },
+
+            mounted() {
+                this.loadStrategies();
+                this.loadSymbols();
+            },
+
+            methods: {
+                getDefaultStartDate() {
+                    const date = new Date();
+                    date.setDate(date.getDate() - 7);
+                    return date.toISOString().split('T')[0];
+                },
+
+                getDefaultEndDate() {
+                    return new Date().toISOString().split('T')[0];
+                },
+
+                async loadStrategies() {
+                    try {
+                        const response = await fetch('/api/prediction-strategies');
+                        this.strategies = await response.json();
+                        showToast('成功', '策略列表加载成功', 'success');
+                    } catch (error) {
+                        console.error('加载策略失败:', error);
+                        showToast('错误', '加载策略失败: ' + error.message, 'danger');
+                    }
+                },
+
+                async loadSymbols() {
+                    try {
+                        const response = await fetch('/api/symbols');
+                        this.symbols = await response.json();
+
+                        // 默认选择第一个收藏的交易对，如果没有收藏则选择第一个
+                        if (this.symbols.length > 0 && !this.optimizationParams.symbol) {
+                            const firstFavorite = this.symbols.find(s => this.isFavorite(s));
+                            this.optimizationParams.symbol = firstFavorite || this.symbols[0];
+                        }
+                    } catch (error) {
+                        console.error('加载交易对失败:', error);
+                        // 使用默认列表作为备选
+                        this.symbols = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'ADAUSDT', 'DOTUSDT', 'LINKUSDT', 'LTCUSDT', 'XRPUSDT'];
+                        if (!this.optimizationParams.symbol) {
+                            const firstFavorite = this.symbols.find(s => this.isFavorite(s));
+                            this.optimizationParams.symbol = firstFavorite || this.symbols[0];
+                        }
+                    }
+                },
+
+                isFavorite(symbol) {
+                    return this.favoriteSymbols.includes(symbol);
+                },
+
+                toggleFavorite(symbol) {
+                    if (!symbol) return;
+
+                    const index = this.favoriteSymbols.indexOf(symbol);
+                    if (index > -1) {
+                        this.favoriteSymbols.splice(index, 1);
+                        showToast('信息', `已取消收藏 ${symbol}`, 'info');
+                    } else {
+                        this.favoriteSymbols.push(symbol);
+                        showToast('成功', `已收藏 ${symbol}`, 'success');
+                    }
+
+                    localStorage.setItem('favoriteSymbols', JSON.stringify(this.favoriteSymbols));
+                },
+
+                async onStrategyChange() {
+                    if (!this.selectedStrategy) {
+                        this.parameterRanges = {};
+                        return;
+                    }
+
+                    // 立即初始化参数范围，避免模板访问undefined
+                    this.parameterRanges = {};
+
+                    // 确保parameters存在且是数组
+                    if (Array.isArray(this.selectedStrategy.parameters)) {
+                        console.log('初始化参数范围，参数列表:', this.selectedStrategy.parameters);
+                        this.selectedStrategy.parameters.forEach(param => {
+                            // 确保param是对象且有name属性
+                            if (param && typeof param === 'object' && param.name) {
+                                this.parameterRanges[param.name] = {
+                                    min: typeof param.min === 'number' ? param.min : 0,
+                                    max: typeof param.max === 'number' ? param.max : 100,
+                                    step: typeof param.step === 'number' ? param.step : 1
+                                };
+                                console.log(`初始化参数 ${param.name}:`, this.parameterRanges[param.name]);
+                            }
+                        });
+                    }
+
+                    console.log('初始化后的parameterRanges:', this.parameterRanges);
+
+                    try {
+                        // 获取策略参数范围
+                        const response = await fetch(`/api/strategies/${this.selectedStrategy.id}/parameter_ranges`);
+                        const data = await response.json();
+
+                        console.log('策略参数API返回数据:', data);
+
+                        if (data.error) {
+                            showToast('错误', '获取策略参数失败: ' + data.error, 'danger');
+                            return;
+                        }
+
+                        // 更新参数范围
+                        if (Array.isArray(data.parameters)) {
+                            data.parameters.forEach(param => {
+                                if (param && typeof param === 'object' && param.name) {
+                                    this.parameterRanges[param.name] = {
+                                        min: typeof param.min === 'number' ? param.min : 0,
+                                        max: typeof param.max === 'number' ? param.max : 100,
+                                        step: typeof param.step === 'number' ? param.step : 1
+                                    };
+                                    console.log(`更新参数 ${param.name}:`, this.parameterRanges[param.name]);
+                                }
+                            });
+                        }
+
+                        console.log('API更新后的parameterRanges:', this.parameterRanges);
+
+                        // 强制Vue重新渲染
+                        this.$nextTick(() => {
+                            console.log('Vue nextTick: 参数范围已更新');
+                        });
+
+                        // 获取参数预设
+                        const presetResponse = await fetch(`/api/strategies/${this.selectedStrategy.id}/parameter_presets`);
+                        const presetData = await presetResponse.json();
+
+                        if (!presetData.error) {
+                            this.strategyPresets = presetData.presets;
+                        }
+
+                        showToast('成功', '策略参数加载成功', 'success');
+                    } catch (error) {
+                        console.error('加载策略参数失败:', error);
+                        showToast('错误', '加载策略参数失败: ' + error.message, 'danger');
+                    }
+                },
+
+                applyPreset() {
+                    if (!this.selectedPreset || !this.strategyPresets[this.selectedPreset]) return;
+
+                    const preset = this.strategyPresets[this.selectedPreset];
+                    Object.assign(this.parameterRanges, preset.ranges);
+
+                    showToast('成功', `已应用${this.selectedPreset}型参数预设`, 'success');
+                },
+
+                async startOptimization() {
+                    this.fieldErrors = {};
+
+                    // 验证表单
+                    if (!this.validateForm()) {
+                        showToast('警告', '请检查表单输入', 'warning');
+                        return;
+                    }
+
+                    try {
+                        const requestData = {
+                            symbol: this.optimizationParams.symbol,
+                            interval: this.optimizationParams.interval,
+                            start_date: this.optimizationParams.start_date,
+                            end_date: this.optimizationParams.end_date,
+                            strategy_id: this.selectedStrategy.id,
+                            strategy_params_ranges: this.parameterRanges,
+                            max_combinations: this.optimizationParams.max_combinations,
+                            min_trades: this.optimizationParams.min_trades
+                        };
+
+                        const response = await fetch('/api/optimization/start', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify(requestData)
+                        });
+
+                        const result = await response.json();
+
+                        if (response.ok) {
+                            this.currentOptimizationId = result.optimization_id;
+                            this.isOptimizing = true;
+                            this.optimizationResults = null;
+                            this.startProgressMonitoring();
+                            showToast('成功', '优化任务已启动', 'success');
+                        } else {
+                            showToast('错误', '启动优化失败: ' + result.detail, 'danger');
+                        }
+                    } catch (error) {
+                        console.error('启动优化失败:', error);
+                        showToast('错误', '启动优化失败: ' + error.message, 'danger');
+                    }
+                },
+
+                validateForm() {
+                    let isValid = true;
+
+                    if (!this.optimizationParams.symbol) {
+                        this.fieldErrors.symbol = '请选择交易对';
+                        isValid = false;
+                    }
+
+                    if (!this.selectedStrategy) {
+                        this.fieldErrors.strategy_id = '请选择策略';
+                        isValid = false;
+                    }
+
+                    if (new Date(this.optimizationParams.start_date) >= new Date(this.optimizationParams.end_date)) {
+                        this.fieldErrors.end_date = '结束日期必须晚于开始日期';
+                        isValid = false;
+                    }
+
+                    if (this.estimatedCombinations > this.optimizationParams.max_combinations) {
+                        showToast('警告', `参数组合数(${this.estimatedCombinations})超过限制(${this.optimizationParams.max_combinations})`, 'warning');
+                        isValid = false;
+                    }
+
+                    return isValid;
+                },
+
+                startProgressMonitoring() {
+                    this.progressInterval = setInterval(async () => {
+                        await this.updateProgress();
+                    }, 2000);
+                },
+
+                async updateProgress() {
+                    if (!this.currentOptimizationId) return;
+
+                    try {
+                        const response = await fetch(`/api/optimization/progress/${this.currentOptimizationId}`);
+                        this.optimizationProgress = await response.json();
+
+                        if (this.optimizationProgress.status === 'completed') {
+                            this.isOptimizing = false;
+                            clearInterval(this.progressInterval);
+                            await this.loadResults();
+                            showToast('成功', '优化完成！', 'success');
+                        } else if (this.optimizationProgress.status === 'error' || this.optimizationProgress.status === 'stopped') {
+                            this.isOptimizing = false;
+                            clearInterval(this.progressInterval);
+                            showToast('警告', `优化${this.optimizationProgress.status === 'error' ? '失败' : '已停止'}: ${this.optimizationProgress.error_message || ''}`, 'warning');
+                        }
+                    } catch (error) {
+                        console.error('更新进度失败:', error);
+                    }
+                },
+
+                async stopOptimization() {
+                    if (!this.currentOptimizationId) return;
+
+                    try {
+                        await fetch(`/api/optimization/stop/${this.currentOptimizationId}`, {
+                            method: 'POST'
+                        });
+                        showToast('信息', '已请求停止优化', 'info');
+                    } catch (error) {
+                        console.error('停止优化失败:', error);
+                        showToast('错误', '停止优化失败: ' + error.message, 'danger');
+                    }
+                },
+
+                async loadResults() {
+                    if (!this.currentOptimizationId) return;
+
+                    try {
+                        const response = await fetch(`/api/optimization/results/${this.currentOptimizationId}`);
+                        this.optimizationResults = await response.json();
+
+                        if (this.optimizationResults.error) {
+                            showToast('错误', '获取结果失败: ' + this.optimizationResults.error, 'danger');
+                            return;
+                        }
+
+                        // 初始化显示结果
+                        this.sortResults();
+
+                        // 渲染散点图
+                        this.$nextTick(() => {
+                            this.renderScatterChart();
+                        });
+                    } catch (error) {
+                        console.error('加载结果失败:', error);
+                        showToast('错误', '加载结果失败: ' + error.message, 'danger');
+                    }
+                },
+
+                renderScatterChart() {
+                    if (!this.optimizationResults?.scatter_plot_data?.points?.length) return;
+
+                    const ctx = this.$refs.scatterChart?.getContext('2d');
+                    if (!ctx) return;
+
+                    if (this.scatterChart) {
+                        this.scatterChart.destroy();
+                    }
+
+                    const data = this.optimizationResults.scatter_plot_data.points.map(point => ({
+                        x: point.x,
+                        y: point.y,
+                        rank: point.rank,
+                        parameters: point.parameters,
+                        composite_score: point.composite_score
+                    }));
+
+                    this.scatterChart = new Chart(ctx, {
+                        type: 'scatter',
+                        data: {
+                            datasets: [{
+                                label: '参数组合',
+                                data: data,
+                                backgroundColor: 'rgba(54, 162, 235, 0.6)',
+                                borderColor: 'rgba(54, 162, 235, 1)',
+                                borderWidth: 1,
+                                pointRadius: 5,
+                                pointHoverRadius: 8
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            scales: {
+                                x: {
+                                    title: {
+                                        display: true,
+                                        text: '胜率 (%)'
+                                    }
+                                },
+                                y: {
+                                    title: {
+                                        display: true,
+                                        text: '总收益率 (%)'
+                                    }
+                                }
+                            },
+                            plugins: {
+                                tooltip: {
+                                    callbacks: {
+                                        label: function(context) {
+                                            const point = context.raw;
+                                            return [
+                                                `排名: ${point.rank}`,
+                                                `胜率: ${point.x}%`,
+                                                `收益率: ${point.y}%`,
+                                                `综合评分: ${point.composite_score.toFixed(2)}`,
+                                                `参数: ${JSON.stringify(point.parameters)}`
+                                            ];
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    });
+                },
+
+                async exportResults() {
+                    if (!this.currentOptimizationId) return;
+
+                    try {
+                        const response = await fetch(`/api/optimization/export/${this.currentOptimizationId}`, {
+                            method: 'POST'
+                        });
+                        const result = await response.json();
+
+                        if (result.status === 'success') {
+                            showToast('成功', '结果导出成功: ' + result.file_path, 'success');
+                        } else {
+                            showToast('错误', '结果导出失败: ' + result.message, 'danger');
+                        }
+                    } catch (error) {
+                        console.error('导出结果失败:', error);
+                        showToast('错误', '导出结果失败: ' + error.message, 'danger');
+                    }
+                },
+
+                resetOptimization() {
+                    this.isOptimizing = false;
+                    this.currentOptimizationId = null;
+                    this.optimizationProgress = null;
+                    this.optimizationResults = null;
+                    this.displayedResults = [];
+                    this.selectedResult = null;
+                    if (this.progressInterval) {
+                        clearInterval(this.progressInterval);
+                        this.progressInterval = null;
+                    }
+                    if (this.scatterChart) {
+                        this.scatterChart.destroy();
+                        this.scatterChart = null;
+                    }
+                },
+
+                // 结果排序和显示
+                sortResults() {
+                    if (!this.optimizationResults?.all_results) {
+                        this.displayedResults = [];
+                        return;
+                    }
+
+                    const results = [...this.optimizationResults.all_results];
+                    results.sort((a, b) => {
+                        // 安全地获取指标值
+                        let aVal = a.metrics?.[this.sortBy];
+                        let bVal = b.metrics?.[this.sortBy];
+
+                        // 如果值不存在，使用默认值
+                        if (aVal === undefined || aVal === null) aVal = 0;
+                        if (bVal === undefined || bVal === null) bVal = 0;
+
+                        // 特殊处理最大回撤（越小越好）
+                        if (this.sortBy === 'max_drawdown') {
+                            return this.sortOrder === 'desc' ? aVal - bVal : bVal - aVal;
+                        }
+
+                        return this.sortOrder === 'desc' ? bVal - aVal : aVal - bVal;
+                    });
+
+                    // 重新分配排名并添加显示状态
+                    this.displayedResults = results.slice(0, 20).map((result, index) => ({
+                        ...result,
+                        rank: index + 1,
+                        showParameters: false
+                    }));
+                },
+
+                toggleSortOrder() {
+                    this.sortOrder = this.sortOrder === 'desc' ? 'asc' : 'desc';
+                    this.sortResults();
+                },
+
+                toggleParameters(index) {
+                    if (this.displayedResults[index]) {
+                        this.displayedResults[index].showParameters = !this.displayedResults[index].showParameters;
+                    }
+                },
+
+                showResultDetails(result) {
+                    console.log('显示结果详情:', result);
+                    console.log('交易记录数量:', result?.backtest_details?.predictions?.length);
+                    this.selectedResult = result;
+                    this.$nextTick(() => {
+                        console.log('Vue nextTick: selectedResult已设置:', this.selectedResult);
+                        const modalElement = document.getElementById('resultDetailsModal');
+                        if (modalElement) {
+                            const modal = new bootstrap.Modal(modalElement);
+                            modal.show();
+                            console.log('模态框已显示');
+                        } else {
+                            console.error('找不到模态框元素');
+                        }
+                    });
+                },
+
+                getStrategyDisplayName(strategyId) {
+                    const strategy = this.strategies.find(s => s.id === strategyId);
+                    return strategy ? strategy.name : strategyId;
+                },
+
+                // 参数显示格式化方法
+                getParameterDisplayName(paramKey) {
+                    const displayNames = {
+                        'rsi_period': 'RSI周期',
+                        'rsi_overbought': 'RSI超买线',
+                        'rsi_oversold': 'RSI超卖线',
+                        'bb_period': '布林带周期',
+                        'bb_std_dev': '布林带标准差',
+                        'ema_fast': '快速EMA',
+                        'ema_slow': '慢速EMA',
+                        'adx_period': 'ADX周期',
+                        'adx_threshold': 'ADX阈值',
+                        'macd_fast': 'MACD快线',
+                        'macd_slow': 'MACD慢线',
+                        'macd_signal': 'MACD信号线',
+                        'volume_period': '成交量周期',
+                        'trend_rsi_buy_min': '趋势买入下限',
+                        'trend_rsi_buy_max': '趋势买入上限',
+                        'trend_rsi_sell_min': '趋势卖出下限',
+                        'trend_rsi_sell_max': '趋势卖出上限',
+                        'min_confidence_threshold': '最低置信度',
+                        'trend_confirmation_periods': '趋势确认周期'
+                    };
+                    return displayNames[paramKey] || paramKey;
+                },
+
+                formatParameterValue(paramKey, value) {
+                    // 根据参数类型格式化显示值
+                    if (typeof value === 'number') {
+                        if (paramKey.includes('std_dev')) {
+                            return value.toFixed(1);
+                        } else if (paramKey.includes('threshold') || paramKey.includes('confidence')) {
+                            return value + '%';
+                        } else {
+                            return Math.round(value);
+                        }
+                    }
+                    return value;
+                },
+
+                getParameterUnit(paramKey) {
+                    const units = {
+                        'rsi_period': '天',
+                        'rsi_overbought': '水平',
+                        'rsi_oversold': '水平',
+                        'bb_period': '天',
+                        'bb_std_dev': '倍数',
+                        'ema_fast': '天',
+                        'ema_slow': '天',
+                        'adx_period': '天',
+                        'adx_threshold': '强度',
+                        'macd_fast': '天',
+                        'macd_slow': '天',
+                        'macd_signal': '天',
+                        'volume_period': '天',
+                        'min_confidence_threshold': '百分比',
+                        'trend_confirmation_periods': '周期'
+                    };
+                    return units[paramKey] || '';
+                },
+
+                formatDateTime(dateTimeStr) {
+                    if (!dateTimeStr) return '--';
+                    try {
+                        const date = new Date(dateTimeStr);
+                        if (isNaN(date.getTime())) return '--';
+                        return date.toLocaleString('zh-CN', {
+                            year: 'numeric',
+                            month: '2-digit',
+                            day: '2-digit',
+                            hour: '2-digit',
+                            minute: '2-digit'
+                        });
+                    } catch (e) {
+                        return '--';
+                    }
+                },
+
+                // 工具方法
+                formatTime(seconds) {
+                    if (!seconds || seconds <= 0) return '0秒';
+
+                    const hours = Math.floor(seconds / 3600);
+                    const minutes = Math.floor((seconds % 3600) / 60);
+                    const secs = Math.floor(seconds % 60);
+
+                    if (hours > 0) {
+                        return `${hours}小时${minutes}分钟`;
+                    } else if (minutes > 0) {
+                        return `${minutes}分钟${secs}秒`;
+                    } else {
+                        return `${secs}秒`;
+                    }
+                },
+
+                getStatusBadgeClass(status) {
+                    const classes = {
+                        'running': 'bg-primary',
+                        'completed': 'bg-success',
+                        'error': 'bg-danger',
+                        'stopped': 'bg-warning'
+                    };
+                    return classes[status] || 'bg-secondary';
+                },
+
+                getStatusText(status) {
+                    const texts = {
+                        'running': '运行中',
+                        'completed': '已完成',
+                        'error': '错误',
+                        'stopped': '已停止'
+                    };
+                    return texts[status] || '未知';
+                },
+
+                getPnlClass(value) {
+                    if (value > 0) return 'text-success';
+                    if (value < 0) return 'text-danger';
+                    return 'text-muted';
+                },
+
+                getRankBadgeClass(rank) {
+                    if (rank === 1) return 'bg-warning text-dark';
+                    if (rank <= 3) return 'bg-info';
+                    if (rank <= 10) return 'bg-primary';
+                    return 'bg-secondary';
+                },
+
+                getRankBorderClass(rank) {
+                    if (rank === 1) return 'border-warning';
+                    if (rank <= 3) return 'border-info';
+                    if (rank <= 10) return 'border-primary';
+                    return '';
+                },
+
+                getRankHeaderClass(rank) {
+                    if (rank === 1) return 'bg-warning-subtle';
+                    if (rank <= 3) return 'bg-info-subtle';
+                    if (rank <= 10) return 'bg-primary-subtle';
+                    return '';
+                }
+            }
+        }).mount('#app');

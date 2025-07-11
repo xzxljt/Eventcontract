@@ -90,7 +90,7 @@ class ToastManager {
         }
 
         // 设置图标和样式
-        if (iconEl) {
+        if (iconEl && iconEl.classList) {
             iconEl.className = this.getIconClass(type);
         }
 

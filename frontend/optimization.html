@@ -37,8 +37,11 @@
                                         <select class="form-select" id="symbol" v-model="optimizationParams.symbol" required
                                                 :class="{'is-invalid': fieldErrors.symbol}">
                                             <option value="" disabled>选择交易对</option>
-                                            <template v-for="s in symbols" :key="s">
-                                                <option :value="s">{{ s }}</option>
+                                            <template v-for="s in sortedSymbols" :key="s">
+                                                <option :value="s">
+                                                    {{ s }}
+                                                    <span v-if="isFavorite(s)">⭐</span>
+                                                </option>
                                             </template>
                                         </select>
                                         <button type="button" @click="toggleFavorite(optimizationParams.symbol)"
@@ -113,36 +116,38 @@
                                 </div>
 
                                 <!-- 参数范围配置 -->
-                                <div v-if="selectedStrategy && selectedStrategy.parameters" class="mb-3">
+                                <div v-if="selectedStrategy && Array.isArray(selectedStrategy.parameters) && selectedStrategy.parameters.length > 0" class="mb-3">
                                     <label class="form-label">参数范围配置</label>
-                                    <div class="border rounded p-3 bg-light">
-                                        <div v-for="param in selectedStrategy.parameters" :key="param.name" class="mb-3">
-                                            <label class="form-label small fw-bold">{{ param.description || param.name }}</label>
+                                    <div class="parameter-range-container">
+                                        <template v-for="(param, index) in selectedStrategy.parameters" :key="param?.name || index">
+                                            <div v-if="param && param.name && parameterRanges[param.name]" class="mb-3">
+                                            <label class="form-label small fw-bold">{{ param?.description || param?.name || '参数' }}</label>
                                             <div class="row g-2">
                                                 <div class="col-4">
                                                     <input type="number" class="form-control form-control-sm"
-                                                           :placeholder="`最小值 (${param.min})`"
+                                                           :placeholder="`最小值 (${param?.min || 0})`"
                                                            v-model.number="parameterRanges[param.name].min"
-                                                           :step="param.type === 'int' ? 1 : (param.step || 0.01)">
+                                                           :step="param?.type === 'int' ? 1 : (param?.step || 0.01)">
                                                     <small class="text-muted">最小</small>
                                                 </div>
                                                 <div class="col-4">
                                                     <input type="number" class="form-control form-control-sm"
-                                                           :placeholder="`最大值 (${param.max})`"
+                                                           :placeholder="`最大值 (${param?.max || 100})`"
                                                            v-model.number="parameterRanges[param.name].max"
-                                                           :step="param.type === 'int' ? 1 : (param.step || 0.01)">
+                                                           :step="param?.type === 'int' ? 1 : (param?.step || 0.01)">
                                                     <small class="text-muted">最大</small>
                                                 </div>
                                                 <div class="col-4">
                                                     <input type="number" class="form-control form-control-sm"
-                                                           :placeholder="`步长 (${param.step || 1})`"
+                                                           :placeholder="`步长 (${param?.step || 1})`"
                                                            v-model.number="parameterRanges[param.name].step"
-                                                           :step="param.type === 'int' ? 1 : (param.step || 0.01)"
-                                                           :min="param.type === 'int' ? 1 : 0.01">
+                                                           :step="param?.type === 'int' ? 1 : (param?.step || 0.01)"
+                                                           :min="param?.type === 'int' ? 1 : 0.01">
                                                     <small class="text-muted">步长</small>
                                                 </div>
                                             </div>
-                                        </div>
+                                            </div>
+                                        </template>
                                         <div class="mt-2">
                                             <small class="text-info">
                                                 <i class="bi bi-info-circle"></i>
@@ -207,6 +212,7 @@
                                      :aria-valuenow="optimizationProgress?.percentage || 0"
                                      aria-valuemin="0"
                                      aria-valuemax="100"
+                                     :aria-label="`优化进度: ${optimizationProgress?.percentage || 0}%`"
                                      :title="`进度: ${optimizationProgress?.percentage || 0}%`">
                                 </div>
                             </div>
@@ -238,7 +244,7 @@
                             <i class="bi bi-trophy-fill"></i>
                             <h5 class="mb-0">优化结果</h5>
                             <div class="ms-auto">
-                                <button class="btn btn-sm btn-outline-primary" @click="exportResults"
+                                <button type="button" class="btn btn-sm btn-outline-primary" @click="exportResults"
                                         :disabled="!optimizationResults.all_results?.length">
                                     <i class="bi bi-download"></i> 导出结果
                                 </button>
@@ -270,46 +276,78 @@
                                 <h6 class="text-primary">
                                     <i class="bi bi-award-fill"></i> 最佳参数组合
                                 </h6>
-                                <div class="border rounded p-3 bg-light">
-                                    <div class="row">
-                                        <div class="col-md-6">
-                                            <div class="mb-2">
-                                                <strong>参数配置:</strong>
-                                                <div class="small mt-1">
-                                                    <span v-for="(value, key) in optimizationResults.best_result.parameters"
-                                                          :key="key" class="badge bg-secondary me-1 mb-1">
-                                                        {{ key }}: {{ value }}
+                                <div class="card border-warning">
+                                    <div class="card-header bg-warning-subtle d-flex justify-content-between align-items-center">
+                                        <div>
+                                            <span class="badge bg-warning text-dark">#1</span>
+                                            <span class="fw-bold ms-2">综合评分: {{ optimizationResults.best_result.composite_score.toFixed(2) }}</span>
+                                        </div>
+                                        <div class="d-flex flex-wrap gap-1">
+                                            <span v-for="(value, key) in optimizationResults.best_result.parameters"
+                                                  :key="key" class="badge bg-light text-dark">
+                                                {{ key }}: {{ value }}
+                                            </span>
+                                        </div>
+                                    </div>
+                                    <div class="card-body">
+                                        <div class="row gx-2 gy-2">
+                                            <div class="col-6 col-md-3">
+                                                <div class="trade-detail-item">
+                                                    <span class="trade-detail-label">总收益率</span>
+                                                    <span class="trade-detail-value" :class="getPnlClass(optimizationResults.best_result.metrics.total_return)">
+                                                        {{ optimizationResults.best_result.metrics.total_return.toFixed(2) }}%
                                                     </span>
                                                 </div>
                                             </div>
-                                            <div class="mb-2">
-                                                <strong>综合评分:</strong>
-                                                <span class="badge bg-warning ms-2">
-                                                    {{ optimizationResults.best_result.composite_score.toFixed(2) }}
-                                                </span>
-                                            </div>
-                                        </div>
-                                        <div class="col-md-6">
-                                            <div class="row text-center">
-                                                <div class="col-4">
-                                                    <div class="small text-muted">总收益率</div>
-                                                    <div class="fw-bold" :class="getPnlClass(optimizationResults.best_result.metrics.total_return)">
-                                                        {{ optimizationResults.best_result.metrics.total_return.toFixed(2) }}%
-                                                    </div>
-                                                </div>
-                                                <div class="col-4">
-                                                    <div class="small text-muted">胜率</div>
-                                                    <div class="fw-bold text-info">
+                                            <div class="col-6 col-md-3">
+                                                <div class="trade-detail-item">
+                                                    <span class="trade-detail-label">胜率</span>
+                                                    <span class="trade-detail-value text-info">
                                                         {{ optimizationResults.best_result.metrics.win_rate.toFixed(2) }}%
-                                                    </div>
-                                                </div>
-                                                <div class="col-4">
-                                                    <div class="small text-muted">最大回撤</div>
-                                                    <div class="fw-bold text-danger">
-                                                        {{ optimizationResults.best_result.metrics.max_drawdown.toFixed(2) }}%
-                                                    </div>
+                                                    </span>
                                                 </div>
                                             </div>
+                                            <div class="col-6 col-md-3">
+                                                <div class="trade-detail-item">
+                                                    <span class="trade-detail-label">最大回撤</span>
+                                                    <span class="trade-detail-value text-danger">
+                                                        {{ optimizationResults.best_result.metrics.max_drawdown.toFixed(2) }}%
+                                                    </span>
+                                                </div>
+                                            </div>
+                                            <div class="col-6 col-md-3">
+                                                <div class="trade-detail-item">
+                                                    <span class="trade-detail-label">交易次数</span>
+                                                    <span class="trade-detail-value">
+                                                        {{ optimizationResults.best_result.metrics.total_trades }}
+                                                    </span>
+                                                </div>
+                                            </div>
+                                            <div class="col-6 col-md-3">
+                                                <div class="trade-detail-item">
+                                                    <span class="trade-detail-label">夏普比率</span>
+                                                    <span class="trade-detail-value">
+                                                        {{ optimizationResults.best_result.metrics.sharpe_ratio.toFixed(4) }}
+                                                    </span>
+                                                </div>
+                                            </div>
+                                            <div class="col-6 col-md-3">
+                                                <div class="trade-detail-item">
+                                                    <span class="trade-detail-label">多单胜率</span>
+                                                    <span class="trade-detail-value" :class="getPnlClass(optimizationResults.best_result.metrics.long_win_rate || 0)">
+                                                        {{ (optimizationResults.best_result.metrics.long_win_rate || 0).toFixed(2) }}%
+                                                    </span>
+                                                </div>
+                                            </div>
+                                            <div class="col-6 col-md-3">
+                                                <div class="trade-detail-item">
+                                                    <span class="trade-detail-label">空单胜率</span>
+                                                    <span class="trade-detail-value" :class="getPnlClass(optimizationResults.best_result.metrics.short_win_rate || 0)">
+                                                        {{ (optimizationResults.best_result.metrics.short_win_rate || 0).toFixed(2) }}%
+                                                    </span>
+                                                </div>
+                                            </div>
+
                                         </div>
                                     </div>
                                 </div>
@@ -325,51 +363,132 @@
                                 </div>
                             </div>
 
-                            <!-- 结果表格 -->
+                            <!-- 结果卡片 -->
                             <div v-if="optimizationResults.all_results?.length">
-                                <h6 class="text-primary">
-                                    <i class="bi bi-table"></i> 详细结果 (前20名)
-                                </h6>
-                                <div class="table-responsive">
-                                    <table class="table table-striped table-hover">
-                                        <thead>
-                                            <tr>
-                                                <th>排名</th>
-                                                <th>综合评分</th>
-                                                <th>参数</th>
-                                                <th>总收益率</th>
-                                                <th>胜率</th>
-                                                <th>最大回撤</th>
-                                                <th>交易次数</th>
-                                                <th>夏普比率</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            <tr v-for="result in optimizationResults.all_results.slice(0, 20)" :key="result.rank">
-                                                <td>
-                                                    <span class="badge" :class="getRankBadgeClass(result.rank)">
-                                                        {{ result.rank }}
-                                                    </span>
-                                                </td>
-                                                <td class="fw-bold">{{ result.composite_score.toFixed(2) }}</td>
-                                                <td>
-                                                    <small>
-                                                        <span v-for="(value, key) in result.parameters" :key="key"
-                                                              class="badge bg-light text-dark me-1 mb-1">
-                                                            {{ key }}: {{ value }}
+                                <div class="d-flex justify-content-between align-items-center mb-3">
+                                    <h6 class="text-primary mb-0">
+                                        <i class="bi bi-grid-3x3-gap"></i> 详细结果 (前{{ Math.min(displayedResults.length, 20) }}名)
+                                    </h6>
+                                    <div class="d-flex gap-2">
+                                        <!-- 排序选择 -->
+                                        <select v-model="sortBy" @change="sortResults" class="form-select form-select-sm" style="width: auto;">
+                                            <option value="composite_score">综合评分</option>
+                                            <option value="total_return">总收益率</option>
+                                            <option value="win_rate">总胜率</option>
+                                            <option value="long_win_rate">多单胜率</option>
+                                            <option value="short_win_rate">空单胜率</option>
+                                            <option value="sharpe_ratio">夏普比率</option>
+                                            <option value="max_drawdown">最大回撤</option>
+                                        </select>
+                                        <!-- 排序方向 -->
+                                        <button type="button" @click="toggleSortOrder" class="btn btn-outline-secondary btn-sm">
+                                            <i :class="sortOrder === 'desc' ? 'bi bi-sort-down' : 'bi bi-sort-up'"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                                <div v-for="(result, index) in displayedResults" :key="result.rank" class="mb-3">
+                                    <div class="card result-card" :class="getRankBorderClass(result.rank)">
+                                        <div class="card-header d-flex justify-content-between align-items-center" :class="getRankHeaderClass(result.rank)">
+                                            <div class="d-flex align-items-center">
+                                                <span class="badge" :class="getRankBadgeClass(result.rank)">
+                                                    #{{ result.rank }}
+                                                </span>
+                                                <span class="fw-bold ms-2">综合评分: {{ result.composite_score.toFixed(2) }}</span>
+                                                <!-- 主要参数显示 -->
+                                                <span class="badge bg-primary ms-2" v-if="result.parameters.strategy_id">
+                                                    {{ getStrategyDisplayName(result.parameters.strategy_id) }}
+                                                </span>
+                                            </div>
+                                            <div class="d-flex align-items-center gap-2">
+                                                <!-- 参数折叠按钮 -->
+                                                <button type="button" class="btn btn-sm btn-outline-secondary d-flex align-items-center"
+                                                        @click="toggleParameters(index)"
+                                                        :title="result.showParameters ? '隐藏策略参数' : '显示策略参数'">
+                                                    <i class="bi bi-gear me-1"></i>
+                                                    <span class="d-none d-md-inline">参数</span>
+                                                    <i :class="result.showParameters ? 'bi bi-chevron-up ms-1' : 'bi bi-chevron-down ms-1'"></i>
+                                                </button>
+                                                <!-- 查看详情按钮 -->
+                                                <button type="button" class="btn btn-sm btn-primary"
+                                                        @click="showResultDetails(result)"
+                                                        title="查看交易详情">
+                                                    <i class="bi bi-eye"></i> 详情
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <!-- 可折叠的参数区域 -->
+                                        <div v-if="result.showParameters" class="card-header bg-light border-top">
+                                            <div class="row g-2">
+                                                <div v-for="(value, key) in result.parameters" :key="key" class="col-auto">
+                                                    <div class="parameter-item">
+                                                        <div class="parameter-label">{{ getParameterDisplayName(key) }}</div>
+                                                        <div class="parameter-value">{{ formatParameterValue(key, value) }}</div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="card-body">
+                                            <div class="row gx-2 gy-2">
+                                                <div class="col-6 col-md-3">
+                                                    <div class="trade-detail-item">
+                                                        <span class="trade-detail-label">总收益率</span>
+                                                        <span class="trade-detail-value" :class="getPnlClass(result.metrics.total_return)">
+                                                            {{ result.metrics.total_return.toFixed(2) }}%
                                                         </span>
-                                                    </small>
-                                                </td>
-                                                <td :class="getPnlClass(result.metrics.total_return)">
-                                                    {{ result.metrics.total_return.toFixed(2) }}%
-                                                </td>
-                                                <td class="text-info">{{ result.metrics.win_rate.toFixed(2) }}%</td>
-                                                <td class="text-danger">{{ result.metrics.max_drawdown.toFixed(2) }}%</td>
-                                                <td>{{ result.metrics.total_trades }}</td>
-                                                <td>{{ result.metrics.sharpe_ratio.toFixed(4) }}</td>
-                                            </tr>
-                                        </tbody>
-                                    </table>
+                                                    </div>
+                                                </div>
+                                                <div class="col-6 col-md-3">
+                                                    <div class="trade-detail-item">
+                                                        <span class="trade-detail-label">胜率</span>
+                                                        <span class="trade-detail-value text-info">
+                                                            {{ result.metrics.win_rate.toFixed(2) }}%
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                                <div class="col-6 col-md-3">
+                                                    <div class="trade-detail-item">
+                                                        <span class="trade-detail-label">最大回撤</span>
+                                                        <span class="trade-detail-value text-danger">
+                                                            {{ result.metrics.max_drawdown.toFixed(2) }}%
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                                <div class="col-6 col-md-3">
+                                                    <div class="trade-detail-item">
+                                                        <span class="trade-detail-label">交易次数</span>
+                                                        <span class="trade-detail-value">
+                                                            {{ result.metrics.total_trades }}
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                                <div class="col-6 col-md-3">
+                                                    <div class="trade-detail-item">
+                                                        <span class="trade-detail-label">夏普比率</span>
+                                                        <span class="trade-detail-value">
+                                                            {{ result.metrics.sharpe_ratio.toFixed(4) }}
+                                                        </span>
+                                                    </div>
+                                                </div>
+
+                                                <div class="col-6 col-md-3">
+                                                    <div class="trade-detail-item">
+                                                        <span class="trade-detail-label">多单胜率</span>
+                                                        <span class="trade-detail-value" :class="getPnlClass(result.metrics.long_win_rate || 0)">
+                                                            {{ (result.metrics.long_win_rate || 0).toFixed(2) }}%
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                                <div class="col-6 col-md-3">
+                                                    <div class="trade-detail-item">
+                                                        <span class="trade-detail-label">空单胜率</span>
+                                                        <span class="trade-detail-value" :class="getPnlClass(result.metrics.short_win_rate || 0)">
+                                                            {{ (result.metrics.short_win_rate || 0).toFixed(2) }}%
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
 
@@ -381,7 +500,7 @@
                                 <p class="text-muted">
                                     可能原因：数据量不足、策略参数无法产生交易信号、或最小交易次数要求过高
                                 </p>
-                                <button class="btn btn-outline-primary" @click="resetOptimization">
+                                <button type="button" class="btn btn-outline-primary" @click="resetOptimization">
                                     重新配置优化
                                 </button>
                             </div>
@@ -423,535 +542,123 @@
                 </div>
             </div>
         </div>
+
+        <!-- 交易详情模态框 -->
+    <div class="modal fade" id="resultDetailsModal" tabindex="-1" aria-labelledby="resultDetailsModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-xl">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="resultDetailsModalLabel">
+                        <i class="bi bi-graph-up"></i> 交易详情 - 排名 #<span v-text="selectedResult?.rank || '--'"></span>
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body" v-if="selectedResult">
+                    <!-- 参数信息 -->
+                    <div class="mb-4">
+                        <h6 class="text-primary mb-3">
+                            <i class="bi bi-gear me-2"></i>策略参数
+                        </h6>
+                        <div class="row g-2">
+                            <div v-for="(value, key) in selectedResult?.parameters || {}" :key="key" class="col-auto">
+                                <div class="parameter-item">
+                                    <div class="parameter-label">{{ getParameterDisplayName(key) }}</div>
+                                    <div class="parameter-value">{{ formatParameterValue(key, value) }}</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 关键指标 -->
+                    <div class="mb-4">
+                        <h6 class="text-primary"><i class="bi bi-bar-chart"></i> 关键指标</h6>
+                        <div class="row">
+                            <div class="col-md-3">
+                                <div class="card text-center">
+                                    <div class="card-body">
+                                        <h5 class="card-title text-success" v-text="(selectedResult?.metrics?.total_return || 0).toFixed(2) + '%'"></h5>
+                                        <p class="card-text">总收益率</p>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="card text-center">
+                                    <div class="card-body">
+                                        <h5 class="card-title text-info" v-text="(selectedResult?.metrics?.win_rate || 0).toFixed(2) + '%'"></h5>
+                                        <p class="card-text">总胜率</p>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="card text-center">
+                                    <div class="card-body">
+                                        <h5 class="card-title text-primary" v-text="(selectedResult?.metrics?.long_win_rate || 0).toFixed(2) + '%'"></h5>
+                                        <p class="card-text">多单胜率</p>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="card text-center">
+                                    <div class="card-body">
+                                        <h5 class="card-title text-warning" v-text="(selectedResult?.metrics?.short_win_rate || 0).toFixed(2) + '%'"></h5>
+                                        <p class="card-text">空单胜率</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 交易记录表格 -->
+                    <div class="mb-4" v-if="selectedResult?.backtest_details?.predictions?.length">
+                        <h6 class="text-primary"><i class="bi bi-table"></i> 交易记录</h6>
+                        <div class="table-responsive" style="max-height: 400px;">
+                            <table class="table table-striped table-sm">
+                                <thead class="table-dark sticky-top">
+                                    <tr>
+                                        <th>时间</th>
+                                        <th>方向</th>
+                                        <th>投资额</th>
+                                        <th>结果</th>
+                                        <th>盈亏</th>
+                                        <th>余额</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr v-for="(trade, tradeIndex) in (selectedResult?.backtest_details?.predictions || [])" :key="tradeIndex">
+                                        <td v-text="formatDateTime(trade?.signal_time)"></td>
+                                        <td>
+                                            <span :class="trade?.signal === 1 ? 'text-success' : 'text-danger'"
+                                                  v-text="trade?.signal === 1 ? '做多' : '做空'">
+                                            </span>
+                                        </td>
+                                        <td v-text="trade?.investment_amount ? Number(trade.investment_amount).toFixed(2) : '--'"></td>
+                                        <td>
+                                            <span :class="trade?.result ? 'text-success' : 'text-danger'"
+                                                  v-text="trade?.result ? '盈利' : '亏损'">
+                                            </span>
+                                        </td>
+                                        <td :class="getPnlClass(trade?.pnl_amount || 0)"
+                                            v-text="Number(trade?.pnl_amount || 0).toFixed(2)">
+                                        </td>
+                                        <td v-text="Number(trade?.balance_after_trade || 0).toFixed(2)"></td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+                </div>
+            </div>
+        </div>
     </div>
 
+    </div> <!-- 关闭 #app -->
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
-    <script>
-        // 加载导航栏
-        fetch('/templates/navbar.html')
-            .then(response => response.text())
-            .then(html => {
-                document.getElementById('navbar-container').innerHTML = html;
-                // 设置当前页面为活跃状态
-                const navLinks = document.querySelectorAll('.navbar-nav .nav-link');
-                navLinks.forEach(link => {
-                    if (link.getAttribute('href') === '/optimization') {
-                        link.classList.add('active');
-                    }
-                });
-            })
-            .catch(error => console.error('Error loading navbar:', error));
-
-        // Toast 工具函数 (与其他页面保持一致)
-        function showToast(message, type = 'success', duration = 3000) {
-            const toastContainer = document.getElementById('toast-container') || createToastContainer();
-            const toastId = 'toast-' + Date.now();
-
-            const toastHtml = `
-                <div id="${toastId}" class="toast" role="alert" aria-live="assertive" aria-atomic="true">
-                    <div class="toast-header">
-                        <i class="bi ${getToastIcon(type)} me-2 text-${type}"></i>
-                        <strong class="me-auto text-${type}">${getToastTitle(type)}</strong>
-                        <button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Close"></button>
-                    </div>
-                    <div class="toast-body">${message}</div>
-                </div>
-            `;
-
-            toastContainer.insertAdjacentHTML('beforeend', toastHtml);
-            const toastElement = document.getElementById(toastId);
-            const toast = new bootstrap.Toast(toastElement, { delay: duration });
-            toast.show();
-
-            // 自动清理
-            toastElement.addEventListener('hidden.bs.toast', () => {
-                toastElement.remove();
-            });
-        }
-
-        function createToastContainer() {
-            const container = document.createElement('div');
-            container.id = 'toast-container';
-            container.className = 'toast-container position-fixed top-0 end-0 p-3';
-            container.style.zIndex = '1055';
-            document.body.appendChild(container);
-            return container;
-        }
-
-        function getToastIcon(type) {
-            const icons = {
-                'success': 'bi-check-circle-fill',
-                'danger': 'bi-exclamation-triangle-fill',
-                'warning': 'bi-exclamation-triangle-fill',
-                'info': 'bi-info-circle-fill'
-            };
-            return icons[type] || icons['info'];
-        }
-
-        function getToastTitle(type) {
-            const titles = {
-                'success': '成功',
-                'danger': '错误',
-                'warning': '警告',
-                'info': '信息'
-            };
-            return titles[type] || titles['info'];
-        }
-
-        const { createApp } = Vue;
-
-        createApp({
-            data() {
-                return {
-                    // 基础数据
-                    symbols: ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'ADAUSDT', 'DOTUSDT', 'LINKUSDT', 'LTCUSDT', 'XRPUSDT'],
-                    strategies: [],
-                    favoriteSymbols: JSON.parse(localStorage.getItem('favoriteSymbols') || '[]'),
-
-                    // 优化参数
-                    optimizationParams: {
-                        symbol: 'BTCUSDT',
-                        interval: '1m',
-                        start_date: this.getDefaultStartDate(),
-                        end_date: this.getDefaultEndDate(),
-                        max_combinations: 1000,
-                        min_trades: 10
-                    },
-
-                    // 策略相关
-                    selectedStrategy: null,
-                    selectedPreset: '',
-                    parameterRanges: {},
-                    strategyPresets: {},
-
-                    // 优化状态
-                    isOptimizing: false,
-                    currentOptimizationId: null,
-                    optimizationProgress: null,
-                    optimizationResults: null,
-                    progressInterval: null,
-
-                    // 表单验证
-                    fieldErrors: {},
-
-                    // 图表
-                    scatterChart: null
-                }
-            },
-
-            computed: {
-                canStartOptimization() {
-                    return this.selectedStrategy &&
-                           this.optimizationParams.symbol &&
-                           this.optimizationParams.interval &&
-                           this.optimizationParams.start_date &&
-                           this.optimizationParams.end_date &&
-                           Object.keys(this.parameterRanges).length > 0;
-                },
-
-                estimatedCombinations() {
-                    if (!this.selectedStrategy || !Object.keys(this.parameterRanges).length) return 0;
-
-                    let total = 1;
-                    for (const param of this.selectedStrategy.parameters) {
-                        const range = this.parameterRanges[param.name];
-                        if (range && range.min !== undefined && range.max !== undefined && range.step > 0) {
-                            const count = Math.floor((range.max - range.min) / range.step) + 1;
-                            total *= Math.max(1, count);
-                        }
-                    }
-                    return total;
-                }
-            },
-
-            mounted() {
-                this.loadStrategies();
-                this.loadSymbols();
-            },
-
-            methods: {
-                getDefaultStartDate() {
-                    const date = new Date();
-                    date.setDate(date.getDate() - 7);
-                    return date.toISOString().split('T')[0];
-                },
-
-                getDefaultEndDate() {
-                    return new Date().toISOString().split('T')[0];
-                },
-
-                async loadStrategies() {
-                    try {
-                        const response = await fetch('/api/prediction-strategies');
-                        this.strategies = await response.json();
-                        showToast('策略列表加载成功', 'success');
-                    } catch (error) {
-                        console.error('加载策略失败:', error);
-                        showToast('加载策略失败: ' + error.message, 'danger');
-                    }
-                },
-
-                async loadSymbols() {
-                    // 这里可以从API加载交易对列表，暂时使用固定列表
-                    // 可以扩展为从 /api/symbols 获取
-                },
-
-                isFavorite(symbol) {
-                    return this.favoriteSymbols.includes(symbol);
-                },
-
-                toggleFavorite(symbol) {
-                    if (!symbol) return;
-
-                    const index = this.favoriteSymbols.indexOf(symbol);
-                    if (index > -1) {
-                        this.favoriteSymbols.splice(index, 1);
-                        showToast(`已取消收藏 ${symbol}`, 'info');
-                    } else {
-                        this.favoriteSymbols.push(symbol);
-                        showToast(`已收藏 ${symbol}`, 'success');
-                    }
-
-                    localStorage.setItem('favoriteSymbols', JSON.stringify(this.favoriteSymbols));
-                },
-
-                async onStrategyChange() {
-                    if (!this.selectedStrategy) return;
-
-                    try {
-                        // 获取策略参数范围
-                        const response = await fetch(`/api/strategies/${this.selectedStrategy.id}/parameter_ranges`);
-                        const data = await response.json();
-
-                        if (data.error) {
-                            showToast('获取策略参数失败: ' + data.error, 'danger');
-                            return;
-                        }
-
-                        // 初始化参数范围
-                        this.parameterRanges = {};
-                        data.parameters.forEach(param => {
-                            this.parameterRanges[param.name] = {
-                                min: param.min,
-                                max: param.max,
-                                step: param.step || 1
-                            };
-                        });
-
-                        // 获取参数预设
-                        const presetResponse = await fetch(`/api/strategies/${this.selectedStrategy.id}/parameter_presets`);
-                        const presetData = await presetResponse.json();
-
-                        if (!presetData.error) {
-                            this.strategyPresets = presetData.presets;
-                        }
-
-                        showToast('策略参数加载成功', 'success');
-                    } catch (error) {
-                        console.error('加载策略参数失败:', error);
-                        showToast('加载策略参数失败: ' + error.message, 'danger');
-                    }
-                },
-
-                applyPreset() {
-                    if (!this.selectedPreset || !this.strategyPresets[this.selectedPreset]) return;
-
-                    const preset = this.strategyPresets[this.selectedPreset];
-                    Object.assign(this.parameterRanges, preset.ranges);
-
-                    showToast(`已应用${this.selectedPreset}型参数预设`, 'success');
-                },
-
-                async startOptimization() {
-                    this.fieldErrors = {};
-
-                    // 验证表单
-                    if (!this.validateForm()) {
-                        showToast('请检查表单输入', 'warning');
-                        return;
-                    }
-
-                    try {
-                        const requestData = {
-                            symbol: this.optimizationParams.symbol,
-                            interval: this.optimizationParams.interval,
-                            start_date: this.optimizationParams.start_date,
-                            end_date: this.optimizationParams.end_date,
-                            strategy_id: this.selectedStrategy.id,
-                            strategy_params_ranges: this.parameterRanges,
-                            max_combinations: this.optimizationParams.max_combinations,
-                            min_trades: this.optimizationParams.min_trades
-                        };
-
-                        const response = await fetch('/api/optimization/start', {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json'
-                            },
-                            body: JSON.stringify(requestData)
-                        });
-
-                        const result = await response.json();
-
-                        if (response.ok) {
-                            this.currentOptimizationId = result.optimization_id;
-                            this.isOptimizing = true;
-                            this.optimizationResults = null;
-                            this.startProgressMonitoring();
-                            showToast('优化任务已启动', 'success');
-                        } else {
-                            showToast('启动优化失败: ' + result.detail, 'danger');
-                        }
-                    } catch (error) {
-                        console.error('启动优化失败:', error);
-                        showToast('启动优化失败: ' + error.message, 'danger');
-                    }
-                },
-
-                validateForm() {
-                    let isValid = true;
-
-                    if (!this.optimizationParams.symbol) {
-                        this.fieldErrors.symbol = '请选择交易对';
-                        isValid = false;
-                    }
-
-                    if (!this.selectedStrategy) {
-                        this.fieldErrors.strategy_id = '请选择策略';
-                        isValid = false;
-                    }
-
-                    if (new Date(this.optimizationParams.start_date) >= new Date(this.optimizationParams.end_date)) {
-                        this.fieldErrors.end_date = '结束日期必须晚于开始日期';
-                        isValid = false;
-                    }
-
-                    if (this.estimatedCombinations > this.optimizationParams.max_combinations) {
-                        showToast(`参数组合数(${this.estimatedCombinations})超过限制(${this.optimizationParams.max_combinations})`, 'warning');
-                        isValid = false;
-                    }
-
-                    return isValid;
-                },
-
-                startProgressMonitoring() {
-                    this.progressInterval = setInterval(async () => {
-                        await this.updateProgress();
-                    }, 2000);
-                },
-
-                async updateProgress() {
-                    if (!this.currentOptimizationId) return;
-
-                    try {
-                        const response = await fetch(`/api/optimization/progress/${this.currentOptimizationId}`);
-                        this.optimizationProgress = await response.json();
-
-                        if (this.optimizationProgress.status === 'completed') {
-                            this.isOptimizing = false;
-                            clearInterval(this.progressInterval);
-                            await this.loadResults();
-                            showToast('优化完成！', 'success');
-                        } else if (this.optimizationProgress.status === 'error' || this.optimizationProgress.status === 'stopped') {
-                            this.isOptimizing = false;
-                            clearInterval(this.progressInterval);
-                            showToast(`优化${this.optimizationProgress.status === 'error' ? '失败' : '已停止'}: ${this.optimizationProgress.error_message || ''}`, 'warning');
-                        }
-                    } catch (error) {
-                        console.error('更新进度失败:', error);
-                    }
-                },
-
-                async stopOptimization() {
-                    if (!this.currentOptimizationId) return;
-
-                    try {
-                        await fetch(`/api/optimization/stop/${this.currentOptimizationId}`, {
-                            method: 'POST'
-                        });
-                        showToast('已请求停止优化', 'info');
-                    } catch (error) {
-                        console.error('停止优化失败:', error);
-                        showToast('停止优化失败: ' + error.message, 'danger');
-                    }
-                },
-
-                async loadResults() {
-                    if (!this.currentOptimizationId) return;
-
-                    try {
-                        const response = await fetch(`/api/optimization/results/${this.currentOptimizationId}`);
-                        this.optimizationResults = await response.json();
-
-                        if (this.optimizationResults.error) {
-                            showToast('获取结果失败: ' + this.optimizationResults.error, 'danger');
-                            return;
-                        }
-
-                        // 渲染散点图
-                        this.$nextTick(() => {
-                            this.renderScatterChart();
-                        });
-                    } catch (error) {
-                        console.error('加载结果失败:', error);
-                        showToast('加载结果失败: ' + error.message, 'danger');
-                    }
-                },
-
-                renderScatterChart() {
-                    if (!this.optimizationResults?.scatter_plot_data?.points?.length) return;
-
-                    const ctx = this.$refs.scatterChart?.getContext('2d');
-                    if (!ctx) return;
-
-                    if (this.scatterChart) {
-                        this.scatterChart.destroy();
-                    }
-
-                    const data = this.optimizationResults.scatter_plot_data.points.map(point => ({
-                        x: point.x,
-                        y: point.y,
-                        rank: point.rank,
-                        parameters: point.parameters,
-                        composite_score: point.composite_score
-                    }));
-
-                    this.scatterChart = new Chart(ctx, {
-                        type: 'scatter',
-                        data: {
-                            datasets: [{
-                                label: '参数组合',
-                                data: data,
-                                backgroundColor: 'rgba(54, 162, 235, 0.6)',
-                                borderColor: 'rgba(54, 162, 235, 1)',
-                                borderWidth: 1,
-                                pointRadius: 5,
-                                pointHoverRadius: 8
-                            }]
-                        },
-                        options: {
-                            responsive: true,
-                            maintainAspectRatio: false,
-                            scales: {
-                                x: {
-                                    title: {
-                                        display: true,
-                                        text: '胜率 (%)'
-                                    }
-                                },
-                                y: {
-                                    title: {
-                                        display: true,
-                                        text: '总收益率 (%)'
-                                    }
-                                }
-                            },
-                            plugins: {
-                                tooltip: {
-                                    callbacks: {
-                                        label: function(context) {
-                                            const point = context.raw;
-                                            return [
-                                                `排名: ${point.rank}`,
-                                                `胜率: ${point.x}%`,
-                                                `收益率: ${point.y}%`,
-                                                `综合评分: ${point.composite_score.toFixed(2)}`,
-                                                `参数: ${JSON.stringify(point.parameters)}`
-                                            ];
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    });
-                },
-
-                async exportResults() {
-                    if (!this.currentOptimizationId) return;
-
-                    try {
-                        const response = await fetch(`/api/optimization/export/${this.currentOptimizationId}`, {
-                            method: 'POST'
-                        });
-                        const result = await response.json();
-
-                        if (result.status === 'success') {
-                            showToast('结果导出成功: ' + result.file_path, 'success');
-                        } else {
-                            showToast('结果导出失败: ' + result.message, 'danger');
-                        }
-                    } catch (error) {
-                        console.error('导出结果失败:', error);
-                        showToast('导出结果失败: ' + error.message, 'danger');
-                    }
-                },
-
-                resetOptimization() {
-                    this.isOptimizing = false;
-                    this.currentOptimizationId = null;
-                    this.optimizationProgress = null;
-                    this.optimizationResults = null;
-                    if (this.progressInterval) {
-                        clearInterval(this.progressInterval);
-                        this.progressInterval = null;
-                    }
-                    if (this.scatterChart) {
-                        this.scatterChart.destroy();
-                        this.scatterChart = null;
-                    }
-                },
-
-                // 工具方法
-                formatTime(seconds) {
-                    if (!seconds || seconds <= 0) return '0秒';
-
-                    const hours = Math.floor(seconds / 3600);
-                    const minutes = Math.floor((seconds % 3600) / 60);
-                    const secs = Math.floor(seconds % 60);
-
-                    if (hours > 0) {
-                        return `${hours}小时${minutes}分钟`;
-                    } else if (minutes > 0) {
-                        return `${minutes}分钟${secs}秒`;
-                    } else {
-                        return `${secs}秒`;
-                    }
-                },
-
-                getStatusBadgeClass(status) {
-                    const classes = {
-                        'running': 'bg-primary',
-                        'completed': 'bg-success',
-                        'error': 'bg-danger',
-                        'stopped': 'bg-warning'
-                    };
-                    return classes[status] || 'bg-secondary';
-                },
-
-                getStatusText(status) {
-                    const texts = {
-                        'running': '运行中',
-                        'completed': '已完成',
-                        'error': '错误',
-                        'stopped': '已停止'
-                    };
-                    return texts[status] || '未知';
-                },
-
-                getPnlClass(value) {
-                    if (value > 0) return 'text-success';
-                    if (value < 0) return 'text-danger';
-                    return 'text-muted';
-                },
-
-                getRankBadgeClass(rank) {
-                    if (rank === 1) return 'bg-warning text-dark';
-                    if (rank <= 3) return 'bg-info';
-                    if (rank <= 10) return 'bg-primary';
-                    return 'bg-secondary';
-                }
-            }
-        }).mount('#app');
-    </script>
+    <!-- 全局Toast通知工具 -->
+    <script src="/static/js/toast-utils.js"></script>
+    <script src="/static/js/optimization-scripts.js"></script>
 </body>
 </html>

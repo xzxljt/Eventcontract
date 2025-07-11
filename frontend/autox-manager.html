@@ -255,18 +255,7 @@
             </div>
         </div>
 
-        <!-- Toast notifications container -->
-        <div class="toast-container position-fixed bottom-0 end-0 p-3" style="z-index: 1100">
-            <div id="appToast" class="toast" role="alert" aria-live="assertive" aria-atomic="true" data-bs-delay="5000">
-                <div class="toast-header">
-                    <i :class="['bi me-2', toast.type === 'success' ? 'bi-check-circle-fill text-success' : (toast.type === 'danger' ? 'bi-x-octagon-fill text-danger' : (toast.type === 'warning' ? 'bi-exclamation-triangle-fill text-warning' : 'bi-info-circle-fill text-info')) ]"></i>
-                    <strong class="me-auto">{{ toast.title }}</strong>
-                    <small class="text-body-secondary ms-2">{{ toast.time }}</small>
-                    <button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Close"></button>
-                </div>
-                <div class="toast-body" v-html="toast.message"></div>
-            </div>
-        </div>
+
 
     </div>
 
@@ -276,6 +265,8 @@
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <!-- Custom Utils JS (must be loaded before scripts that use its functions globally) -->
     <script src="/static/js/utils.js"></script>
+    <!-- 全局Toast通知工具 -->
+    <script src="/static/js/toast-utils.js"></script>
     <!-- Load Navbar Script -->
     <script src="/static/js/load-navbar.js"></script>
     <!-- Custom JS for this page -->
