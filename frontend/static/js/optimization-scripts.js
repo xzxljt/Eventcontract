@@ -78,7 +78,11 @@
                     fieldErrors: {},
 
                     // 图表
-                    scatterChart: null
+                    scatterChart: null,
+
+                    // 历史记录
+                    optimizationHistory: [],
+                    showHistoryModal: false
                 }
             },
 
@@ -143,6 +147,8 @@
             mounted() {
                 this.loadStrategies();
                 this.loadSymbols();
+                this.checkCurrentOptimization();
+                this.loadOptimizationHistory();
             },
 
             methods: {
@@ -154,6 +160,119 @@
 
                 getDefaultEndDate() {
                     return new Date().toISOString().split('T')[0];
+                },
+
+                async checkCurrentOptimization() {
+                    try {
+                        const response = await fetch('/api/optimization/current');
+                        const result = await response.json();
+
+                        if (result.status === 'success' && result.data) {
+                            const currentTask = result.data;
+
+                            // 恢复优化状态
+                            this.currentOptimizationId = currentTask.id;
+                            this.isOptimizing = currentTask.status === 'running';
+                            this.optimizationProgress = currentTask.progress;
+
+                            if (this.isOptimizing) {
+                                // 开始监控进度
+                                this.startProgressMonitoring();
+                                showToast('信息', '检测到正在运行的优化任务，已恢复状态', 'info');
+                            } else if (currentTask.status === 'completed') {
+                                // 加载完成的结果
+                                await this.loadResults();
+                                showToast('成功', '检测到已完成的优化任务，已加载结果', 'success');
+                            }
+                        } else {
+                            // 没有当前运行的任务，清理状态
+                            this.clearOptimizationState();
+                        }
+                    } catch (error) {
+                        console.error('检查当前优化任务失败:', error);
+                        // 出错时也清理状态
+                        this.clearOptimizationState();
+                    }
+                },
+
+                clearOptimizationState() {
+                    // 清理优化状态
+                    this.currentOptimizationId = null;
+                    this.isOptimizing = false;
+                    this.optimizationProgress = null;
+                    this.optimizationResults = null;
+
+                    // 停止进度监控
+                    if (this.progressInterval) {
+                        clearInterval(this.progressInterval);
+                        this.progressInterval = null;
+                    }
+                },
+
+                async loadOptimizationHistory() {
+                    try {
+                        const response = await fetch('/api/optimization/history?limit=10');
+                        const result = await response.json();
+
+                        if (result.status === 'success') {
+                            this.optimizationHistory = result.data;
+                        }
+                    } catch (error) {
+                        console.error('加载优化历史失败:', error);
+                    }
+                },
+
+                async deleteOptimizationRecord(recordId) {
+                    if (!confirm('确定要删除这条优化记录吗？')) {
+                        return;
+                    }
+
+                    try {
+                        const response = await fetch(`/api/optimization/record/${recordId}`, {
+                            method: 'DELETE'
+                        });
+                        const result = await response.json();
+
+                        if (result.status === 'success') {
+                            showToast('成功', '记录删除成功', 'success');
+                            await this.loadOptimizationHistory();
+                        } else {
+                            showToast('错误', '删除失败: ' + result.message, 'danger');
+                        }
+                    } catch (error) {
+                        console.error('删除记录失败:', error);
+                        showToast('错误', '删除记录失败: ' + error.message, 'danger');
+                    }
+                },
+
+                showHistoryModal() {
+                    this.showHistoryModal = true;
+                    this.$nextTick(() => {
+                        const modalElement = document.getElementById('historyModal');
+                        if (modalElement) {
+                            const modal = new bootstrap.Modal(modalElement);
+                            modal.show();
+                        }
+                    });
+                },
+
+                async loadHistoryResults(recordId) {
+                    try {
+                        // 关闭历史记录模态框
+                        const historyModal = bootstrap.Modal.getInstance(document.getElementById('historyModal'));
+                        if (historyModal) {
+                            historyModal.hide();
+                        }
+
+                        // 设置当前优化ID并加载结果
+                        this.currentOptimizationId = recordId;
+                        await this.loadResults();
+
+                        showToast('成功', '历史结果已加载', 'success');
+                    } catch (error) {
+                        console.error('加载历史结果失败:', error);
+                        showToast('错误', '加载历史结果失败: ' + error.message, 'danger');
+                    }
                 },
 
                 async loadStrategies() {
@@ -442,6 +561,8 @@
                             this.isOptimizing = true;
                             this.optimizationResults = null;
                             this.startProgressMonitoring();
+                            // 刷新历史记录
+                            await this.loadOptimizationHistory();
                             showToast('成功', '优化任务已启动', 'success');
                         } else {
                             showToast('错误', '启动优化失败: ' + result.detail, 'danger');
@@ -489,20 +610,35 @@
 
                     try {
                         const response = await fetch(`/api/optimization/progress/${this.currentOptimizationId}`);
+
+                        if (response.status === 404) {
+                            // 任务不存在，清理状态
+                            console.log('优化任务不存在，清理状态');
+                            this.clearOptimizationState();
+                            showToast('信息', '优化任务已结束', 'info');
+                            return;
+                        }
+
                         this.optimizationProgress = await response.json();
 
                         if (this.optimizationProgress.status === 'completed') {
                             this.isOptimizing = false;
                             clearInterval(this.progressInterval);
                             await this.loadResults();
+                            await this.loadOptimizationHistory();
                             showToast('成功', '优化完成！', 'success');
                         } else if (this.optimizationProgress.status === 'error' || this.optimizationProgress.status === 'stopped') {
                             this.isOptimizing = false;
                             clearInterval(this.progressInterval);
+                            await this.loadOptimizationHistory();
                             showToast('警告', `优化${this.optimizationProgress.status === 'error' ? '失败' : '已停止'}: ${this.optimizationProgress.error_message || ''}`, 'warning');
                         }
                     } catch (error) {
                         console.error('更新进度失败:', error);
+                        // 如果是网络错误且包含404，也清理状态
+                        if (error.message && error.message.includes('404')) {
+                            this.clearOptimizationState();
+                        }
                     }
                 },
 

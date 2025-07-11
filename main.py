@@ -2756,6 +2756,64 @@ async def export_optimization_results(optimization_id: str, format: str = Query(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"导出结果失败: {str(e)}")
 
+@app.get("/api/optimization/current")
+async def get_current_optimization():
+    """获取当前正在运行的优化任务"""
+    try:
+        engine = get_optimization_engine()
+        current_task = await engine.get_current_optimization()
+
+        if current_task:
+            return {
+                'status': 'success',
+                'data': current_task
+            }
+        else:
+            return {
+                'status': 'success',
+                'data': None,
+                'message': '当前没有运行中的优化任务'
+            }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取当前任务失败: {str(e)}")
+
+@app.get("/api/optimization/history")
+async def get_optimization_history(limit: int = Query(10, description="记录数量限制")):
+    """获取优化历史记录"""
+    try:
+        engine = get_optimization_engine()
+        history = await engine.get_optimization_history(limit)
+
+        return {
+            'status': 'success',
+            'data': history
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取历史记录失败: {str(e)}")
+
+@app.delete("/api/optimization/record/{record_id}")
+async def delete_optimization_record(record_id: str):
+    """删除优化记录"""
+    try:
+        engine = get_optimization_engine()
+        success = await engine.delete_optimization_record(record_id)
+
+        if success:
+            return {
+                'status': 'success',
+                'message': '记录删除成功'
+            }
+        else:
+            return {
+                'status': 'error',
+                'message': '记录删除失败'
+            }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"删除记录失败: {str(e)}")
+
 @app.delete("/api/optimization/{optimization_id}")
 async def cleanup_optimization(optimization_id: str):
     """清理优化数据"""

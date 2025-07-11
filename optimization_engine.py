@@ -8,6 +8,7 @@ import uuid
 import logging
 import itertools
 import threading
+import asyncio
 import numpy as np
 import pandas as pd
 from datetime import datetime
@@ -19,6 +20,7 @@ from dataclasses import dataclass
 from backtester import run_single_backtest
 from strategies import get_available_strategies
 from binance_client import BinanceClient
+from optimization_database import OptimizationDatabase, OptimizationRecord, get_optimization_db
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -707,35 +709,162 @@ class OptimizationEngine:
         self.results_manager = ResultsManager()
         self.binance_client = BinanceClient()
 
-        # 活跃的优化任务
-        self._active_optimizations: Dict[str, threading.Thread] = {}
+        # 单任务管理
+        self._current_optimization_id: Optional[str] = None
+        self._current_thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
+
+        # 数据库实例（延迟初始化）
+        self._db: Optional[OptimizationDatabase] = None
+
+    async def _get_db(self) -> OptimizationDatabase:
+        """获取数据库实例"""
+        if self._db is None:
+            self._db = await get_optimization_db()
+        return self._db
+
+    async def _create_optimization_record(self, optimization_id: str, config: Dict[str, Any], total_combinations: int):
+        """创建优化记录"""
+        try:
+            db = await self._get_db()
+
+            # 获取策略名称
+            strategy_name = "未知策略"
+            try:
+                strategies = get_available_strategies()
+                strategy = next((s for s in strategies if s['id'] == config.get('strategy_id')), None)
+                if strategy:
+                    strategy_name = strategy['name']
+            except:
+                pass
+
+            record = OptimizationRecord(
+                id=optimization_id,
+                symbol=config.get('symbol', ''),
+                interval=config.get('interval', ''),
+                strategy_id=config.get('strategy_id', ''),
+                strategy_name=strategy_name,
+                start_date=config.get('start_date', ''),
+                end_date=config.get('end_date', ''),
+                status='running',
+                progress={
+                    'current': 0,
+                    'total': total_combinations,
+                    'percentage': 0.0,
+                    'elapsed_time': 0.0,
+                    'estimated_remaining': 0.0
+                },
+                config=config
+            )
+
+            await db.save_record(record)
+            logger.info(f"优化记录已创建: {optimization_id}")
+
+        except Exception as e:
+            logger.error(f"创建优化记录失败: {e}")
+
+    async def _update_record_status(self, optimization_id: str, status: str,
+                                  progress: Optional[Dict[str, Any]] = None,
+                                  results: Optional[Dict[str, Any]] = None,
+                                  error_message: Optional[str] = None):
+        """更新记录状态"""
+        try:
+            db = await self._get_db()
+            await db.update_record_status(optimization_id, status, progress, results, error_message)
+            logger.info(f"记录状态已更新: {optimization_id} -> {status}")
+        except Exception as e:
+            logger.error(f"更新记录状态失败: {e}")
+
+    def _schedule_db_update(self, optimization_id: str, status: str,
+                          progress: Optional[Dict[str, Any]] = None,
+                          results: Optional[Dict[str, Any]] = None,
+                          error_message: Optional[str] = None):
+        """线程安全的数据库更新调度"""
+        try:
+            # 使用线程池执行器来运行异步任务
+            import concurrent.futures
+            import threading
+
+            def run_async_update():
+                try:
+                    # 创建新的事件循环
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        loop.run_until_complete(
+                            self._update_record_status(optimization_id, status, progress, results, error_message)
+                        )
+                    finally:
+                        loop.close()
+                except Exception as e:
+                    logger.error(f"异步数据库更新失败: {e}")
+
+            # 在新线程中执行
+            thread = threading.Thread(target=run_async_update, daemon=True)
+            thread.start()
+
+        except Exception as e:
+            logger.warning(f"调度数据库更新失败: {e}")
+
+    def _schedule_record_creation(self, optimization_id: str, config: Dict[str, Any], total_combinations: int):
+        """线程安全的记录创建调度"""
+        try:
+            import threading
+
+            def run_async_creation():
+                try:
+                    # 创建新的事件循环
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        loop.run_until_complete(
+                            self._create_optimization_record(optimization_id, config, total_combinations)
+                        )
+                    finally:
+                        loop.close()
+                except Exception as e:
+                    logger.error(f"异步记录创建失败: {e}")
+
+            # 在新线程中执行
+            thread = threading.Thread(target=run_async_creation, daemon=True)
+            thread.start()
+
+        except Exception as e:
+            logger.warning(f"调度记录创建失败: {e}")
 
     def optimize_strategy(self, optimization_config: Dict[str, Any]) -> str:
         """开始策略优化"""
         try:
-            # 1. 验证配置
+            # 1. 检查是否有正在运行的任务
+            with self._lock:
+                if self._current_optimization_id is not None:
+                    raise ValueError("已有优化任务正在运行，请等待完成或停止当前任务")
+
+            # 2. 验证配置
             is_valid, error_msg = ParameterValidator.validate_optimization_config(optimization_config)
             if not is_valid:
                 raise ValueError(f"配置验证失败: {error_msg}")
 
-            # 2. 计算参数组合数量
+            # 3. 计算参数组合数量
             param_ranges = optimization_config['strategy_params_ranges']
             total_combinations = ParameterValidator.calculate_total_combinations(param_ranges)
 
-            # 3. 验证资源限制
+            # 4. 验证资源限制
             max_combinations = optimization_config.get('max_combinations', 10000)
             is_valid, error_msg = ParameterValidator.validate_resource_limits(total_combinations, max_combinations)
             if not is_valid:
                 raise ValueError(f"资源限制验证失败: {error_msg}")
 
-            # 4. 生成优化ID
+            # 5. 生成优化ID
             optimization_id = str(uuid.uuid4())
 
-            # 5. 创建进度跟踪
+            # 6. 创建进度跟踪
             self.progress_tracker.create_progress(optimization_id, total_combinations)
 
-            # 6. 启动优化线程
+            # 7. 创建数据库记录
+            self._schedule_record_creation(optimization_id, optimization_config, total_combinations)
+
+            # 8. 启动优化线程
             optimization_thread = threading.Thread(
                 target=self._run_optimization,
                 args=(optimization_id, optimization_config),
@@ -743,7 +872,8 @@ class OptimizationEngine:
             )
 
             with self._lock:
-                self._active_optimizations[optimization_id] = optimization_thread
+                self._current_optimization_id = optimization_id
+                self._current_thread = optimization_thread
 
             optimization_thread.start()
 
@@ -781,22 +911,87 @@ class OptimizationEngine:
     def stop_optimization(self, optimization_id: str) -> bool:
         """停止优化"""
         try:
+            # 检查是否是当前运行的任务
+            with self._lock:
+                if self._current_optimization_id != optimization_id:
+                    logger.warning(f"尝试停止非当前任务: {optimization_id}")
+                    return False
+
             # 停止优化器
             self.optimizer.stop_optimization()
 
             # 更新进度状态
             self.progress_tracker.complete_progress(optimization_id, "stopped")
 
-            # 清理活跃优化记录
+            # 更新数据库记录
+            self._schedule_db_update(optimization_id, "stopped")
+
+            # 清理当前任务记录
             with self._lock:
-                if optimization_id in self._active_optimizations:
-                    del self._active_optimizations[optimization_id]
+                self._current_optimization_id = None
+                self._current_thread = None
 
             logger.info(f"优化任务已停止，ID: {optimization_id}")
             return True
 
         except Exception as e:
             logger.error(f"停止优化时发生错误: {e}")
+            return False
+
+    async def get_current_optimization(self) -> Optional[Dict[str, Any]]:
+        """获取当前正在运行的优化任务"""
+        try:
+            db = await self._get_db()
+            record = await db.get_running_record()
+
+            if record:
+                return {
+                    'id': record.id,
+                    'symbol': record.symbol,
+                    'interval': record.interval,
+                    'strategy_name': record.strategy_name,
+                    'status': record.status,
+                    'progress': record.progress,
+                    'created_at': record.created_at
+                }
+            return None
+
+        except Exception as e:
+            logger.error(f"获取当前优化任务失败: {e}")
+            return None
+
+    async def get_optimization_history(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """获取优化历史记录"""
+        try:
+            db = await self._get_db()
+            records = await db.get_all_records(limit)
+
+            return [
+                {
+                    'id': record.id,
+                    'symbol': record.symbol,
+                    'interval': record.interval,
+                    'strategy_name': record.strategy_name,
+                    'status': record.status,
+                    'progress': record.progress,
+                    'created_at': record.created_at,
+                    'completed_at': record.completed_at,
+                    'error_message': record.error_message
+                }
+                for record in records
+            ]
+
+        except Exception as e:
+            logger.error(f"获取优化历史失败: {e}")
+            return []
+
+    async def delete_optimization_record(self, record_id: str) -> bool:
+        """删除优化记录"""
+        try:
+            db = await self._get_db()
+            return await db.delete_record(record_id)
+        except Exception as e:
+            logger.error(f"删除优化记录失败: {e}")
             return False
 
     def get_optimization_results(self, optimization_id: str, limit: Optional[int] = None) -> Dict[str, Any]:
@@ -888,6 +1083,15 @@ class OptimizationEngine:
             # 4. 创建进度回调
             def progress_callback(current: int, total: int):
                 self.progress_tracker.update_progress(optimization_id, current)
+                # 同步更新数据库进度（使用线程安全的方式）
+                progress_data = {
+                    'current': current,
+                    'total': total,
+                    'percentage': (current / total * 100) if total > 0 else 0,
+                    'elapsed_time': 0.0,  # 这里可以从progress_tracker获取
+                    'estimated_remaining': 0.0
+                }
+                self._schedule_db_update(optimization_id, "running", progress_data)
 
             # 5. 执行并行优化
             results = self.optimizer.optimize_parallel(
@@ -900,17 +1104,31 @@ class OptimizationEngine:
             # 7. 完成进度跟踪
             self.progress_tracker.complete_progress(optimization_id, "completed")
 
+            # 8. 更新数据库记录为完成状态
+            results_data = {
+                'summary': {
+                    'total_combinations_tested': len(combinations),
+                    'valid_results': len(results),
+                    'best_score': results[0].composite_score if results else 0.0
+                },
+                'results_count': len(results)
+            }
+            self._schedule_db_update(optimization_id, "completed", None, results_data)
+
             logger.info(f"优化任务完成: {optimization_id}, 有效结果: {len(results)}")
 
         except Exception as e:
             logger.error(f"优化任务执行失败: {optimization_id}, 错误: {e}")
             self.progress_tracker.complete_progress(optimization_id, "error", str(e))
+            # 更新数据库记录为错误状态
+            self._schedule_db_update(optimization_id, "error", None, None, str(e))
 
         finally:
-            # 清理活跃优化记录
+            # 清理当前任务记录
             with self._lock:
-                if optimization_id in self._active_optimizations:
-                    del self._active_optimizations[optimization_id]
+                if self._current_optimization_id == optimization_id:
+                    self._current_optimization_id = None
+                    self._current_thread = None
 
     def _prepare_data(self, optimization_config: Dict[str, Any]) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
         """准备回测数据"""
