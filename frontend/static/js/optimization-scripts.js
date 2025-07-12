@@ -23,6 +23,7 @@
                     // 基础数据
                     symbols: [],
                     strategies: [],
+                    investmentStrategies: [],
                     favoriteSymbols: JSON.parse(localStorage.getItem('favoriteSymbols') || '[]'),
 
                     // 优化参数
@@ -57,6 +58,14 @@
                     selectedPreset: '',
                     parameterRanges: {},
                     strategyPresets: {},
+
+                    // 投资策略相关
+                    selectedInvestmentStrategy: null,
+                    investmentStrategyParams: {},
+                    investmentSettings: {
+                        min_investment_amount: 5.0,
+                        max_investment_amount: 250.0
+                    },
 
                     // 参数优化配置 - 新增
                     parameterOptimizationConfig: {}, // 存储每个参数的启用状态和固定值
@@ -99,6 +108,7 @@
 
                 canStartOptimization() {
                     return this.selectedStrategy &&
+                           this.selectedInvestmentStrategy &&
                            this.optimizationParams.symbol &&
                            this.optimizationParams.interval &&
                            this.optimizationParams.start_date &&
@@ -146,6 +156,7 @@
 
             mounted() {
                 this.loadStrategies();
+                this.loadInvestmentStrategies();
                 this.loadSymbols();
                 this.checkCurrentOptimization();
                 this.loadOptimizationHistory();
@@ -283,6 +294,24 @@
                     } catch (error) {
                         console.error('加载策略失败:', error);
                         showToast('错误', '加载策略失败: ' + error.message, 'danger');
+                    }
+                },
+
+                async loadInvestmentStrategies() {
+                    try {
+                        const response = await fetch('/api/investment-strategies');
+                        this.investmentStrategies = await response.json();
+
+                        // 默认选择固定金额策略
+                        if (this.investmentStrategies.length > 0 && !this.selectedInvestmentStrategy) {
+                            const fixedStrategy = this.investmentStrategies.find(s => s.id === 'fixed');
+                            this.selectedInvestmentStrategy = fixedStrategy || this.investmentStrategies[0];
+                        }
+
+                        showToast('成功', '投资策略列表加载成功', 'success');
+                    } catch (error) {
+                        console.error('加载投资策略失败:', error);
+                        showToast('错误', '加载投资策略失败: ' + error.message, 'danger');
                     }
                 },
 
@@ -431,6 +460,40 @@
                     showToast('成功', `已应用${this.selectedPreset}型参数预设`, 'success');
                 },
 
+                // 投资策略参数更新
+                updateInvestmentStrategyParams(newStrategy) {
+                    if (newStrategy && newStrategy.parameters) {
+                        const defaultParams = {};
+                        newStrategy.parameters.forEach(param => {
+                            if (param.default !== undefined) {
+                                defaultParams[param.name] = param.default;
+                            }
+                        });
+
+                        // 处理马丁格尔用户定义策略的特殊情况
+                        if (newStrategy.id === 'martingale_user_defined' && defaultParams.sequence && Array.isArray(defaultParams.sequence)) {
+                            defaultParams.sequence = defaultParams.sequence.join(',');
+                        }
+
+                        this.investmentStrategyParams = defaultParams;
+                    } else {
+                        this.investmentStrategyParams = {};
+                    }
+                },
+
+                // 验证错误获取方法
+                getValidationError(path) {
+                    let current = this.fieldErrors;
+                    for (const key of path) {
+                        if (current && typeof current === 'object' && current[key]) {
+                            current = current[key];
+                        } else {
+                            return null;
+                        }
+                    }
+                    return current;
+                },
+
                 // 新增：切换参数优化状态
                 toggleParameterOptimization(paramName) {
                     console.log(`切换参数 ${paramName} 的优化状态`);
@@ -508,6 +571,25 @@
                             }
                         }
 
+                        // 处理投资策略参数
+                        let investmentStrategyParams = { ...this.investmentStrategyParams };
+                        if (this.selectedInvestmentStrategy?.id === 'martingale_user_defined' && investmentStrategyParams.sequence) {
+                            if (typeof investmentStrategyParams.sequence === 'string') {
+                                try {
+                                    const parsedSequence = investmentStrategyParams.sequence.split(',')
+                                        .map(s => parseFloat(s.trim()))
+                                        .filter(n => !isNaN(n) && n > 0);
+                                    if (parsedSequence.length > 0) {
+                                        investmentStrategyParams.sequence = parsedSequence;
+                                    } else {
+                                        delete investmentStrategyParams.sequence;
+                                    }
+                                } catch (e) {
+                                    delete investmentStrategyParams.sequence;
+                                }
+                            }
+                        }
+
                         const requestData = {
                             symbol: this.optimizationParams.symbol,
                             interval: this.optimizationParams.interval,
@@ -515,6 +597,12 @@
                             end_date: this.optimizationParams.end_date,
                             strategy_id: this.selectedStrategy.id,
                             strategy_params_ranges: strategyParamsRanges,
+                            investment_strategy_id: this.selectedInvestmentStrategy?.id || 'fixed',
+                            investment_strategy_params: {
+                                ...investmentStrategyParams,
+                                minAmount: this.investmentSettings.min_investment_amount,
+                                maxAmount: this.investmentSettings.max_investment_amount
+                            },
                             max_combinations: this.optimizationParams.max_combinations,
                             min_trades: this.optimizationParams.min_trades
                         };
@@ -586,8 +674,24 @@
                         isValid = false;
                     }
 
+                    if (!this.selectedInvestmentStrategy) {
+                        this.fieldErrors.investmentStrategy = '请选择投资策略';
+                        isValid = false;
+                    }
+
                     if (new Date(this.optimizationParams.start_date) >= new Date(this.optimizationParams.end_date)) {
                         this.fieldErrors.end_date = '结束日期必须晚于开始日期';
+                        isValid = false;
+                    }
+
+                    // 验证投资限制设置
+                    if (this.investmentSettings.min_investment_amount <= 0) {
+                        this.fieldErrors.min_investment_amount = '最小投资额必须大于0';
+                        isValid = false;
+                    }
+
+                    if (this.investmentSettings.max_investment_amount <= this.investmentSettings.min_investment_amount) {
+                        this.fieldErrors.max_investment_amount = '最大投资额必须大于最小投资额';
                         isValid = false;
                     }
 
@@ -992,6 +1096,37 @@
                     if (rank <= 3) return 'bg-info-subtle';
                     if (rank <= 10) return 'bg-primary-subtle';
                     return '';
+                }
+            },
+
+            watch: {
+                selectedInvestmentStrategy: {
+                    handler(newStrategy, oldStrategy) {
+                        if (newStrategy?.id !== oldStrategy?.id) {
+                            this.updateInvestmentStrategyParams(newStrategy);
+                        }
+                    },
+                    immediate: true,
+                    deep: true
+                },
+
+                // 监听投资策略参数变化，处理特殊类型转换
+                investmentStrategyParams: {
+                    handler(newParams) {
+                        if (this.selectedInvestmentStrategy?.id === 'martingale_user_defined' && newParams.sequence) {
+                            if (typeof newParams.sequence === 'string') {
+                                try {
+                                    // 验证序列格式但不修改原始字符串，让用户继续编辑
+                                    newParams.sequence.split(',')
+                                        .map(s => parseFloat(s.trim()))
+                                        .filter(n => !isNaN(n) && n > 0);
+                                } catch (e) {
+                                    console.warn('序列格式验证失败:', e);
+                                }
+                            }
+                        }
+                    },
+                    deep: true
                 }
             }
         }).mount('#app');

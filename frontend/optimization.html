@@ -218,6 +218,83 @@
                                     </div>
                                 </div>
 
+                                <!-- 投资策略配置 -->
+                                <div class="mb-3">
+                                    <label class="form-label">投资策略配置</label>
+                                    <div class="card">
+                                        <div class="card-body p-3">
+                                            <!-- 投资策略选择 -->
+                                            <div class="mb-3">
+                                                <label for="investmentStrategySelect" class="form-label small">投资策略</label>
+                                                <select class="form-select form-select-sm" id="investmentStrategySelect"
+                                                        v-model="selectedInvestmentStrategy" required
+                                                        :class="{'is-invalid': fieldErrors.investmentStrategy}">
+                                                    <option :value="null" disabled>选择投资策略</option>
+                                                    <option v-for="strategy in investmentStrategies" :key="strategy.id" :value="strategy">
+                                                        {{ strategy.name }}
+                                                        <span v-if="strategy.description && strategy.id !== 'martingale_user_defined'" class="text-muted x-small">
+                                                            ({{ strategy.description }})
+                                                        </span>
+                                                    </option>
+                                                </select>
+                                                <div v-if="fieldErrors.investmentStrategy" class="invalid-feedback">
+                                                    {{ fieldErrors.investmentStrategy }}
+                                                </div>
+                                            </div>
+
+                                            <!-- 投资策略参数 -->
+                                            <div v-if="selectedInvestmentStrategy && selectedInvestmentStrategy.parameters && Object.keys(investmentStrategyParams).length > 0"
+                                                 class="mb-3 border p-2 rounded-1 bg-light">
+                                                <label class="form-label small text-muted">投资策略参数 ({{ selectedInvestmentStrategy.name }}):</label>
+                                                <div v-for="paramDef in selectedInvestmentStrategy.parameters.filter(p => !p.advanced && !p.readonly && p.name !== 'minAmount' && p.name !== 'maxAmount')"
+                                                     :key="paramDef.name" class="mb-2">
+                                                    <label :for="'inv_param_opt_' + paramDef.name" class="form-label x-small">
+                                                        {{ paramDef.description || paramDef.name }}
+                                                    </label>
+                                                    <input v-if="paramDef.type !== 'boolean' && paramDef.editor !== 'text_list' && paramDef.type !== 'list_float'"
+                                                           :type="paramDef.type === 'int' || paramDef.type === 'float' ? 'number' : 'text'"
+                                                           class="form-control form-control-sm"
+                                                           :class="{'is-invalid': getValidationError(['investment_strategy_params', paramDef.name])}"
+                                                           :id="'inv_param_opt_' + paramDef.name"
+                                                           v-model="investmentStrategyParams[paramDef.name]"
+                                                           :step="paramDef.type === 'float' ? (paramDef.step || 0.01) : (paramDef.type === 'int' ? 1 : null)"
+                                                           :min="paramDef.min" :max="paramDef.max" :placeholder="paramDef.default">
+                                                    <textarea v-else-if="paramDef.editor === 'text_list'"
+                                                              class="form-control form-control-sm"
+                                                              :class="{'is-invalid': getValidationError(['investment_strategy_params', paramDef.name])}"
+                                                              :id="'inv_param_opt_' + paramDef.name"
+                                                              v-model="investmentStrategyParams[paramDef.name]"
+                                                              rows="1" :placeholder="paramDef.placeholder || paramDef.default?.join(',') || '例如: 10,20,40'">
+                                                    </textarea>
+                                                    <select v-else-if="paramDef.type === 'boolean'" class="form-select form-select-sm"
+                                                            :class="{'is-invalid': getValidationError(['investment_strategy_params', paramDef.name])}"
+                                                            :id="'inv_param_opt_' + paramDef.name"
+                                                            v-model="investmentStrategyParams[paramDef.name]">
+                                                        <option :value="true">是</option>
+                                                        <option :value="false">否</option>
+                                                    </select>
+                                                </div>
+                                            </div>
+
+                                            <!-- 投资限制设置 -->
+                                            <div class="row g-2">
+                                                <div class="col-6">
+                                                    <label for="minInvestment" class="form-label small">最小投资额</label>
+                                                    <input type="number" class="form-control form-control-sm" id="minInvestment"
+                                                           v-model.number="investmentSettings.min_investment_amount"
+                                                           min="1" max="1000" step="0.01" placeholder="5.0">
+                                                </div>
+                                                <div class="col-6">
+                                                    <label for="maxInvestment" class="form-label small">最大投资额</label>
+                                                    <input type="number" class="form-control form-control-sm" id="maxInvestment"
+                                                           v-model.number="investmentSettings.max_investment_amount"
+                                                           min="1" max="10000" step="0.01" placeholder="250.0">
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
                                 <!-- 高级过滤设置 -->
                                 <div class="mb-3">
                                     <label class="form-label">高级过滤设置</label>

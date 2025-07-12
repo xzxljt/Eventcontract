@@ -131,6 +131,36 @@
     min-width: 80px;
 }
 
+/* 投资策略配置样式 */
+.investment-strategy-container {
+    background-color: var(--input-bg-color);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-base);
+    transition: all 0.3s ease;
+}
+
+.investment-strategy-container:hover {
+    border-color: var(--success-color);
+    background-color: var(--success-color-light);
+}
+
+.investment-strategy-params {
+    background-color: rgba(var(--success-color-rgb), 0.05);
+    border: 1px dashed var(--success-color);
+    border-radius: var(--border-radius-base);
+}
+
+/* 投资策略参数输入框样式 */
+.investment-strategy-params .form-control {
+    border-color: var(--success-color);
+    background-color: rgba(255, 255, 255, 0.9);
+}
+
+.investment-strategy-params .form-control:focus {
+    border-color: var(--success-color);
+    box-shadow: 0 0 0 0.2rem rgba(var(--success-color-rgb), 0.25);
+}
+
 .parameter-item:hover {
     transform: translateY(-1px);
     box-shadow: 0 2px 8px rgba(0,0,0,0.1);
