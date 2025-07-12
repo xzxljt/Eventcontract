@@ -8,6 +8,7 @@ import json
 import logging
 import asyncio
 import aiosqlite
+import os
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Any
 from dataclasses import dataclass, asdict
@@ -38,11 +39,16 @@ class OptimizationRecord:
 class OptimizationDatabase:
     """优化记录数据库管理器"""
     
-    def __init__(self, db_path: str = "data/optimization_records.db"):
+    def __init__(self, db_path: str = None):
         """初始化数据库管理器"""
+        if db_path is None:
+            # 使用项目根目录下的data文件夹
+            project_root = os.path.dirname(os.path.abspath(__file__))
+            db_path = os.path.join(project_root, "data", "optimization_records.db")
+
         self.db_path = db_path
         self.max_records = 7  # 最多保留7条记录
-        
+
         # 确保数据目录存在
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         

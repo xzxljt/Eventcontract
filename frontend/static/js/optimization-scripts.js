@@ -82,7 +82,7 @@
 
                     // 历史记录
                     optimizationHistory: [],
-                    showHistoryModal: false
+                    isHistoryModalVisible: false
                 }
             },
 
@@ -245,8 +245,8 @@
                     }
                 },
 
-                showHistoryModal() {
-                    this.showHistoryModal = true;
+                openHistoryModal() {
+                    this.isHistoryModalVisible = true;
                     this.$nextTick(() => {
                         const modalElement = document.getElementById('historyModal');
                         if (modalElement) {
