@@ -3761,7 +3761,17 @@ async def shutdown_event():
         logger.info("没有活动的 AutoX 客户端需要发送关闭通知。")
     # --- 结束新增 ---
 
-    # 3. 停止币安WebSocket连接 (BinanceClient.stop_all_websockets 是同步的)
+    # 3. 停止策略优化引擎
+    try:
+        logger.info("正在停止策略优化引擎...")
+        engine = get_optimization_engine()
+        # 停止所有正在运行的优化任务
+        engine.stop_all_optimizations()
+        logger.info("策略优化引擎已停止。")
+    except Exception as e:
+        logger.error(f"停止策略优化引擎时发生错误: {e}", exc_info=True)
+
+    # 4. 停止币安WebSocket连接 (BinanceClient.stop_all_websockets 是同步的)
     # 这个操作应该相对较快，或者其内部有自己的超时和线程管理
     try:
         logger.info("正在停止所有币安WebSocket连接...")
@@ -3770,7 +3780,7 @@ async def shutdown_event():
     except Exception as e:
         logger.error(f"停止币安WebSocket连接时发生错误: {e}", exc_info=True)
 
-    # 4. 并发保存所有持久化数据
+    # 5. 并发保存所有持久化数据
     logger.info("正在并发保存所有持久化数据...")
     save_data_tasks = [
         save_live_signals_async(),
@@ -3788,7 +3798,7 @@ async def shutdown_event():
             logger.info(f"{task_name} 完成。")
     logger.info("所有持久化数据保存尝试完成。")
 
-    # 5. 并发关闭所有客户端WebSocket连接 (UI, AutoX, Status)
+    # 6. 并发关闭所有客户端WebSocket连接 (UI, AutoX, Status)
     logger.info("正在并发关闭所有活动的客户端WebSocket连接...")
     close_client_ws_tasks = []
     
@@ -3814,8 +3824,27 @@ async def shutdown_event():
     # 等待后台任务完成 (给它们一点时间响应 shutdown_event_async)
     # Uvicorn 的 graceful_shutdown 也会等待后台任务，但这里可以显式等待一小段时间
     # 确保在Uvicorn强制终止前，我们的任务有机会清理
-    logger.info("等待后台任务响应关闭信号 (最多等待几秒)...")
-    await asyncio.sleep(2) # 短暂等待，让后台任务的循环检测到 shutdown_event_async
+    logger.info("等待后台任务响应关闭信号 (最多等待3秒)...")
+    await asyncio.sleep(3) # 稍微增加等待时间，确保后台任务有足够时间清理
+
+    # 7. 强制清理任何剩余的asyncio任务
+    try:
+        logger.info("检查并清理剩余的asyncio任务...")
+        pending_tasks = [task for task in asyncio.all_tasks() if not task.done()]
+        if pending_tasks:
+            logger.warning(f"发现 {len(pending_tasks)} 个未完成的asyncio任务，尝试取消...")
+            for task in pending_tasks:
+                if not task.done():
+                    task.cancel()
+
+            # 等待任务取消完成
+            if pending_tasks:
+                await asyncio.gather(*pending_tasks, return_exceptions=True)
+            logger.info("剩余asyncio任务已清理完成。")
+        else:
+            logger.info("没有发现剩余的asyncio任务。")
+    except Exception as e:
+        logger.error(f"清理剩余asyncio任务时发生错误: {e}", exc_info=True)
 
     logger.info("服务关闭清理操作全部完成。")
 
@@ -3843,6 +3872,7 @@ if __name__ == "__main__":
     host = os.getenv("SERVER_HOST", "0.0.0.0")
     port = int(os.getenv("SERVER_PORT", "8000")) # 端口通常是整数
     # 设置超时参数，确保服务能够正常关闭
-    uvicorn.run(app, host=host, port=port, timeout_keep_alive=30, timeout_graceful_shutdown=30)
+    # 减少超时时间以加快关闭速度
+    uvicorn.run(app, host=host, port=port, timeout_keep_alive=15, timeout_graceful_shutdown=15)
 
 # --- END OF FILE main.py ---

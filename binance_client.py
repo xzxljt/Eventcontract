@@ -89,7 +89,7 @@ class BinanceClient:
         # WebSocket 连接监控和超时设置
         self._ws_monitor_interval = int(os.getenv("WS_MONITOR_INTERVAL", "30")) # WebSocket监控间隔（秒）
         self._ws_connection_timeout = int(os.getenv("WS_CONNECTION_TIMEOUT", "60")) # WebSocket连接超时（秒）
-        self._ws_shutdown_timeout = int(os.getenv("WS_SHUTDOWN_TIMEOUT", "10")) # WebSocket关闭超时（秒） - 从30秒调整为10秒
+        self._ws_shutdown_timeout = int(os.getenv("WS_SHUTDOWN_TIMEOUT", "5")) # WebSocket关闭超时（秒） - 进一步调整为5秒
         self._ws_last_activity: Dict[str, float] = {} # 存储每个连接的最后活动时间
         self._ws_monitor_thread = None # WebSocket监控线程
         self._ws_monitor_running = False # WebSocket监控线程运行标志

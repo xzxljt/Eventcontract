@@ -917,6 +917,8 @@ class OptimizationEngine:
                     logger.warning(f"尝试停止非当前任务: {optimization_id}")
                     return False
 
+                current_thread = self._current_thread
+
             # 停止优化器
             self.optimizer.stop_optimization()
 
@@ -925,6 +927,13 @@ class OptimizationEngine:
 
             # 更新数据库记录
             self._schedule_db_update(optimization_id, "stopped")
+
+            # 等待线程结束（设置超时避免无限等待）
+            if current_thread and current_thread.is_alive():
+                logger.info(f"等待优化线程结束，最多等待10秒...")
+                current_thread.join(timeout=10)
+                if current_thread.is_alive():
+                    logger.warning(f"优化线程未能在10秒内结束，可能存在资源泄漏")
 
             # 清理当前任务记录
             with self._lock:
@@ -936,6 +945,43 @@ class OptimizationEngine:
 
         except Exception as e:
             logger.error(f"停止优化时发生错误: {e}")
+            return False
+
+    def stop_all_optimizations(self) -> bool:
+        """停止所有正在运行的优化任务"""
+        try:
+            with self._lock:
+                current_optimization_id = self._current_optimization_id
+                current_thread = self._current_thread
+
+            if current_optimization_id:
+                logger.info(f"正在停止当前优化任务: {current_optimization_id}")
+                success = self.stop_optimization(current_optimization_id)
+                if not success:
+                    logger.warning(f"停止优化任务 {current_optimization_id} 失败")
+
+                    # 强制停止优化器
+                    self.optimizer.stop_optimization()
+
+                    # 如果线程仍在运行，尝试强制结束
+                    if current_thread and current_thread.is_alive():
+                        logger.warning("尝试强制结束优化线程...")
+                        current_thread.join(timeout=5)
+                        if current_thread.is_alive():
+                            logger.error("优化线程未能在5秒内结束，可能存在资源泄漏")
+
+                    # 强制清理状态
+                    with self._lock:
+                        self._current_optimization_id = None
+                        self._current_thread = None
+
+                return True
+            else:
+                logger.info("没有正在运行的优化任务需要停止")
+                return True
+
+        except Exception as e:
+            logger.error(f"停止所有优化任务时发生错误: {e}")
             return False
 
     async def get_current_optimization(self) -> Optional[Dict[str, Any]]:
