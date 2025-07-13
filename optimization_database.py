@@ -9,6 +9,7 @@ import logging
 import asyncio
 import aiosqlite
 import os
+import shutil
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Any
 from dataclasses import dataclass, asdict
@@ -42,15 +43,23 @@ class OptimizationDatabase:
     def __init__(self, db_path: str = None):
         """初始化数据库管理器"""
         if db_path is None:
-            # 使用项目根目录下的data文件夹
+            # 使用项目根目录下的data文件夹，确保使用绝对路径
             project_root = os.path.dirname(os.path.abspath(__file__))
-            db_path = os.path.join(project_root, "data", "optimization_records.db")
+            data_dir = os.path.join(project_root, "data")
+            db_path = os.path.join(data_dir, "optimization_records.db")
+
+            # 确保使用绝对路径
+            db_path = os.path.abspath(db_path)
 
         self.db_path = db_path
         self.max_records = 7  # 最多保留7条记录
 
         # 确保数据目录存在
-        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+        data_dir = Path(self.db_path).parent
+        data_dir.mkdir(parents=True, exist_ok=True)
+
+        # 记录数据库路径用于调试
+        logger.info(f"优化记录数据库路径: {self.db_path}")
         
     async def initialize(self):
         """初始化数据库表"""
@@ -274,7 +283,128 @@ class OptimizationDatabase:
                     
         except Exception as e:
             logger.error(f"清理旧记录失败: {e}")
-    
+
+    async def recover_interrupted_tasks(self):
+        """恢复服务器重启后中断的任务状态"""
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                # 查找所有状态为running的记录
+                async with db.execute("""
+                    SELECT id, symbol, strategy_name FROM optimization_records
+                    WHERE status = 'running'
+                """) as cursor:
+                    running_records = await cursor.fetchall()
+
+                if running_records:
+                    logger.info(f"发现 {len(running_records)} 个中断的优化任务，正在恢复状态...")
+
+                    # 将所有running状态的记录更新为stopped
+                    current_time = datetime.now().isoformat()
+                    await db.execute("""
+                        UPDATE optimization_records
+                        SET status = 'stopped',
+                            updated_at = ?,
+                            completed_at = ?
+                        WHERE status = 'running'
+                    """, (current_time, current_time))
+                    await db.commit()
+
+                    # 记录恢复的任务
+                    for record_id, symbol, strategy_name in running_records:
+                        logger.info(f"已恢复中断任务: {record_id[:8]}... ({symbol} - {strategy_name})")
+
+                    logger.info("所有中断任务状态已恢复")
+                else:
+                    logger.info("未发现中断的优化任务")
+
+        except Exception as e:
+            logger.error(f"恢复中断任务状态失败: {e}")
+
+    async def create_backup(self) -> bool:
+        """创建数据库备份"""
+        try:
+            backup_dir = Path(self.db_path).parent / "backups"
+            backup_dir.mkdir(exist_ok=True)
+
+            # 生成备份文件名（包含时间戳）
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_path = backup_dir / f"optimization_records_backup_{timestamp}.db"
+
+            # 复制数据库文件
+            shutil.copy2(self.db_path, backup_path)
+
+            # 清理旧备份（保留最近5个）
+            await self._cleanup_old_backups(backup_dir)
+
+            logger.info(f"数据库备份已创建: {backup_path}")
+            return True
+
+        except Exception as e:
+            logger.error(f"创建数据库备份失败: {e}")
+            return False
+
+    async def _cleanup_old_backups(self, backup_dir: Path):
+        """清理旧备份文件"""
+        try:
+            backup_files = list(backup_dir.glob("optimization_records_backup_*.db"))
+            backup_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+
+            # 保留最近5个备份
+            for old_backup in backup_files[5:]:
+                old_backup.unlink()
+                logger.info(f"已删除旧备份: {old_backup}")
+
+        except Exception as e:
+            logger.error(f"清理旧备份失败: {e}")
+
+    async def restore_from_backup(self, backup_path: str) -> bool:
+        """从备份恢复数据库"""
+        try:
+            if not os.path.exists(backup_path):
+                logger.error(f"备份文件不存在: {backup_path}")
+                return False
+
+            # 创建当前数据库的备份
+            current_backup = f"{self.db_path}.before_restore_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            shutil.copy2(self.db_path, current_backup)
+
+            # 恢复备份
+            shutil.copy2(backup_path, self.db_path)
+
+            logger.info(f"数据库已从备份恢复: {backup_path}")
+            logger.info(f"原数据库已备份为: {current_backup}")
+            return True
+
+        except Exception as e:
+            logger.error(f"从备份恢复数据库失败: {e}")
+            return False
+
+    async def get_backup_list(self) -> List[Dict[str, Any]]:
+        """获取备份文件列表"""
+        try:
+            backup_dir = Path(self.db_path).parent / "backups"
+            if not backup_dir.exists():
+                return []
+
+            backup_files = list(backup_dir.glob("optimization_records_backup_*.db"))
+            backup_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+
+            backups = []
+            for backup_file in backup_files:
+                stat = backup_file.stat()
+                backups.append({
+                    'path': str(backup_file),
+                    'name': backup_file.name,
+                    'size': stat.st_size,
+                    'created_at': datetime.fromtimestamp(stat.st_mtime).isoformat()
+                })
+
+            return backups
+
+        except Exception as e:
+            logger.error(f"获取备份列表失败: {e}")
+            return []
+
     def _row_to_record(self, row) -> OptimizationRecord:
         """将数据库行转换为记录对象"""
         return OptimizationRecord(
@@ -304,4 +434,8 @@ async def get_optimization_db() -> OptimizationDatabase:
     if _db_instance is None:
         _db_instance = OptimizationDatabase()
         await _db_instance.initialize()
+        # 服务器启动时恢复中断的任务状态
+        await _db_instance.recover_interrupted_tasks()
+        # 创建启动备份
+        await _db_instance.create_backup()
     return _db_instance

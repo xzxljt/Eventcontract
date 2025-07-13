@@ -76,6 +76,7 @@
                     optimizationProgress: null,
                     optimizationResults: null,
                     progressInterval: null,
+                    optimizationSocket: null,
 
                     // 结果显示和排序
                     sortBy: 'composite_score',
@@ -158,6 +159,7 @@
                 this.loadStrategies();
                 this.loadInvestmentStrategies();
                 this.loadSymbols();
+                this.restoreFromLocalStorage();
                 this.checkCurrentOptimization();
                 this.loadOptimizationHistory();
             },
@@ -188,13 +190,16 @@
 
                             if (this.isOptimizing) {
                                 // 开始监控进度
-                                this.startProgressMonitoring();
+                                this.setupWebSocket(this.currentOptimizationId);
                                 showToast('信息', '检测到正在运行的优化任务，已恢复状态', 'info');
                             } else if (currentTask.status === 'completed') {
                                 // 加载完成的结果
                                 await this.loadResults();
                                 showToast('成功', '检测到已完成的优化任务，已加载结果', 'success');
                             }
+
+                            // 保存状态到本地存储
+                            this.saveToLocalStorage();
                         } else {
                             // 没有当前运行的任务，清理状态
                             this.clearOptimizationState();
@@ -217,6 +222,60 @@
                     if (this.progressInterval) {
                         clearInterval(this.progressInterval);
                         this.progressInterval = null;
+                    }
+                    if (this.optimizationSocket) {
+                        this.optimizationSocket.close();
+                        this.optimizationSocket = null;
+                    }
+
+                    // 清理本地存储
+                    this.clearLocalStorage();
+                },
+
+                saveToLocalStorage() {
+                    try {
+                        const state = {
+                            currentOptimizationId: this.currentOptimizationId,
+                            isOptimizing: this.isOptimizing,
+                            optimizationProgress: this.optimizationProgress,
+                            timestamp: Date.now()
+                        };
+                        localStorage.setItem('optimization_state', JSON.stringify(state));
+                    } catch (error) {
+                        console.warn('保存状态到本地存储失败:', error);
+                    }
+                },
+
+                restoreFromLocalStorage() {
+                    try {
+                        const savedState = localStorage.getItem('optimization_state');
+                        if (savedState) {
+                            const state = JSON.parse(savedState);
+                            const now = Date.now();
+
+                            // 如果保存的状态超过1小时，则忽略
+                            if (now - state.timestamp > 60 * 60 * 1000) {
+                                this.clearLocalStorage();
+                                return;
+                            }
+
+                            // 恢复基本状态（但不恢复isOptimizing，这个由服务器状态决定）
+                            if (state.currentOptimizationId) {
+                                this.currentOptimizationId = state.currentOptimizationId;
+                                this.optimizationProgress = state.optimizationProgress;
+                            }
+                        }
+                    } catch (error) {
+                        console.warn('从本地存储恢复状态失败:', error);
+                        this.clearLocalStorage();
+                    }
+                },
+
+                clearLocalStorage() {
+                    try {
+                        localStorage.removeItem('optimization_state');
+                    } catch (error) {
+                        console.warn('清理本地存储失败:', error);
                     }
                 },
 
@@ -378,7 +437,6 @@
 
                     // 确保parameters存在且是数组
                     if (Array.isArray(this.selectedStrategy.parameters)) {
-                        console.log('初始化参数范围，参数列表:', this.selectedStrategy.parameters);
                         this.selectedStrategy.parameters.forEach(param => {
                             // 确保param是对象且有name属性
                             if (param && typeof param === 'object' && param.name) {
@@ -394,21 +452,14 @@
                                     fixedValue: typeof param.default === 'number' ? param.default :
                                               (typeof param.min === 'number' ? param.min : 0)
                                 };
-
-                                console.log(`初始化参数 ${param.name}:`, this.parameterRanges[param.name]);
                             }
                         });
                     }
-
-                    console.log('初始化后的parameterRanges:', this.parameterRanges);
-                    console.log('初始化后的parameterOptimizationConfig:', this.parameterOptimizationConfig);
 
                     try {
                         // 获取策略参数范围
                         const response = await fetch(`/api/strategies/${this.selectedStrategy.id}/parameter_ranges`);
                         const data = await response.json();
-
-                        console.log('策略参数API返回数据:', data);
 
                         if (data.error) {
                             showToast('错误', '获取策略参数失败: ' + data.error, 'danger');
@@ -424,16 +475,12 @@
                                         max: typeof param.max === 'number' ? param.max : 100,
                                         step: typeof param.step === 'number' ? param.step : 1
                                     };
-                                    console.log(`更新参数 ${param.name}:`, this.parameterRanges[param.name]);
                                 }
                             });
                         }
 
-                        console.log('API更新后的parameterRanges:', this.parameterRanges);
-
                         // 强制Vue重新渲染
                         this.$nextTick(() => {
-                            console.log('Vue nextTick: 参数范围已更新');
                         });
 
                         // 获取参数预设
@@ -496,17 +543,12 @@
 
                 // 新增：切换参数优化状态
                 toggleParameterOptimization(paramName) {
-                    console.log(`切换参数 ${paramName} 的优化状态`);
-
                     if (!this.parameterOptimizationConfig[paramName]) {
-                        console.log(`参数 ${paramName} 的配置不存在`);
                         return;
                     }
 
                     const currentConfig = this.parameterOptimizationConfig[paramName];
                     const newEnabled = !currentConfig.enabled;
-
-                    console.log(`当前状态: ${currentConfig.enabled}, 新状态: ${newEnabled}`);
 
                     // 直接修改对象属性（Vue 3中对象是响应式的）
                     this.parameterOptimizationConfig[paramName].enabled = newEnabled;
@@ -518,8 +560,6 @@
                             this.parameterOptimizationConfig[paramName].fixedValue = range.min;
                         }
                     }
-
-                    console.log(`参数 ${paramName} 优化状态已切换为:`, this.parameterOptimizationConfig[paramName].enabled);
                 },
 
                 // 新增：设置参数固定值
@@ -527,15 +567,10 @@
                     if (!this.parameterOptimizationConfig[paramName]) return;
 
                     this.parameterOptimizationConfig[paramName].fixedValue = parseFloat(value) || 0;
-                    console.log(`参数 ${paramName} 固定值设置为:`, this.parameterOptimizationConfig[paramName].fixedValue);
                 },
 
                 // 测试方法：检查参数配置状态
                 testParameterConfig() {
-                    console.log('当前参数配置状态:');
-                    console.log('parameterOptimizationConfig:', this.parameterOptimizationConfig);
-                    console.log('parameterRanges:', this.parameterRanges);
-                    console.log('selectedStrategy:', this.selectedStrategy);
                 },
 
                 async startOptimization() {
@@ -648,7 +683,9 @@
                             this.currentOptimizationId = result.optimization_id;
                             this.isOptimizing = true;
                             this.optimizationResults = null;
-                            this.startProgressMonitoring();
+                            this.setupWebSocket(result.optimization_id);
+                            // 保存状态到本地存储
+                            this.saveToLocalStorage();
                             // 刷新历史记录
                             await this.loadOptimizationHistory();
                             showToast('成功', '优化任务已启动', 'success');
@@ -703,47 +740,68 @@
                     return isValid;
                 },
 
-                startProgressMonitoring() {
-                    this.progressInterval = setInterval(async () => {
-                        await this.updateProgress();
-                    }, 2000);
-                },
 
-                async updateProgress() {
-                    if (!this.currentOptimizationId) return;
+                setupWebSocket(optimizationId) {
+                    if (this.optimizationSocket) {
+                        this.optimizationSocket.close();
+                    }
 
-                    try {
-                        const response = await fetch(`/api/optimization/progress/${this.currentOptimizationId}`);
+                    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                    const wsUrl = `${protocol}//${window.location.host}/ws/optimization/${optimizationId}`;
 
-                        if (response.status === 404) {
-                            // 任务不存在，清理状态
-                            console.log('优化任务不存在，清理状态');
-                            this.clearOptimizationState();
-                            showToast('信息', '优化任务已结束', 'info');
+                    this.optimizationSocket = new WebSocket(wsUrl);
+
+                    this.optimizationSocket.onopen = () => {
+                        console.log('WebSocket connection established.');
+                        showToast('信息', '已连接到优化任务', 'info');
+                    };
+
+                    this.optimizationSocket.onmessage = (event) => {
+                        const message = JSON.parse(event.data);
+                        const data = message.data;
+
+                        if (!data) {
+                            console.error("Received invalid WebSocket message:", message);
                             return;
                         }
 
-                        this.optimizationProgress = await response.json();
+                        // 统一处理所有类型的消息，更新进度对象
+                        this.optimizationProgress = { ...this.optimizationProgress, ...data };
 
-                        if (this.optimizationProgress.status === 'completed') {
-                            this.isOptimizing = false;
-                            clearInterval(this.progressInterval);
-                            await this.loadResults();
-                            await this.loadOptimizationHistory();
-                            showToast('成功', '优化完成！', 'success');
-                        } else if (this.optimizationProgress.status === 'error' || this.optimizationProgress.status === 'stopped') {
-                            this.isOptimizing = false;
-                            clearInterval(this.progressInterval);
-                            await this.loadOptimizationHistory();
-                            showToast('警告', `优化${this.optimizationProgress.status === 'error' ? '失败' : '已停止'}: ${this.optimizationProgress.error_message || ''}`, 'warning');
+                        switch (message.type) {
+                            case 'progress_update':
+                                // 进度更新时，只保存状态
+                                this.saveToLocalStorage();
+                                break;
+                            case 'completed':
+                                this.isOptimizing = false;
+                                this.loadResults();
+                                this.loadOptimizationHistory();
+                                this.saveToLocalStorage();
+                                showToast('成功', '优化完成！', 'success');
+                                this.optimizationSocket.close();
+                                break;
+                            case 'error':
+                            case 'stopped':
+                                this.isOptimizing = false;
+                                this.loadOptimizationHistory();
+                                this.saveToLocalStorage();
+                                showToast('警告', `优化${data.status === 'error' ? '失败' : '已停止'}: ${data.error_message || ''}`, 'warning');
+                                this.optimizationSocket.close();
+                                break;
                         }
-                    } catch (error) {
-                        console.error('更新进度失败:', error);
-                        // 如果是网络错误且包含404，也清理状态
-                        if (error.message && error.message.includes('404')) {
-                            this.clearOptimizationState();
-                        }
-                    }
+                    };
+
+                    this.optimizationSocket.onclose = () => {
+                        console.log('WebSocket connection closed.');
+                        this.isOptimizing = false; // 确保在连接关闭时更新状态
+                    };
+
+                    this.optimizationSocket.onerror = (error) => {
+                        console.error('WebSocket error:', error);
+                        showToast('错误', 'WebSocket连接出错', 'danger');
+                        this.isOptimizing = false;
+                    };
                 },
 
                 async stopOptimization() {
@@ -935,16 +993,12 @@
                 },
 
                 showResultDetails(result) {
-                    console.log('显示结果详情:', result);
-                    console.log('交易记录数量:', result?.backtest_details?.predictions?.length);
                     this.selectedResult = result;
                     this.$nextTick(() => {
-                        console.log('Vue nextTick: selectedResult已设置:', this.selectedResult);
                         const modalElement = document.getElementById('resultDetailsModal');
                         if (modalElement) {
                             const modal = new bootstrap.Modal(modalElement);
                             modal.show();
-                            console.log('模态框已显示');
                         } else {
                             console.error('找不到模态框元素');
                         }

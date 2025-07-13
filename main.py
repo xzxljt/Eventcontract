@@ -341,6 +341,53 @@ manager = ConnectionManager()
 autox_manager = ConnectionManager()
 autox_status_manager = ConnectionManager()
 
+# --- WebSocket Connection Manager for Optimization ---
+class OptimizationConnectionManager:
+    def __init__(self):
+        # A dictionary to map optimization_id to a list of active WebSocket connections
+        self.connections: Dict[str, List[WebSocket]] = {}
+
+    async def connect(self, websocket: WebSocket, optimization_id: str):
+        """Accepts a new connection and associates it with an optimization ID."""
+        await websocket.accept()
+        if optimization_id not in self.connections:
+            self.connections[optimization_id] = []
+        self.connections[optimization_id].append(websocket)
+        logger.info(f"WebSocket connected for optimization_id: {optimization_id}")
+
+    def disconnect(self, websocket: WebSocket, optimization_id: str):
+        """Handles a disconnected connection."""
+        if optimization_id in self.connections:
+            if websocket in self.connections[optimization_id]:
+                self.connections[optimization_id].remove(websocket)
+                logger.info(f"WebSocket disconnected for optimization_id: {optimization_id}")
+                # If no more connections for this optimization_id, clean up the entry
+                if not self.connections[optimization_id]:
+                    del self.connections[optimization_id]
+
+    async def send_update(self, optimization_id: str, data: dict):
+        """Sends progress data to all clients associated with a specific optimization ID."""
+        if optimization_id in self.connections:
+            # Create a list of tasks to send updates concurrently
+            connections_to_send = self.connections[optimization_id][:] # Iterate over a copy
+            tasks = [connection.send_json(data) for connection in connections_to_send]
+            if tasks:
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                # Log errors from gather
+                for i, result in enumerate(results):
+                    if isinstance(result, Exception):
+                        logger.error(f"Error sending update to a client for optimization_id {optimization_id}: {result}")
+                        # The connection might be stale, disconnect it
+                        self.disconnect(connections_to_send[i], optimization_id)
+
+                successful_sends = sum(1 for r in results if not isinstance(r, Exception))
+                if successful_sends > 0:
+                    logger.info(f"Sent update to {successful_sends} clients for optimization_id: {optimization_id}")
+
+
+# Global instance for optimization WebSocket connections
+optimization_manager = OptimizationConnectionManager()
+
 
 # --- 实时信号与队列 ---
 live_signals: List[Dict[str, Any]] = [] # 类型提示明确
@@ -1827,6 +1874,25 @@ async def daily_log_rotation_and_cleanup():
     logger.info("daily_log_rotation_and_cleanup task gracefully shut down.")
 
 
+# --- WebSocket 端点 for Optimization ---
+@app.websocket("/ws/optimization/{optimization_id}")
+async def websocket_optimization_endpoint(websocket: WebSocket, optimization_id: str):
+    """WebSocket endpoint for optimization status updates."""
+    await optimization_manager.connect(websocket, optimization_id)
+    try:
+        while True:
+            # Keep the connection alive to receive server-pushed messages.
+            # The client does not need to send any messages.
+            # We can add a timeout to detect stale connections if needed.
+            await websocket.receive_text() # This will wait for a message, effectively keeping it alive.
+    except WebSocketDisconnect:
+        logger.info(f"Client for optimization_id {optimization_id} disconnected.")
+    except Exception as e:
+        logger.error(f"Error in optimization websocket for {optimization_id}: {e}", exc_info=True)
+    finally:
+        optimization_manager.disconnect(websocket, optimization_id)
+
+
 # --- WebSocket 端点 for Web UI (/ws/live-test) (逻辑微调，确保使用锁和副本) ---
 @app.websocket("/ws/live-test")
 async def websocket_endpoint(websocket: WebSocket):
@@ -2613,7 +2679,8 @@ class OptimizationRequest(BaseModel):
 async def start_optimization(request: OptimizationRequest):
     """启动策略参数优化"""
     try:
-        engine = get_optimization_engine()
+        loop = asyncio.get_running_loop()
+        engine = get_optimization_engine(main_loop=loop)
 
         # 转换请求为配置字典
         config = {
@@ -2634,7 +2701,8 @@ async def start_optimization(request: OptimizationRequest):
             'evaluation_weights': request.evaluation_weights
         }
 
-        optimization_id = engine.optimize_strategy(config)
+        # Pass the send_update method of the optimization_manager as a callback
+        optimization_id = engine.optimize_strategy(config, optimization_manager.send_update)
 
         return {
             'status': 'success',

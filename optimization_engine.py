@@ -702,8 +702,9 @@ class ResultsManager:
 class OptimizationEngine:
     """策略参数优化引擎主类"""
 
-    def __init__(self):
+    def __init__(self, main_loop: Optional[asyncio.AbstractEventLoop] = None):
         """初始化优化引擎"""
+        self.main_loop = main_loop
         self.optimizer = GridSearchOptimizer()
         self.progress_tracker = ProgressTracker()
         self.results_manager = ResultsManager()
@@ -832,7 +833,7 @@ class OptimizationEngine:
         except Exception as e:
             logger.warning(f"调度记录创建失败: {e}")
 
-    def optimize_strategy(self, optimization_config: Dict[str, Any]) -> str:
+    def optimize_strategy(self, optimization_config: Dict[str, Any], progress_update_callback: Optional[Callable] = None) -> str:
         """开始策略优化"""
         try:
             # 1. 检查是否有正在运行的任务
@@ -867,7 +868,7 @@ class OptimizationEngine:
             # 8. 启动优化线程
             optimization_thread = threading.Thread(
                 target=self._run_optimization,
-                args=(optimization_id, optimization_config),
+                args=(optimization_id, optimization_config, progress_update_callback),
                 daemon=True
             )
 
@@ -1040,6 +1041,33 @@ class OptimizationEngine:
             logger.error(f"删除优化记录失败: {e}")
             return False
 
+    async def create_database_backup(self) -> bool:
+        """创建数据库备份"""
+        try:
+            db = await self._get_db()
+            return await db.create_backup()
+        except Exception as e:
+            logger.error(f"创建数据库备份失败: {e}")
+            return False
+
+    async def get_database_backups(self) -> List[Dict[str, Any]]:
+        """获取数据库备份列表"""
+        try:
+            db = await self._get_db()
+            return await db.get_backup_list()
+        except Exception as e:
+            logger.error(f"获取备份列表失败: {e}")
+            return []
+
+    async def restore_database_from_backup(self, backup_path: str) -> bool:
+        """从备份恢复数据库"""
+        try:
+            db = await self._get_db()
+            return await db.restore_from_backup(backup_path)
+        except Exception as e:
+            logger.error(f"从备份恢复数据库失败: {e}")
+            return False
+
     def get_optimization_results(self, optimization_id: str, limit: Optional[int] = None) -> Dict[str, Any]:
         """获取优化结果"""
         try:
@@ -1104,7 +1132,7 @@ class OptimizationEngine:
             logger.error(f"获取优化结果时发生错误: {e}")
             return {'error': str(e)}
 
-    def _run_optimization(self, optimization_id: str, optimization_config: Dict[str, Any]):
+    def _run_optimization(self, optimization_id: str, optimization_config: Dict[str, Any], progress_update_callback: Optional[Callable] = None):
         """运行优化的内部方法"""
         try:
             logger.info(f"开始执行优化任务: {optimization_id}")
@@ -1129,15 +1157,35 @@ class OptimizationEngine:
             # 4. 创建进度回调
             def progress_callback(current: int, total: int):
                 self.progress_tracker.update_progress(optimization_id, current)
-                # 同步更新数据库进度（使用线程安全的方式）
-                progress_data = {
-                    'current': current,
-                    'total': total,
-                    'percentage': (current / total * 100) if total > 0 else 0,
-                    'elapsed_time': 0.0,  # 这里可以从progress_tracker获取
-                    'estimated_remaining': 0.0
-                }
-                self._schedule_db_update(optimization_id, "running", progress_data)
+                progress = self.progress_tracker.get_progress(optimization_id)
+                
+                # 同步更新数据库进度
+                if progress:
+                    progress_data_for_db = {
+                        'current': progress.current, 'total': progress.total,
+                        'percentage': progress.percentage, 'elapsed_time': progress.elapsed_time,
+                        'estimated_remaining': progress.estimated_remaining
+                    }
+                    self._schedule_db_update(optimization_id, "running", progress_data_for_db)
+
+                # 通过WebSocket发送进度更新
+                if progress_update_callback and progress:
+                    ws_data = {
+                        "type": "progress_update",
+                        "data": {
+                            'optimization_id': progress.optimization_id, 'status': progress.status,
+                            'current': progress.current, 'total': progress.total,
+                            'percentage': round(progress.percentage, 2),
+                            'elapsed_time': round(progress.elapsed_time, 2),
+                            'estimated_remaining': round(progress.estimated_remaining, 2)
+                        }
+                    }
+                    if self.main_loop:
+                        # 使用 run_coroutine_threadsafe 安全地在主事件循环上调度回调
+                        asyncio.run_coroutine_threadsafe(
+                            progress_update_callback(optimization_id, ws_data),
+                            self.main_loop
+                        )
 
             # 5. 执行并行优化
             results = self.optimizer.optimize_parallel(
@@ -1153,19 +1201,61 @@ class OptimizationEngine:
             # 8. 更新数据库记录为完成状态
             results_data = {
                 'summary': {
-                    'total_combinations_tested': len(combinations),
-                    'valid_results': len(results),
+                    'total_combinations_tested': len(combinations), 'valid_results': len(results),
                     'best_score': results[0].composite_score if results else 0.0
                 },
                 'results_count': len(results)
             }
             self._schedule_db_update(optimization_id, "completed", None, results_data)
 
+            # 通过WebSocket发送最终完成状态
+            if progress_update_callback:
+                final_progress = self.progress_tracker.get_progress(optimization_id)
+                best_result = results[0] if results else None
+                ws_data = {
+                    "type": "completed",
+                    "data": {
+                        'optimization_id': final_progress.optimization_id, 'status': final_progress.status,
+                        'summary': {
+                            'total_combinations_tested': final_progress.current, 'valid_results': len(results),
+                            'optimization_time': final_progress.elapsed_time,
+                            'best_score': best_result.composite_score if best_result else 0.0
+                        },
+                        'best_result': {
+                            'parameters': best_result.parameters, 'metrics': best_result.metrics,
+                            'composite_score': best_result.composite_score
+                        } if best_result else None
+                    }
+                }
+                if self.main_loop:
+                    asyncio.run_coroutine_threadsafe(
+                        progress_update_callback(optimization_id, ws_data),
+                        self.main_loop
+                    )
+
             logger.info(f"优化任务完成: {optimization_id}, 有效结果: {len(results)}")
 
         except Exception as e:
             logger.error(f"优化任务执行失败: {optimization_id}, 错误: {e}")
             self.progress_tracker.complete_progress(optimization_id, "error", str(e))
+            
+            # 通过WebSocket发送错误状态
+            if progress_update_callback:
+                final_progress = self.progress_tracker.get_progress(optimization_id)
+                if final_progress:
+                    ws_data = {
+                        "type": "error",
+                        "data": {
+                            'optimization_id': final_progress.optimization_id, 'status': final_progress.status,
+                            'error_message': final_progress.error_message
+                        }
+                    }
+                    if self.main_loop:
+                        asyncio.run_coroutine_threadsafe(
+                            progress_update_callback(optimization_id, ws_data),
+                            self.main_loop
+                        )
+
             # 更新数据库记录为错误状态
             self._schedule_db_update(optimization_id, "error", None, None, str(e))
 
@@ -1512,6 +1602,9 @@ class OptimizationEngine:
 # 全局优化引擎实例
 optimization_engine = OptimizationEngine()
 
-def get_optimization_engine() -> OptimizationEngine:
+def get_optimization_engine(main_loop: Optional[asyncio.AbstractEventLoop] = None) -> OptimizationEngine:
     """获取全局优化引擎实例"""
+    # 在首次从主线程调用时设置事件循环
+    if main_loop and not optimization_engine.main_loop:
+        optimization_engine.main_loop = main_loop
     return optimization_engine
