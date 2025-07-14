@@ -603,6 +603,17 @@ class ProgressTracker:
                     progress.current = progress.total
                     progress.percentage = 100.0
                     progress.estimated_remaining = 0.0
+                    # 更新阶段信息为已完成
+                    progress.current_stage = "completed"
+                    progress.stage_description = "优化完成"
+                elif status == "error":
+                    # 更新阶段信息为错误
+                    progress.current_stage = "error"
+                    progress.stage_description = "优化失败"
+                elif status == "stopped":
+                    # 更新阶段信息为已停止
+                    progress.current_stage = "stopped"
+                    progress.stage_description = "已停止"
 
     def get_progress(self, optimization_id: str) -> Optional[OptimizationProgress]:
         """获取进度信息"""
@@ -945,8 +956,22 @@ class OptimizationEngine:
             # 更新进度状态
             self.progress_tracker.complete_progress(optimization_id, "stopped")
 
-            # 更新数据库记录
-            self._schedule_db_update(optimization_id, "stopped")
+            # 更新数据库记录，包含完整的进度信息
+            final_progress = self.progress_tracker.get_progress(optimization_id)
+            final_progress_data = None
+            if final_progress:
+                final_progress_data = {
+                    'current': final_progress.current,
+                    'total': final_progress.total,
+                    'percentage': final_progress.percentage,
+                    'elapsed_time': final_progress.elapsed_time,
+                    'estimated_remaining': final_progress.estimated_remaining,
+                    'current_stage': final_progress.current_stage,
+                    'stage_description': final_progress.stage_description,
+                    'data_loading_completed': final_progress.data_loading_completed
+                }
+
+            self._schedule_db_update(optimization_id, "stopped", final_progress_data)
 
             # 等待线程结束（设置超时避免无限等待）
             if current_thread and current_thread.is_alive():
@@ -1240,7 +1265,23 @@ class OptimizationEngine:
                 },
                 'results_count': len(results)
             }
-            self._schedule_db_update(optimization_id, "completed", None, results_data)
+
+            # 获取最终进度信息，确保数据库记录包含完整的完成状态
+            final_progress = self.progress_tracker.get_progress(optimization_id)
+            final_progress_data = None
+            if final_progress:
+                final_progress_data = {
+                    'current': final_progress.current,
+                    'total': final_progress.total,
+                    'percentage': final_progress.percentage,
+                    'elapsed_time': final_progress.elapsed_time,
+                    'estimated_remaining': final_progress.estimated_remaining,
+                    'current_stage': final_progress.current_stage,
+                    'stage_description': final_progress.stage_description,
+                    'data_loading_completed': final_progress.data_loading_completed
+                }
+
+            self._schedule_db_update(optimization_id, "completed", final_progress_data, results_data)
 
             # 通过WebSocket发送最终完成状态
             if progress_update_callback:
@@ -1249,7 +1290,16 @@ class OptimizationEngine:
                 ws_data = {
                     "type": "completed",
                     "data": {
-                        'optimization_id': final_progress.optimization_id, 'status': final_progress.status,
+                        'optimization_id': final_progress.optimization_id,
+                        'status': final_progress.status,
+                        'current_stage': final_progress.current_stage,
+                        'stage_description': final_progress.stage_description,
+                        'data_loading_completed': final_progress.data_loading_completed,
+                        'current': final_progress.current,
+                        'total': final_progress.total,
+                        'percentage': round(final_progress.percentage, 2),
+                        'elapsed_time': round(final_progress.elapsed_time, 2),
+                        'estimated_remaining': round(final_progress.estimated_remaining, 2),
                         'summary': {
                             'total_combinations_tested': final_progress.current, 'valid_results': len(results),
                             'optimization_time': final_progress.elapsed_time,
@@ -1280,7 +1330,16 @@ class OptimizationEngine:
                     ws_data = {
                         "type": "error",
                         "data": {
-                            'optimization_id': final_progress.optimization_id, 'status': final_progress.status,
+                            'optimization_id': final_progress.optimization_id,
+                            'status': final_progress.status,
+                            'current_stage': final_progress.current_stage,
+                            'stage_description': final_progress.stage_description,
+                            'data_loading_completed': final_progress.data_loading_completed,
+                            'current': final_progress.current,
+                            'total': final_progress.total,
+                            'percentage': round(final_progress.percentage, 2),
+                            'elapsed_time': round(final_progress.elapsed_time, 2),
+                            'estimated_remaining': round(final_progress.estimated_remaining, 2),
                             'error_message': final_progress.error_message
                         }
                     }
@@ -1290,8 +1349,22 @@ class OptimizationEngine:
                             self.main_loop
                         )
 
-            # 更新数据库记录为错误状态
-            self._schedule_db_update(optimization_id, "error", None, None, str(e))
+            # 更新数据库记录为错误状态，包含完整的进度信息
+            final_progress = self.progress_tracker.get_progress(optimization_id)
+            final_progress_data = None
+            if final_progress:
+                final_progress_data = {
+                    'current': final_progress.current,
+                    'total': final_progress.total,
+                    'percentage': final_progress.percentage,
+                    'elapsed_time': final_progress.elapsed_time,
+                    'estimated_remaining': final_progress.estimated_remaining,
+                    'current_stage': final_progress.current_stage,
+                    'stage_description': final_progress.stage_description,
+                    'data_loading_completed': final_progress.data_loading_completed
+                }
+
+            self._schedule_db_update(optimization_id, "error", final_progress_data, None, str(e))
 
         finally:
             # 清理当前任务记录

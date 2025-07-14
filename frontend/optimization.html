@@ -385,18 +385,37 @@
                     <!-- 进度显示卡片 -->
                     <div class="card mb-4" v-if="isOptimizing || optimizationProgress">
                         <div class="card-header">
-                            <i class="bi bi-clock-history"></i>
-                            <h5 class="mb-0">优化进度</h5>
+                            <i class="bi" :class="optimizationProgress?.status === 'completed' ? 'bi-check-circle-fill' : 'bi-clock-history'"></i>
+                            <h5 class="mb-0">{{ optimizationProgress?.status === 'completed' ? '优化结果' : '优化进度' }}</h5>
                             <div class="ms-auto">
-                                <span class="badge bg-info me-2">{{ optimizationProgress?.stage_description || '准备中' }}</span>
+                                <span class="badge me-2"
+                                      :class="optimizationProgress?.status === 'completed' ? 'bg-success' : 'bg-info'">
+                                    {{ optimizationProgress?.stage_description || '准备中' }}
+                                </span>
                                 <span class="badge" :class="getStatusBadgeClass(optimizationProgress?.status)">
                                     {{ getStatusText(optimizationProgress?.status) }}
                                 </span>
                             </div>
                         </div>
                         <div class="card-body">
-                            <!-- 数据获取阶段进度条 -->
-                            <div v-if="!optimizationProgress?.data_loading_completed" class="mb-3">
+                            <!-- 优化完成状态 -->
+                            <div v-if="optimizationProgress?.status === 'completed'" class="mb-3">
+                                <div class="d-flex justify-content-between align-items-center mb-2">
+                                    <small class="text-muted">优化状态</small>
+                                    <small class="text-success">
+                                        <i class="bi bi-check-circle-fill"></i> 优化完成
+                                    </small>
+                                </div>
+                                <div class="progress" style="height: 8px;">
+                                    <div class="progress-bar bg-success"
+                                         role="progressbar"
+                                         style="width: 100%">
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- 数据获取阶段进度条 (仅在运行中显示) -->
+                            <div v-else-if="!optimizationProgress?.data_loading_completed && isOptimizing" class="mb-3">
                                 <div class="d-flex justify-content-between align-items-center mb-2">
                                     <small class="text-muted">数据获取阶段</small>
                                     <small class="text-muted">{{ optimizationProgress?.stage_description || '准备中' }}</small>
@@ -409,15 +428,14 @@
                                 </div>
                             </div>
 
-                            <!-- 回测执行阶段进度条 -->
-                            <div v-if="optimizationProgress?.data_loading_completed" class="mb-3">
+                            <!-- 回测执行阶段进度条 (仅在运行中显示) -->
+                            <div v-else-if="optimizationProgress?.data_loading_completed && isOptimizing" class="mb-3">
                                 <div class="d-flex justify-content-between align-items-center mb-2">
                                     <small class="text-muted">回测执行阶段</small>
                                     <small class="text-muted">{{ (optimizationProgress?.percentage || 0).toFixed(1) }}%</small>
                                 </div>
                                 <div class="progress" style="height: 8px;">
-                                    <div class="progress-bar progress-bar-striped"
-                                         :class="{'progress-bar-animated': isOptimizing}"
+                                    <div class="progress-bar progress-bar-striped progress-bar-animated"
                                          role="progressbar"
                                          :style="`width: ${optimizationProgress?.percentage || 0}%`"
                                          :aria-valuenow="optimizationProgress?.percentage || 0"
@@ -429,37 +447,65 @@
                                 </div>
                             </div>
                             <div class="row text-center">
-                                <div class="col-3">
-                                    <div class="small text-muted">当前阶段</div>
-                                    <div class="fw-bold">{{ optimizationProgress?.stage_description || '准备中' }}</div>
-                                    <div v-if="optimizationProgress?.data_loading_completed" class="small text-success">
-                                        <i class="bi bi-check-circle"></i> 数据已加载
+                                <!-- 优化完成时的统计信息 -->
+                                <template v-if="optimizationProgress?.status === 'completed'">
+                                    <div class="col-3">
+                                        <div class="small text-muted">最终状态</div>
+                                        <div class="fw-bold text-success">{{ optimizationProgress?.stage_description || '优化完成' }}</div>
+                                        <div class="small text-success">
+                                            <i class="bi bi-check-circle-fill"></i> 全部完成
+                                        </div>
                                     </div>
-                                    <div v-else class="small text-info">
-                                        <i class="bi bi-arrow-clockwise"></i> 数据获取中
+                                    <div class="col-3">
+                                        <div class="small text-muted">测试组合</div>
+                                        <div class="fw-bold">{{ optimizationProgress?.current || 0 }}/{{ optimizationProgress?.total || 0 }}</div>
+                                        <div class="small text-success">100% 完成</div>
                                     </div>
-                                </div>
-                                <div class="col-3">
-                                    <div class="small text-muted">回测进度</div>
-                                    <div v-if="optimizationProgress?.data_loading_completed" class="fw-bold">
-                                        {{ optimizationProgress?.current || 0 }}/{{ optimizationProgress?.total || 0 }}
+                                    <div class="col-3">
+                                        <div class="small text-muted">总用时</div>
+                                        <div class="fw-bold">{{ formatTime(optimizationProgress?.elapsed_time) }}</div>
                                     </div>
-                                    <div v-else class="fw-bold text-muted">等待数据加载</div>
-                                    <div v-if="optimizationProgress?.data_loading_completed" class="small text-primary">
-                                        {{ (optimizationProgress?.percentage || 0).toFixed(1) }}%
+                                    <div class="col-3">
+                                        <div class="small text-muted">优化结果</div>
+                                        <div class="fw-bold text-success">已生成</div>
+                                        <div class="small text-muted">查看下方结果</div>
                                     </div>
-                                </div>
-                                <div class="col-3">
-                                    <div class="small text-muted">已用时间</div>
-                                    <div class="fw-bold">{{ formatTime(optimizationProgress?.elapsed_time) }}</div>
-                                </div>
-                                <div class="col-3">
-                                    <div class="small text-muted">预计剩余</div>
-                                    <div v-if="optimizationProgress?.data_loading_completed" class="fw-bold">
-                                        {{ formatTime(optimizationProgress?.estimated_remaining) }}
+                                </template>
+
+                                <!-- 优化进行中的统计信息 -->
+                                <template v-else>
+                                    <div class="col-3">
+                                        <div class="small text-muted">当前阶段</div>
+                                        <div class="fw-bold">{{ optimizationProgress?.stage_description || '准备中' }}</div>
+                                        <div v-if="optimizationProgress?.data_loading_completed" class="small text-success">
+                                            <i class="bi bi-check-circle"></i> 数据已加载
+                                        </div>
+                                        <div v-else class="small text-info">
+                                            <i class="bi bi-arrow-clockwise"></i> 数据获取中
+                                        </div>
                                     </div>
-                                    <div v-else class="fw-bold text-muted">计算中</div>
-                                </div>
+                                    <div class="col-3">
+                                        <div class="small text-muted">回测进度</div>
+                                        <div v-if="optimizationProgress?.data_loading_completed" class="fw-bold">
+                                            {{ optimizationProgress?.current || 0 }}/{{ optimizationProgress?.total || 0 }}
+                                        </div>
+                                        <div v-else class="fw-bold text-muted">等待数据加载</div>
+                                        <div v-if="optimizationProgress?.data_loading_completed" class="small text-primary">
+                                            {{ (optimizationProgress?.percentage || 0).toFixed(1) }}%
+                                        </div>
+                                    </div>
+                                    <div class="col-3">
+                                        <div class="small text-muted">已用时间</div>
+                                        <div class="fw-bold">{{ formatTime(optimizationProgress?.elapsed_time) }}</div>
+                                    </div>
+                                    <div class="col-3">
+                                        <div class="small text-muted">预计剩余</div>
+                                        <div v-if="optimizationProgress?.data_loading_completed" class="fw-bold">
+                                            {{ formatTime(optimizationProgress?.estimated_remaining) }}
+                                        </div>
+                                        <div v-else class="fw-bold text-muted">计算中</div>
+                                    </div>
+                                </template>
                             </div>
                         </div>
                     </div>
