@@ -769,6 +769,7 @@
                         this.optimizationProgress = { ...this.optimizationProgress, ...data };
 
                         switch (message.type) {
+                            case 'stage_update':
                             case 'progress_update':
                                 // 进度更新时，只保存状态
                                 this.saveToLocalStorage();

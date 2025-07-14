@@ -38,6 +38,10 @@ class OptimizationProgress:
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
     error_message: Optional[str] = None
+    # 新增：详细阶段信息
+    current_stage: str = "preparing"  # preparing, data_loading, backtesting, completed
+    stage_description: str = "准备中"
+    data_loading_completed: bool = False
 
 @dataclass
 class OptimizationResult:
@@ -546,7 +550,10 @@ class ProgressTracker:
                 optimization_id=optimization_id,
                 status="running",
                 total=total,
-                start_time=datetime.now()
+                start_time=datetime.now(),
+                current_stage="preparing",
+                stage_description="准备中",
+                data_loading_completed=False
             )
             self._progresses[optimization_id] = progress
             return progress
@@ -570,6 +577,18 @@ class ProgressTracker:
                     progress.estimated_remaining = avg_time_per_item * remaining_items
                 else:
                     progress.estimated_remaining = 0.0
+
+    def update_stage(self, optimization_id: str, stage: str, description: str):
+        """更新当前阶段信息"""
+        with self._lock:
+            if optimization_id in self._progresses:
+                progress = self._progresses[optimization_id]
+                progress.current_stage = stage
+                progress.stage_description = description
+
+                # 特殊处理数据加载完成标记
+                if stage == "backtesting":
+                    progress.data_loading_completed = True
 
     def complete_progress(self, optimization_id: str, status: str = "completed", error_message: Optional[str] = None):
         """完成进度跟踪"""
@@ -1137,19 +1156,31 @@ class OptimizationEngine:
         try:
             logger.info(f"开始执行优化任务: {optimization_id}")
 
-            # 1. 准备数据
+            # 1. 更新阶段：数据获取
+            self.progress_tracker.update_stage(optimization_id, "data_loading", "数据获取中")
+            self._send_stage_update(optimization_id, progress_update_callback)
+
+            # 准备数据
             df_kline, df_index_price = self._prepare_data(optimization_config)
             if df_kline is None or df_index_price is None:
                 raise ValueError("数据准备失败")
 
-            # 2. 生成参数组合
+            # 2. 更新阶段：数据获取完成
+            self.progress_tracker.update_stage(optimization_id, "data_loaded", "数据获取完成")
+            self._send_stage_update(optimization_id, progress_update_callback)
+
+            # 生成参数组合
             param_ranges = optimization_config['strategy_params_ranges']
             combinations = self.optimizer.generate_parameter_combinations(param_ranges)
 
             if not combinations:
                 raise ValueError("未能生成有效的参数组合")
 
-            # 3. 创建回测函数
+            # 3. 更新阶段：开始回测
+            self.progress_tracker.update_stage(optimization_id, "backtesting", "回测执行中")
+            self._send_stage_update(optimization_id, progress_update_callback)
+
+            # 创建回测函数
             backtest_func = self._create_backtest_function(
                 df_kline, df_index_price, optimization_config
             )
@@ -1174,6 +1205,9 @@ class OptimizationEngine:
                         "type": "progress_update",
                         "data": {
                             'optimization_id': progress.optimization_id, 'status': progress.status,
+                            'current_stage': progress.current_stage,
+                            'stage_description': progress.stage_description,
+                            'data_loading_completed': progress.data_loading_completed,
                             'current': progress.current, 'total': progress.total,
                             'percentage': round(progress.percentage, 2),
                             'elapsed_time': round(progress.elapsed_time, 2),
@@ -1265,6 +1299,32 @@ class OptimizationEngine:
                 if self._current_optimization_id == optimization_id:
                     self._current_optimization_id = None
                     self._current_thread = None
+
+    def _send_stage_update(self, optimization_id: str, progress_update_callback: Optional[Callable] = None):
+        """发送阶段更新到前端"""
+        if progress_update_callback:
+            progress = self.progress_tracker.get_progress(optimization_id)
+            if progress:
+                ws_data = {
+                    "type": "stage_update",
+                    "data": {
+                        'optimization_id': progress.optimization_id,
+                        'status': progress.status,
+                        'current_stage': progress.current_stage,
+                        'stage_description': progress.stage_description,
+                        'data_loading_completed': progress.data_loading_completed,
+                        'current': progress.current,
+                        'total': progress.total,
+                        'percentage': round(progress.percentage, 2),
+                        'elapsed_time': round(progress.elapsed_time, 2),
+                        'estimated_remaining': round(progress.estimated_remaining, 2)
+                    }
+                }
+                if self.main_loop:
+                    asyncio.run_coroutine_threadsafe(
+                        progress_update_callback(optimization_id, ws_data),
+                        self.main_loop
+                    )
 
     def _prepare_data(self, optimization_config: Dict[str, Any]) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
         """准备回测数据"""
