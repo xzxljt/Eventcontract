@@ -1112,74 +1112,92 @@ class OptimizationEngine:
             logger.error(f"从备份恢复数据库失败: {e}")
             return False
 
-    def get_optimization_results(self, optimization_id: str, limit: Optional[int] = None) -> Dict[str, Any]:
-        """获取优化结果"""
+    async def get_optimization_results(self, optimization_id: str, limit: Optional[int] = None) -> Dict[str, Any]:
+        """获取优化结果，优先从内存获取，失败则从数据库获取"""
         try:
-            # 获取进度信息
+            # 优先从内存中获取实时进度和结果
             progress = self.progress_tracker.get_progress(optimization_id)
-            if not progress:
+            
+            if progress:
+                logger.info(f"从内存中获取优化结果: {optimization_id}")
+                results_from_manager = self.results_manager.get_results(optimization_id, limit)
+                best_result_from_manager = self.results_manager.get_best_result(optimization_id)
+                scatter_plot_data = self.results_manager.generate_scatter_plot_data(optimization_id)
+
+                response = {
+                    'optimization_id': optimization_id,
+                    'status': progress.status,
+                    'progress': {
+                        'current': progress.current, 'total': progress.total,
+                        'percentage': progress.percentage, 'elapsed_time': progress.elapsed_time,
+                        'estimated_remaining': progress.estimated_remaining
+                    },
+                    'summary': {
+                        'total_combinations_tested': progress.current,
+                        'valid_results': len(results_from_manager),
+                        'optimization_time': progress.elapsed_time,
+                        'best_score': best_result_from_manager.composite_score if best_result_from_manager else 0.0
+                    },
+                    'scatter_plot_data': scatter_plot_data
+                }
+                if best_result_from_manager:
+                    response['best_result'] = {
+                        'parameters': best_result_from_manager.parameters, 'metrics': best_result_from_manager.metrics,
+                        'composite_score': best_result_from_manager.composite_score, 'rank': best_result_from_manager.rank,
+                        'backtest_details': best_result_from_manager.backtest_details
+                    }
+                if limit is None or limit > 0:
+                    response['all_results'] = [
+                        {'parameters': r.parameters, 'metrics': r.metrics, 'composite_score': r.composite_score, 'rank': r.rank, 'backtest_details': r.backtest_details}
+                        for r in results_from_manager
+                    ]
+                return response
+
+            # 如果内存中没有，则从数据库中获取历史记录
+            logger.info(f"内存中未找到，从数据库获取优化结果: {optimization_id}")
+            db = await self._get_db()
+            record = await db.get_record(optimization_id)
+
+            if not record:
                 return {'error': '未找到优化任务'}
 
-            # 获取结果
-            results = self.results_manager.get_results(optimization_id, limit)
-            best_result = self.results_manager.get_best_result(optimization_id)
+            # 从数据库记录中构建响应
+            record_results_data = record.results or {}
+            summary = record_results_data.get('summary', {})
+            all_results_from_db = record_results_data.get('results', [])
+            
+            if limit is not None:
+                all_results_from_db = all_results_from_db[:limit]
 
-            # 生成散点图数据
-            scatter_plot_data = self.results_manager.generate_scatter_plot_data(optimization_id)
+            scatter_points = []
+            for res in all_results_from_db:
+                scatter_points.append({
+                    'x': res.get('metrics', {}).get('win_rate', 0),
+                    'y': res.get('metrics', {}).get('total_return', 0),
+                    'parameters': res.get('parameters'), 'rank': res.get('rank'),
+                    'composite_score': res.get('composite_score'), 'metrics': res.get('metrics')
+                })
 
-            # 构建返回数据
             response = {
-                'optimization_id': optimization_id,
-                'status': progress.status,
-                'progress': {
-                    'current': progress.current,
-                    'total': progress.total,
-                    'percentage': progress.percentage,
-                    'elapsed_time': progress.elapsed_time,
-                    'estimated_remaining': progress.estimated_remaining
-                },
-                'summary': {
-                    'total_combinations_tested': progress.current,
-                    'valid_results': len(results),
-                    'optimization_time': progress.elapsed_time,
-                    'best_score': best_result.composite_score if best_result else 0.0
-                },
-                'scatter_plot_data': scatter_plot_data
+                'optimization_id': record.id, 'status': record.status,
+                'progress': record.progress, 'summary': summary,
+                'scatter_plot_data': {'x_axis': 'win_rate', 'y_axis': 'total_return', 'points': scatter_points},
+                'all_results': all_results_from_db,
+                'best_result': all_results_from_db[0] if all_results_from_db else None
             }
-
-            # 添加最佳结果
-            if best_result:
-                response['best_result'] = {
-                    'parameters': best_result.parameters,
-                    'metrics': best_result.metrics,
-                    'composite_score': best_result.composite_score,
-                    'rank': best_result.rank,
-                    'backtest_details': best_result.backtest_details
-                }
-
-            # 添加所有结果（如果请求）
-            if limit is None or limit > 0:
-                response['all_results'] = [
-                    {
-                        'parameters': result.parameters,
-                        'metrics': result.metrics,
-                        'composite_score': result.composite_score,
-                        'rank': result.rank,
-                        'backtest_details': result.backtest_details
-                    }
-                    for result in results
-                ]
-
             return response
 
         except Exception as e:
-            logger.error(f"获取优化结果时发生错误: {e}")
+            logger.error(f"获取优化结果时发生错误: {e}", exc_info=True)
             return {'error': str(e)}
 
     def _run_optimization(self, optimization_id: str, optimization_config: Dict[str, Any], progress_update_callback: Optional[Callable] = None):
         """运行优化的内部方法"""
         try:
             logger.info(f"开始执行优化任务: {optimization_id}")
+
+            # 创建一个事件，用于在优化完成后停止所有挂起的数据库更新
+            _optimization_completed_event = threading.Event()
 
             # 1. 更新阶段：数据获取
             self.progress_tracker.update_stage(optimization_id, "data_loading", "数据获取中")
@@ -1212,6 +1230,10 @@ class OptimizationEngine:
 
             # 4. 创建进度回调
             def progress_callback(current: int, total: int):
+                # 如果优化已完成，则不再调度任何“running”状态的更新
+                if _optimization_completed_event.is_set():
+                    return
+
                 self.progress_tracker.update_progress(optimization_id, current)
                 progress = self.progress_tracker.get_progress(optimization_id)
                 
@@ -1251,6 +1273,9 @@ class OptimizationEngine:
                 combinations, backtest_func, progress_callback
             )
 
+            # 发出信号，停止所有进一步的“running”状态更新
+            _optimization_completed_event.set()
+
             # 6. 存储结果
             self.results_manager.store_results(optimization_id, results)
 
@@ -1258,12 +1283,44 @@ class OptimizationEngine:
             self.progress_tracker.complete_progress(optimization_id, "completed")
 
             # 8. 更新数据库记录为完成状态
+            # 准备要存入数据库的完整结果
+            
+            # 辅助函数，用于递归地将对象转换为与JSON兼容的格式
+            def ensure_serializable(obj):
+                if isinstance(obj, dict):
+                    return {k: ensure_serializable(v) for k, v in obj.items()}
+                elif isinstance(obj, list):
+                    return [ensure_serializable(i) for i in obj]
+                elif isinstance(obj, (datetime, pd.Timestamp)):
+                    return obj.isoformat()
+                elif isinstance(obj, np.integer):
+                    return int(obj)
+                elif isinstance(obj, np.floating):
+                    return float(obj)
+                elif isinstance(obj, np.ndarray):
+                    return obj.tolist()
+                return obj
+
+            results_list_for_db = []
+            for r in results:
+                # 准备要序列化的完整结果字典
+                full_result_dict = {
+                    'parameters': r.parameters,
+                    'metrics': r.metrics,
+                    'composite_score': r.composite_score,
+                    'rank': r.rank,
+                    'backtest_details': r.backtest_details
+                }
+                # 在存入列表前进行序列化清理
+                results_list_for_db.append(ensure_serializable(full_result_dict))
+
             results_data = {
                 'summary': {
-                    'total_combinations_tested': len(combinations), 'valid_results': len(results),
+                    'total_combinations_tested': len(combinations),
+                    'valid_results': len(results),
                     'best_score': results[0].composite_score if results else 0.0
                 },
-                'results_count': len(results)
+                'results': results_list_for_db
             }
 
             # 获取最终进度信息，确保数据库记录包含完整的完成状态
@@ -1281,7 +1338,20 @@ class OptimizationEngine:
                     'data_loading_completed': final_progress.data_loading_completed
                 }
 
-            self._schedule_db_update(optimization_id, "completed", final_progress_data, results_data)
+            # 同步更新最终状态以避免竞态条件
+            # 直接运行异步更新函数，确保在所有进度更新之后执行
+            final_update_loop = None
+            try:
+                final_update_loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(final_update_loop)
+                final_update_loop.run_until_complete(
+                    self._update_record_status(optimization_id, "completed", final_progress_data, results_data)
+                )
+            except Exception as db_e:
+                logger.error(f"同步更新最终数据库状态失败: {db_e}")
+            finally:
+                if final_update_loop and not final_update_loop.is_closed():
+                    final_update_loop.close()
 
             # 通过WebSocket发送最终完成状态
             if progress_update_callback:

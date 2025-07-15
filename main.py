@@ -2750,12 +2750,16 @@ async def get_optimization_results(optimization_id: str, limit: Optional[int] = 
     """获取优化结果"""
     try:
         engine = get_optimization_engine()
-        results = engine.get_optimization_results(optimization_id, limit)
+        results = await engine.get_optimization_results(optimization_id, limit)
+        logger.info(f"DATABASE-DATA for {optimization_id}: {results}")
 
         if 'error' in results:
             raise HTTPException(status_code=404, detail=results['error'])
 
-        return results
+        logger.info(f"API-RESPONSE for {optimization_id}: {results}")
+        serializable_results = ensure_json_serializable(results)
+        logger.info(f"API-RESPONSE for {optimization_id}: {serializable_results}")
+        return serializable_results
 
     except HTTPException:
         raise
