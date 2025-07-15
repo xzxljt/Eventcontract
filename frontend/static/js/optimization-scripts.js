@@ -83,6 +83,7 @@
                     sortOrder: 'desc',
                     displayedResults: [],
                     selectedResult: null,
+                    showBestResultParameters: false, // 控制最佳结果参数显示
 
                     // 表单验证
                     fieldErrors: {},
@@ -991,6 +992,10 @@
                     if (this.displayedResults[index]) {
                         this.displayedResults[index].showParameters = !this.displayedResults[index].showParameters;
                     }
+                },
+
+                toggleBestResultParameters() {
+                    this.showBestResultParameters = !this.showBestResultParameters;
                 },
 
                 showResultDetails(result) {

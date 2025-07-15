@@ -548,17 +548,42 @@
                                 <h6 class="text-primary">
                                     <i class="bi bi-award-fill"></i> 最佳参数组合
                                 </h6>
-                                <div class="card border-warning">
-                                    <div class="card-header bg-warning-subtle d-flex justify-content-between align-items-center">
-                                        <div>
+                                <div class="card result-card border-warning best-result-card">
+                                    <div class="card-header d-flex justify-content-between align-items-center bg-warning-subtle">
+                                        <div class="d-flex align-items-center">
                                             <span class="badge bg-warning text-dark">#1</span>
                                             <span class="fw-bold ms-2">综合评分: {{ optimizationResults.best_result.composite_score.toFixed(2) }}</span>
-                                        </div>
-                                        <div class="d-flex flex-wrap gap-1">
-                                            <span v-for="(value, key) in optimizationResults.best_result.parameters"
-                                                  :key="key" class="badge bg-light text-dark">
-                                                {{ key }}: {{ value }}
+                                            <!-- 策略名称显示 -->
+                                            <span class="badge bg-primary ms-2" v-if="optimizationResults.best_result.parameters.strategy_id">
+                                                {{ getStrategyDisplayName(optimizationResults.best_result.parameters.strategy_id) }}
                                             </span>
+                                        </div>
+                                        <div class="d-flex align-items-center gap-2">
+                                            <!-- 参数折叠按钮 -->
+                                            <button type="button" class="btn btn-sm btn-outline-secondary d-flex align-items-center"
+                                                    @click="toggleBestResultParameters"
+                                                    :title="showBestResultParameters ? '隐藏策略参数' : '显示策略参数'">
+                                                <i class="bi bi-gear me-1"></i>
+                                                <span class="d-none d-md-inline">参数</span>
+                                                <i :class="showBestResultParameters ? 'bi bi-chevron-up ms-1' : 'bi bi-chevron-down ms-1'"></i>
+                                            </button>
+                                            <!-- 查看详情按钮 -->
+                                            <button type="button" class="btn btn-sm btn-primary"
+                                                    @click="showResultDetails(optimizationResults.best_result)"
+                                                    title="查看交易详情">
+                                                <i class="bi bi-eye"></i> 详情
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <!-- 可折叠的参数区域 -->
+                                    <div v-if="showBestResultParameters" class="card-header bg-light border-top">
+                                        <div class="row g-2">
+                                            <div v-for="(value, key) in optimizationResults.best_result.parameters" :key="key" class="col-auto">
+                                                <div class="parameter-item">
+                                                    <div class="parameter-label">{{ getParameterDisplayName(key) }}</div>
+                                                    <div class="parameter-value">{{ formatParameterValue(key, value) }}</div>
+                                                </div>
+                                            </div>
                                         </div>
                                     </div>
                                     <div class="card-body">
@@ -641,21 +666,25 @@
                                     <h6 class="text-primary mb-0">
                                         <i class="bi bi-grid-3x3-gap"></i> 详细结果 (前{{ Math.min(displayedResults.length, 20) }}名)
                                     </h6>
-                                    <div class="d-flex gap-2">
-                                        <!-- 排序选择 -->
-                                        <select v-model="sortBy" @change="sortResults" class="form-select form-select-sm" style="width: auto;">
-                                            <option value="composite_score">综合评分</option>
-                                            <option value="total_return">总收益率</option>
-                                            <option value="win_rate">总胜率</option>
-                                            <option value="long_win_rate">多单胜率</option>
-                                            <option value="short_win_rate">空单胜率</option>
-                                            <option value="sharpe_ratio">夏普比率</option>
-                                            <option value="max_drawdown">最大回撤</option>
-                                        </select>
-                                        <!-- 排序方向 -->
-                                        <button type="button" @click="toggleSortOrder" class="btn btn-outline-secondary btn-sm">
-                                            <i :class="sortOrder === 'desc' ? 'bi bi-sort-down' : 'bi bi-sort-up'"></i>
-                                        </button>
+                                    <div class="results-sort-controls">
+                                        <div class="sort-label">排序方式:</div>
+                                        <div class="sort-controls-group">
+                                            <!-- 排序选择 -->
+                                            <select v-model="sortBy" @change="sortResults" class="form-select form-select-sm sort-select">
+                                                <option value="composite_score">综合评分</option>
+                                                <option value="total_return">总收益率</option>
+                                                <option value="win_rate">总胜率</option>
+                                                <option value="long_win_rate">多单胜率</option>
+                                                <option value="short_win_rate">空单胜率</option>
+                                                <option value="sharpe_ratio">夏普比率</option>
+                                                <option value="max_drawdown">最大回撤</option>
+                                            </select>
+                                            <!-- 排序方向 -->
+                                            <button type="button" @click="toggleSortOrder" class="btn btn-outline-secondary btn-sm sort-direction-btn"
+                                                    :title="sortOrder === 'desc' ? '降序排列' : '升序排列'">
+                                                <i :class="sortOrder === 'desc' ? 'bi bi-sort-down' : 'bi bi-sort-up'"></i>
+                                            </button>
+                                        </div>
                                     </div>
                                 </div>
                                 <div v-for="(result, index) in displayedResults" :key="result.rank" class="mb-3">
