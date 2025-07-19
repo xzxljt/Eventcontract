@@ -1007,7 +1007,181 @@ class EnhancedRSIStrategy(Strategy):
 
         return df_signaled
 
-# --- get_available_strategies (no change needed, but ensure it lists these classes) ---
+
+# --- RsiDivergenceStrategy (Divergence Logic as per user request) ---
+class RsiDivergenceStrategy(Strategy):
+    """
+    增强型RSI策略，实现 "RSI穿越警报 + 背离确认" 逻辑。
+    """
+    def __init__(self, params: Dict[str, Any] = None):
+        # Adapt the user's requested __init__ to the base class structure
+        default_params = {
+            'rsi_period': 14,
+            'rsi_overbought': 70,
+            'rsi_oversold': 30,
+            'divergence_lookback': 50
+        }
+        if params:
+            default_params.update(params)
+        
+        super().__init__(default_params)
+        self.name = "RSI背离策略"
+        self.min_history_periods = self.params.get('rsi_period', 14) + 1
+
+        # Initialize state variables as requested
+        # 0: 正常, 1: 观察顶背离, -1: 观察底背离
+        self.state = 0
+        # 用于存储第一个峰/谷的价格和RSI值
+        self.first_peak_price = None
+        self.first_peak_rsi = None
+        self.first_trough_price = None
+        self.first_trough_rsi = None
+        # 用于标记背离条件是否已满足
+        self.divergence_confirmed = False
+        # K线计数器
+        self.bars_since_alert = 0
+
+    def calculate_all_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Calculates the necessary indicators (RSI)."""
+        df = super().calculate_all_indicators(df)
+        rsi_period = self.params.get('rsi_period', 14)
+        rsi_col = f"RSI_{rsi_period}"
+        
+        if rsi_col not in df.columns:
+            df.ta.rsi(length=rsi_period, append=True)
+        
+        # For simplicity in the logic, create a generic 'rsi' column
+        if rsi_col in df.columns:
+            df['rsi'] = df[rsi_col]
+        else:
+            df['rsi'] = 50.0  # Fallback
+        return df
+
+    def next(self, data, prev_data):
+        """
+        This method implements the core state machine logic as requested by the user.
+        It's designed to be called iteratively.
+        """
+        close = data['close']
+        rsi = data['rsi']
+        prev_rsi = prev_data['rsi']
+        
+        signal = 0
+        rsi_overbought = self.params.get('rsi_overbought', 70)
+        rsi_oversold = self.params.get('rsi_oversold', 30)
+
+        # --- State Machine Logic from user request ---
+        if self.state == 0:
+            # RSI 向上穿越超买线，进入观察顶背离状态
+            if rsi > rsi_overbought and prev_rsi <= rsi_overbought:
+                self.state = 1
+                self.first_peak_price = close
+                self.first_peak_rsi = rsi
+                self.divergence_confirmed = False
+                self.bars_since_alert = 0 # 重置计数器
+            # RSI 向下穿越超卖线，进入观察底背离状态
+            elif rsi < rsi_oversold and prev_rsi >= rsi_oversold:
+                self.state = -1
+                self.first_trough_price = close
+                self.first_trough_rsi = rsi
+                self.divergence_confirmed = False
+                self.bars_since_alert = 0 # 重置计数器
+        
+        elif self.state == 1:  # 观察顶背离
+            self.bars_since_alert += 1 # 递增计数器
+            
+            # 检查是否超时
+            if self.bars_since_alert > self.params.get('divergence_lookback', 50):
+                self.state = 0
+                return 0 # 超时则重置状态并跳出
+
+            # 价格创出新高，但RSI没有，确认背离条件
+            if close > self.first_peak_price and rsi < self.first_peak_rsi:
+                self.divergence_confirmed = True
+            
+            # 如果背离已确认，且RSI回落到超买线以下，产生卖出信号
+            if self.divergence_confirmed and rsi < rsi_overbought and prev_rsi >= rsi_overbought:
+                signal = -1
+                self.state = 0  # 重置状态
+            # 如果RSI回落到50中线，趋势可能结束，重置状态
+            elif rsi < 50:
+                self.state = 0
+
+        elif self.state == -1:  # 观察底背离
+            self.bars_since_alert += 1 # 递增计数器
+
+            # 检查是否超时
+            if self.bars_since_alert > self.params.get('divergence_lookback', 50):
+                self.state = 0
+                return 0 # 超时则重置状态并跳出
+
+            # 价格创出新低，但RSI没有，确认背离条件
+            if close < self.first_trough_price and rsi > self.first_trough_rsi:
+                self.divergence_confirmed = True
+
+            # 如果背离已确认，且RSI回升到超卖线以上，产生买入信号
+            if self.divergence_confirmed and rsi > rsi_oversold and prev_rsi <= rsi_oversold:
+                signal = 1
+                self.state = 0  # 重置状态
+            # 如果RSI回升到50中线，趋势可能结束，重置状态
+            elif rsi > 50:
+                self.state = 0
+        
+        return signal
+
+    def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Generates trading signals for the entire dataframe by iterating through it.
+        """
+        df_with_indicators = self.calculate_all_indicators(df.copy())
+        df_signaled = df_with_indicators.copy()
+        if 'signal' not in df_signaled.columns: df_signaled['signal'] = 0
+        if 'confidence' not in df_signaled.columns: df_signaled['confidence'] = 0
+
+        if 'rsi' not in df_signaled.columns or 'close' not in df_signaled.columns:
+            return df_signaled
+
+        # Reset state for a full backtest run
+        self.state = 0
+        self.first_peak_price = None
+        self.first_peak_rsi = None
+        self.first_trough_price = None
+        self.first_trough_rsi = None
+        self.divergence_confirmed = False
+        self.bars_since_alert = 0
+
+        # Loop through the data to apply the stateful logic
+        for i in range(1, len(df_signaled)):
+            signal = self.next(df_signaled.iloc[i], df_signaled.iloc[i-1])
+            if signal != 0:
+                df_signaled.iloc[i, df_signaled.columns.get_loc('signal')] = signal
+                df_signaled.iloc[i, df_signaled.columns.get_loc('confidence')] = 100
+
+        return df_signaled
+    
+    def generate_signals_from_indicators_on_window(self, df_window_with_indicators: pd.DataFrame) -> pd.DataFrame:
+        """
+        This method is required by the framework. For live trading, where state is
+        maintained across calls, this would work by processing the last point of the window.
+        """
+        df_signaled = df_window_with_indicators.copy()
+        if 'signal' not in df_signaled.columns: df_signaled['signal'] = 0
+        if 'confidence' not in df_signaled.columns: df_signaled['confidence'] = 0
+
+        if len(df_signaled) < 2:
+            return df_signaled
+
+        # The state is managed by the instance, so calling next for the last point works
+        signal = self.next(df_signaled.iloc[-1], df_signaled.iloc[-2])
+        
+        if signal != 0:
+            df_signaled.iloc[-1, df_signaled.columns.get_loc('signal')] = signal
+            df_signaled.iloc[-1, df_signaled.columns.get_loc('confidence')] = 100
+            
+        return df_signaled
+
+
+# --- get_available_strategies ---
 def get_available_strategies() -> List[Dict[str, Any]]:
     """获取所有可用策略的列表"""
     strategies = [
@@ -1020,7 +1194,16 @@ def get_available_strategies() -> List[Dict[str, Any]]:
                 {'name': 'rsi_oversold', 'type': 'int', 'default': 30, 'min': 1, 'max': 99, 'step': 1, 'description': 'RSI超卖阈值'},
             ]
         },
-
+        {
+            'id': 'rsi_divergence', 'name': 'RSI背离策略', 'class': RsiDivergenceStrategy,
+            'description': '实现RSI穿越警报与价格背离确认的逻辑。',
+            'parameters': [
+                {'name': 'rsi_period', 'type': 'int', 'default': 14, 'min': 5, 'max': 50, 'step': 1, 'description': 'RSI计算周期'},
+                {'name': 'rsi_overbought', 'type': 'int', 'default': 70, 'min': 60, 'max': 85, 'step': 1, 'description': 'RSI超买阈值'},
+                {'name': 'rsi_oversold', 'type': 'int', 'default': 30, 'min': 15, 'max': 40, 'step': 1, 'description': 'RSI超卖阈值'},
+                {'name': 'divergence_lookback', 'type': 'int', 'default': 50, 'min': 10, 'max': 100, 'step': 1, 'description': '进入观察状态后，等待背离形成的最大K线数'},
+            ]
+        },
         {
             'id': 'enhanced_rsi', 'name': '加强版RSI策略(1分钟K线)', 'class': EnhancedRSIStrategy,
             'description': '专为1分钟K线和10分钟事件合约优化。智能识别市场趋势，在上涨趋势中只做多，下跌趋势中只做空，震荡市场中做逆势交易。结合快速MACD、成交量等多个指标提高胜率。',
@@ -1055,7 +1238,6 @@ def get_available_strategies() -> List[Dict[str, Any]]:
                 {'name': 'trend_confirmation_periods', 'type': 'int', 'default': 3, 'min': 2, 'max': 5, 'description': '趋势确认周期数'},
             ]
         },
-
         {
             'id': 'flexible_signal', 'name': '灵活信号组合策略', 'class': RsiBollingerBandsStrategy,
             'description': '结合RSI,布林带和TD Sequential指标，可灵活配置。',
