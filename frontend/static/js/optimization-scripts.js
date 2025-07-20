@@ -93,7 +93,8 @@
 
                     // 历史记录
                     optimizationHistory: [],
-                    isHistoryModalVisible: false
+                    isHistoryModalVisible: false,
+                    loadingHistoryResultId: null // 存储正在加载的记录ID
                 }
             },
 
@@ -329,6 +330,9 @@
 
                 async loadHistoryResults(recordId) {
                     try {
+                        // 设置加载状态
+                        this.loadingHistoryResultId = recordId;
+
                         // 关闭历史记录模态框
                         const historyModal = bootstrap.Modal.getInstance(document.getElementById('historyModal'));
                         if (historyModal) {
@@ -343,6 +347,9 @@
                     } catch (error) {
                         console.error('加载历史结果失败:', error);
                         showToast('错误', '加载历史结果失败: ' + error.message, 'danger');
+                    } finally {
+                        // 无论成功还是失败都要清除加载状态
+                        this.loadingHistoryResultId = null;
                     }
                 },
 
