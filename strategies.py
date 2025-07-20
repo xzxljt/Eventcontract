@@ -1181,6 +1181,153 @@ class RsiDivergenceStrategy(Strategy):
         return df_signaled
 
 
+class RsiBollingerStrategy(Strategy):
+    """
+    RSI布林带策略。
+    该策略首先计算RSI指标，然后对RSI指标本身计算布林带。
+    信号逻辑:
+    - 看涨 (Long): 当RSI值从布林带下轨下方上穿下轨时触发。
+    - 看跌 (Short): 当RSI值从布林带上轨上方下穿上轨时触发。
+    """
+    def __init__(self, params: Dict[str, Any] = None):
+        """
+        初始化策略并设置默认参数。
+        """
+        default_params = {
+            'rsi_period': 14,      # RSI计算周期
+            'bb_period': 20,       # 对RSI计算布林带的周期
+            'bb_std_dev': 2.0,     # 布林带的标准差
+        }
+        if params:
+            default_params.update(params)
+        super().__init__(default_params)
+        
+        self.name = "RSI布林带策略"
+        # 最小历史数据需求：RSI计算所需周期 + 布林带计算所需周期
+        self.min_history_periods = self.params['rsi_period'] + self.params['bb_period']
+
+    def calculate_all_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        在完整的DataFrame上计算所有需要的技术指标。
+        1. 计算RSI。
+        2. 基于RSI计算布林带。
+        """
+        df = super().calculate_all_indicators(df)
+        
+        try:
+            # 1. 计算RSI
+            rsi_period = self.params['rsi_period']
+            df.ta.rsi(length=rsi_period, append=True)
+            rsi_col = f"RSI_{rsi_period}"
+
+            if rsi_col not in df.columns or df[rsi_col].isnull().all():
+                logger.warning(f"({self.name}) RSI列 '{rsi_col}' 计算失败或全为空值。")
+                # 创建默认的布林带列以避免后续错误
+                df[f'RSI_BBU_{self.params["bb_period"]}_{self.params["bb_std_dev"]}'] = np.nan
+                df[f'RSI_BBM_{self.params["bb_period"]}_{self.params["bb_std_dev"]}'] = np.nan
+                df[f'RSI_BBL_{self.params["bb_period"]}_{self.params["bb_std_dev"]}'] = np.nan
+                return df
+
+            # 2. 基于RSI计算布林带
+            bb_period = self.params['bb_period']
+            bb_std_dev = self.params['bb_std_dev']
+            
+            rsi_series = df[rsi_col]
+            rolling_mean = rsi_series.rolling(window=bb_period).mean()
+            rolling_std = rsi_series.rolling(window=bb_period).std()
+            
+            df[f'RSI_BBU_{bb_period}_{bb_std_dev}'] = rolling_mean + (rolling_std * bb_std_dev)
+            df[f'RSI_BBM_{bb_period}_{bb_std_dev}'] = rolling_mean
+            df[f'RSI_BBL_{bb_period}_{bb_std_dev}'] = rolling_mean - (rolling_std * bb_std_dev)
+
+        except Exception as e:
+            logger.error(f"({self.name}) 在 calculate_all_indicators 中发生错误: {e}", exc_info=True)
+
+        return df
+
+    def generate_signals_from_indicators_on_window(self, df_window_with_indicators: pd.DataFrame) -> pd.DataFrame:
+        """
+        在给定的、已包含指标的窗口数据上，为窗口的最后一行生成信号。
+        """
+        df_out = df_window_with_indicators.copy()
+        if 'signal' not in df_out.columns: df_out['signal'] = 0
+        if 'confidence' not in df_out.columns: df_out['confidence'] = 0
+
+        if len(df_out) < 2:
+            return df_out
+
+        rsi_col = f"RSI_{self.params['rsi_period']}"
+        bb_upper_col = f"RSI_BBU_{self.params['bb_period']}_{self.params['bb_std_dev']}"
+        bb_lower_col = f"RSI_BBL_{self.params['bb_period']}_{self.params['bb_std_dev']}"
+
+        required_cols = [rsi_col, bb_upper_col, bb_lower_col]
+        if not all(col in df_out.columns for col in required_cols):
+            return df_out
+
+        curr_row = df_out.iloc[-1]
+        prev_row = df_out.iloc[-2]
+
+        if pd.isna(curr_row[required_cols]).any() or pd.isna(prev_row[required_cols]).any():
+            return df_out
+
+        curr_rsi = curr_row[rsi_col]
+        prev_rsi = prev_row[rsi_col]
+        curr_bb_upper = curr_row[bb_upper_col]
+        curr_bb_lower = curr_row[bb_lower_col]
+        prev_bb_upper = prev_row[bb_upper_col]
+        prev_bb_lower = prev_row[bb_lower_col]
+        
+        signal = 0
+        confidence = 0
+
+        # 看涨信号：前一根K线的RSI在下轨下方，当前K线的RSI上穿下轨
+        if prev_rsi <= prev_bb_lower and curr_rsi > curr_bb_lower:
+            signal = 1
+            confidence = 100
+
+        # 看跌信号：前一根K线的RSI在上轨上方，当前K线的RSI下穿上轨
+        elif prev_rsi >= prev_bb_upper and curr_rsi < curr_bb_upper:
+            signal = -1
+            confidence = 100
+        
+        df_out.iloc[-1, df_out.columns.get_loc('signal')] = signal
+        df_out.iloc[-1, df_out.columns.get_loc('confidence')] = confidence
+        
+        return df_out
+
+    def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        为整个DataFrame生成信号（主要用于回测）。
+        """
+        df_with_indicators = self.calculate_all_indicators(df.copy())
+        df_signaled = df_with_indicators.copy()
+        df_signaled['signal'] = 0
+        df_signaled['confidence'] = 0
+
+        rsi_col = f"RSI_{self.params['rsi_period']}"
+        bb_upper_col = f"RSI_BBU_{self.params['bb_period']}_{self.params['bb_std_dev']}"
+        bb_lower_col = f"RSI_BBL_{self.params['bb_period']}_{self.params['bb_std_dev']}"
+
+        required_cols = [rsi_col, bb_upper_col, bb_lower_col]
+        if not all(col in df_signaled.columns for col in required_cols):
+            logger.warning(f"({self.name}) 缺少必要的指标列，无法生成信号。")
+            return df_signaled
+
+        prev_rsi = df_signaled[rsi_col].shift(1)
+        prev_bb_upper = df_signaled[bb_upper_col].shift(1)
+        prev_bb_lower = df_signaled[bb_lower_col].shift(1)
+
+        long_condition = (prev_rsi <= prev_bb_lower) & (df_signaled[rsi_col] > df_signaled[bb_lower_col])
+        
+        short_condition = (prev_rsi >= prev_bb_upper) & (df_signaled[rsi_col] < df_signaled[bb_upper_col])
+
+        df_signaled.loc[long_condition, 'signal'] = 1
+        df_signaled.loc[short_condition, 'signal'] = -1
+        df_signaled.loc[long_condition | short_condition, 'confidence'] = 100
+
+        return df_signaled
+
+
 # --- get_available_strategies ---
 def get_available_strategies() -> List[Dict[str, Any]]:
     """获取所有可用策略的列表"""
@@ -1262,6 +1409,17 @@ def get_available_strategies() -> List[Dict[str, Any]]:
                 # --- TD Sequential Params ---
                 {'name': 'td_seq_buy_setup', 'type': 'select', 'default': 9, 'options': [9, 13], 'description': 'TD买入计数'},
                 {'name': 'td_seq_sell_setup', 'type': 'select', 'default': 9, 'options': [9, 13], 'description': 'TD卖出计数'},
+            ]
+        },
+        {
+            'id': 'rsi_bollinger',
+            'name': 'RSI布林带策略',
+            'class': RsiBollingerStrategy,
+            'description': '在RSI指标上应用布林带，根据RSI穿越其布林带轨道来产生信号。',
+            'parameters': [
+                {'name': 'rsi_period', 'type': 'int', 'default': 14, 'min': 5, 'max': 30, 'description': 'RSI计算周期'},
+                {'name': 'bb_period', 'type': 'int', 'default': 20, 'min': 10, 'max': 50, 'description': 'RSI布林带周期'},
+                {'name': 'bb_std_dev', 'type': 'float', 'default': 2.0, 'min': 1.0, 'max': 3.0, 'step': 0.1, 'description': 'RSI布林带标准差'},
             ]
         }
     ]

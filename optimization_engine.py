@@ -1769,6 +1769,58 @@ class OptimizationEngine:
                             'rsi_oversold': {'min': 25, 'max': 40, 'step': 5}
                         }
                     }
+                },
+                'rsi_divergence': {
+                    'conservative': {
+                        'description': '保守型：寻找更可靠的背离信号',
+                        'ranges': {
+                            'rsi_period': {'min': 12, 'max': 18, 'step': 2},
+                            'pivot_lookback_high': {'min': 5, 'max': 10, 'step': 1},
+                            'pivot_lookback_low': {'min': 5, 'max': 10, 'step': 1}
+                        }
+                    },
+                    'balanced': {
+                        'description': '平衡型：平衡信号频率和可靠性',
+                        'ranges': {
+                            'rsi_period': {'min': 10, 'max': 16, 'step': 2},
+                            'pivot_lookback_high': {'min': 3, 'max': 7, 'step': 1},
+                            'pivot_lookback_low': {'min': 3, 'max': 7, 'step': 1}
+                        }
+                    },
+                    'aggressive': {
+                        'description': '激进型：捕捉更多潜在的背离机会',
+                        'ranges': {
+                            'rsi_period': {'min': 8, 'max': 14, 'step': 2},
+                            'pivot_lookback_high': {'min': 2, 'max': 5, 'step': 1},
+                            'pivot_lookback_low': {'min': 2, 'max': 5, 'step': 1}
+                        }
+                    }
+                },
+                'rsi_bollinger': {
+                    'conservative': {
+                        'description': '保守型：更宽的通道，更少的信号',
+                        'ranges': {
+                            'rsi_period': {'min': 12, 'max': 18, 'step': 2},
+                            'bb_len': {'min': 18, 'max': 25, 'step': 2},
+                            'bb_std': {'min': 2.0, 'max': 2.5, 'step': 0.1}
+                        }
+                    },
+                    'balanced': {
+                        'description': '平衡型：标准参数，平衡信号和过滤',
+                        'ranges': {
+                            'rsi_period': {'min': 10, 'max': 16, 'step': 2},
+                            'bb_len': {'min': 15, 'max': 22, 'step': 2},
+                            'bb_std': {'min': 1.8, 'max': 2.2, 'step': 0.1}
+                        }
+                    },
+                    'aggressive': {
+                        'description': '激进型：更窄的通道，更频繁的信号',
+                        'ranges': {
+                            'rsi_period': {'min': 8, 'max': 14, 'step': 2},
+                            'bb_len': {'min': 10, 'max': 18, 'step': 2},
+                            'bb_std': {'min': 1.5, 'max': 2.0, 'step': 0.1}
+                        }
+                    }
                 }
             }
 
