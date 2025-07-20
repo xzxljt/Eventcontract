@@ -33,12 +33,10 @@ from optimization_engine import get_optimization_engine
 # 配置日志记录
 # 可以配置输出到文件和控制台
 import sys
-
-# 配置日志记录
-# 可以配置输出到文件和控制台
-import sys
 import os # Already imported at line 4, but good to be explicit here
 import logging.handlers # Already implicitly used, but good to be explicit
+import queue # 导入队列模块
+import atexit # 导入 atexit 模块
 
 # 从环境变量读取日志配置
 LOG_DIR = os.getenv("LOG_DIR", "logs")
@@ -62,21 +60,43 @@ def get_autox_trade_log_file_path(date: Optional[datetime.date] = None) -> str:
 # 构建完整的日志文件路径
 log_file_path = os.path.join(LOG_DIR, LOG_FILENAME)
 
-logging.basicConfig(
-    level=logging.INFO, # 设置最低日志级别，例如 logging.DEBUG 可以看到更详细的日志
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        # 使用 TimedRotatingFileHandler 实现按配置轮转和保留历史日志
-        logging.handlers.TimedRotatingFileHandler(
-            log_file_path,
-            when=LOG_ROTATION_WHEN, # 轮转周期
-            interval=LOG_ROTATION_INTERVAL, # 轮转间隔
-            backupCount=LOG_BACKUP_COUNT,   # 保留历史日志文件数量
-            encoding='utf-8' # 指定编码
-        ),
-        logging.StreamHandler(sys.stdout) # 保留：输出到控制台
-    ]
+# 1. 创建下游 handlers (文件轮转和控制台)
+file_handler = logging.handlers.TimedRotatingFileHandler(
+    log_file_path,
+    when=LOG_ROTATION_WHEN,
+    interval=LOG_ROTATION_INTERVAL,
+    backupCount=LOG_BACKUP_COUNT,
+    encoding='utf-8'
 )
+stream_handler = logging.StreamHandler(sys.stdout)
+
+# 创建一个通用的格式化器
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+file_handler.setFormatter(formatter)
+stream_handler.setFormatter(formatter)
+
+# 2. 创建队列
+log_queue = queue.Queue(-1)
+
+# 3. 创建 QueueHandler，这是根 logger 的唯一 handler
+queue_handler = logging.handlers.QueueHandler(log_queue)
+
+# 4. 创建 QueueListener，监听队列并将日志分发给下游 handlers
+listener = logging.handlers.QueueListener(log_queue, file_handler, stream_handler)
+
+# 5. 配置根 logger
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+# 移除所有现有的 handlers，以防万一
+for handler in root_logger.handlers[:]:
+    root_logger.removeHandler(handler)
+root_logger.addHandler(queue_handler)
+
+# 6. 启动 listener
+listener.start()
+
+# 7. 注册 atexit 钩子以确保在程序退出时停止 listener
+atexit.register(listener.stop)
 
 # 获取一个 Logger 实例，通常使用 __name__
 logger = logging.getLogger(__name__)
