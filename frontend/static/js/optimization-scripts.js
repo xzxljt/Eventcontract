@@ -1114,6 +1114,21 @@
                     }
                 },
 
+                formatDate(dateStr) {
+                    if (!dateStr) return '--';
+                    try {
+                        const date = new Date(dateStr);
+                        if (isNaN(date.getTime())) return '--';
+                        return date.toLocaleDateString('zh-CN', {
+                            year: 'numeric',
+                            month: '2-digit',
+                            day: '2-digit'
+                        });
+                    } catch (e) {
+                        return '--';
+                    }
+                },
+
                 // 工具方法
                 formatTime(seconds) {
                     if (!seconds || seconds <= 0) return '0秒';

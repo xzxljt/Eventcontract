@@ -1067,7 +1067,9 @@ class OptimizationEngine:
                     'progress': record.progress,
                     'created_at': record.created_at,
                     'completed_at': record.completed_at,
-                    'error_message': record.error_message
+                    'error_message': record.error_message,
+                    'start_date': record.start_date,
+                    'end_date': record.end_date
                 }
                 for record in records
             ]
@@ -1183,7 +1185,12 @@ class OptimizationEngine:
                 'progress': record.progress, 'summary': summary,
                 'scatter_plot_data': {'x_axis': 'win_rate', 'y_axis': 'total_return', 'points': scatter_points},
                 'all_results': all_results_from_db,
-                'best_result': all_results_from_db[0] if all_results_from_db else None
+                'best_result': all_results_from_db[0] if all_results_from_db else None,
+                'start_date': record.start_date,
+                'end_date': record.end_date,
+                'symbol': record.symbol,
+                'interval': record.interval,
+                'strategy_name': record.strategy_name
             }
             return response
 

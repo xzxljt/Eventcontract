@@ -559,21 +559,28 @@
                         <div class="card-body">
                             <!-- 统计概览 -->
                             <div class="row mb-4">
-                                <div class="col-md-3 text-center">
+                                <div class="col-md-2 text-center">
                                     <div class="small text-muted">测试组合</div>
                                     <div class="h4 text-primary">{{ optimizationResults.summary?.total_combinations_tested || 0 }}</div>
                                 </div>
-                                <div class="col-md-3 text-center">
+                                <div class="col-md-2 text-center">
                                     <div class="small text-muted">有效结果</div>
                                     <div class="h4 text-success">{{ optimizationResults.summary?.valid_results || 0 }}</div>
                                 </div>
-                                <div class="col-md-3 text-center">
+                                <div class="col-md-2 text-center">
                                     <div class="small text-muted">优化时间</div>
                                     <div class="h4 text-info">{{ formatTime(optimizationResults.summary?.optimization_time) }}</div>
                                 </div>
-                                <div class="col-md-3 text-center">
+                                <div class="col-md-2 text-center">
                                     <div class="small text-muted">最佳评分</div>
                                     <div class="h4 text-warning">{{ (optimizationResults.summary?.best_score || 0).toFixed(2) }}</div>
+                                </div>
+                                <div class="col-md-4 text-center">
+                                    <div class="small text-muted">数据时间段</div>
+                                    <div class="h6 text-secondary" v-if="optimizationResults.start_date && optimizationResults.end_date">
+                                        {{ formatDate(optimizationResults.start_date) }} 至 {{ formatDate(optimizationResults.end_date) }}
+                                    </div>
+                                    <div class="h6 text-muted" v-else>--</div>
                                 </div>
                             </div>
 
@@ -1014,6 +1021,7 @@
                                         <th>时间</th>
                                         <th>交易对</th>
                                         <th>周期</th>
+                                        <th>数据时间段</th>
                                         <th>策略</th>
                                         <th>状态</th>
                                         <th>进度</th>
@@ -1034,6 +1042,15 @@
                                             <span class="badge bg-primary">{{ record.symbol }}</span>
                                         </td>
                                         <td>{{ record.interval }}</td>
+                                        <td>
+                                            <div class="small">
+                                                <div v-if="record.start_date && record.end_date">
+                                                    <div>{{ formatDate(record.start_date) }}</div>
+                                                    <div class="text-muted">至 {{ formatDate(record.end_date) }}</div>
+                                                </div>
+                                                <div v-else class="text-muted">-</div>
+                                            </div>
+                                        </td>
                                         <td>
                                             <div class="small">{{ record.strategy_name }}</div>
                                         </td>
