@@ -147,18 +147,18 @@ class ConnectionManager:
         if websocket in self.active_connections: self.active_connections.remove(websocket)
     async def _send_to_connection(self, connection: WebSocket, data: dict, client_id: str, timeout_sec: float):
         """辅助函数：向单个WebSocket连接发送数据并处理异常。"""
-        send_start_time = time.time()
+        # send_start_time = time.time()
         try:
             await asyncio.wait_for(connection.send_json(data), timeout=timeout_sec)
-            send_elapsed = time.time() - send_start_time
-            logger.debug(f"WebSocket广播成功到客户端 {client_id}，耗时: {send_elapsed:.4f}秒")
+            # send_elapsed = time.time() - send_start_time
+            # logger.debug(f"WebSocket广播成功到客户端 {client_id}，耗时: {send_elapsed:.4f}秒")
             return True
         except asyncio.TimeoutError:
             logger.warning(f"WebSocket广播到客户端 {client_id} 超时 (>{timeout_sec}秒)")
             self.disconnect(connection) # 超时后断开连接
             return False
         except WebSocketDisconnect:
-            logger.debug(f"WebSocket广播时发现客户端 {client_id} 已断开连接")
+            # logger.debug(f"WebSocket广播时发现客户端 {client_id} 已断开连接")
             self.disconnect(connection)
             return False
         except Exception as e:
@@ -190,12 +190,12 @@ class ConnectionManager:
                 connections_to_send_to.append({"conn": connection, "id": client_id})
 
         if not connections_to_send_to:
-            logger.debug("没有符合条件的WebSocket连接需要广播。")
+            # logger.debug("没有符合条件的WebSocket连接需要广播。")
             broadcast_overall_elapsed = time.time() - broadcast_overall_start_time
             # logger.info(f"异步WebSocket广播完成 (无连接) - 总耗时: {broadcast_overall_elapsed:.4f}秒")
             return {"total_targeted": 0, "success": 0, "error": 0}
 
-        logger.debug(f"准备向 {len(connections_to_send_to)} 个客户端创建发送任务...")
+        # logger.debug(f"准备向 {len(connections_to_send_to)} 个客户端创建发送任务...")
 
         for conn_info in connections_to_send_to:
             task = asyncio.create_task(
@@ -205,10 +205,10 @@ class ConnectionManager:
         
         results = []
         if tasks:
-            logger.debug(f"等待 {len(tasks)} 个WebSocket发送任务完成...")
+            # logger.debug(f"等待 {len(tasks)} 个WebSocket发送任务完成...")
             # 使用 asyncio.gather 等待所有任务完成，return_exceptions=True 使得gather不会因单个任务失败而停止
             results = await asyncio.gather(*tasks, return_exceptions=True)
-            logger.debug(f"所有 {len(tasks)} 个WebSocket发送任务已处理。")
+            # logger.debug(f"所有 {len(tasks)} 个WebSocket发送任务已处理。")
         
         success_count = 0
         error_count = 0
@@ -228,14 +228,14 @@ class ConnectionManager:
         total_targeted_connections = len(connections_to_send_to)
         
         broadcast_overall_elapsed = time.time() - broadcast_overall_start_time
-        logger.info(
-            f"异步WebSocket广播完成 - 总耗时: {broadcast_overall_elapsed:.4f}秒, "
-            f"目标客户端数: {total_targeted_connections}, 成功: {success_count}, 失败: {error_count}"
-        )
-        
+        # logger.info(
+        #     f"异步WebSocket广播完成 - 总耗时: {broadcast_overall_elapsed:.4f}秒, "
+        #     f"目标客户端数: {total_targeted_connections}, 成功: {success_count}, 失败: {error_count}"
+        # )
+
         if broadcast_overall_elapsed > 1.0:
             logger.warning(
-                # f"异步WebSocket广播耗时较长: {broadcast_overall_elapsed:.4f}秒, "
+                f"WebSocket广播耗时较长: {broadcast_overall_elapsed:.4f}秒, "
                 f"成功/目标: {success_count}/{total_targeted_connections}"
             )
         
@@ -353,14 +353,14 @@ class OptimizationConnectionManager:
         if optimization_id not in self.connections:
             self.connections[optimization_id] = []
         self.connections[optimization_id].append(websocket)
-        logger.info(f"WebSocket connected for optimization_id: {optimization_id}")
+        # logger.info(f"WebSocket connected for optimization_id: {optimization_id}")
 
     def disconnect(self, websocket: WebSocket, optimization_id: str):
         """Handles a disconnected connection."""
         if optimization_id in self.connections:
             if websocket in self.connections[optimization_id]:
                 self.connections[optimization_id].remove(websocket)
-                logger.info(f"WebSocket disconnected for optimization_id: {optimization_id}")
+                # logger.info(f"WebSocket disconnected for optimization_id: {optimization_id}")
                 # If no more connections for this optimization_id, clean up the entry
                 if not self.connections[optimization_id]:
                     del self.connections[optimization_id]
@@ -380,9 +380,9 @@ class OptimizationConnectionManager:
                         # The connection might be stale, disconnect it
                         self.disconnect(connections_to_send[i], optimization_id)
 
-                successful_sends = sum(1 for r in results if not isinstance(r, Exception))
-                if successful_sends > 0:
-                    logger.info(f"Sent update to {successful_sends} clients for optimization_id: {optimization_id}")
+                # successful_sends = sum(1 for r in results if not isinstance(r, Exception))
+                # if successful_sends > 0:
+                #     logger.info(f"Sent update to {successful_sends} clients for optimization_id: {optimization_id}")
 
 
 # Global instance for optimization WebSocket connections
@@ -516,7 +516,7 @@ async def load_autox_trade_logs():
     log_file_path = get_autox_trade_log_file_path(current_date)
     current_autox_trade_log_date = current_date # 记录当前加载的日志日期
 
-    print(f"尝试从文件 {log_file_path} 加载当天的 AutoX 交易日志...")
+    # print(f"尝试从文件 {log_file_path} 加载当天的 AutoX 交易日志...")
 
     loaded_data = await asyncio.to_thread(
         _blocking_load_json_from_file,
@@ -542,7 +542,7 @@ async def load_active_test_config():
     """从文件异步加载活动测试配置。"""
     global active_live_test_config_id, running_live_test_configs
 
-    print(f"尝试从文件 {ACTIVE_TEST_CONFIG_FILE} 加载活动测试配置...") # 新增日志
+    # print(f"尝试从文件 {ACTIVE_TEST_CONFIG_FILE} 加载活动测试配置...") # 新增日志
 
     loaded_data = await asyncio.to_thread(
         _blocking_load_json_from_file,
@@ -573,12 +573,14 @@ async def load_active_test_config():
             if inv_instance:
                 running_live_test_configs[active_config_id]['investment_strategy_instance'] = inv_instance
 
-        print(f"成功从 {ACTIVE_TEST_CONFIG_FILE} 加载活动测试配置 (ID: {active_config_id})。") # 修改日志
+        # print(f"成功从 {ACTIVE_TEST_CONFIG_FILE} 加载活动测试配置 (ID: {active_config_id})。") # 修改日志
         # 可以选择在这里打印加载的配置数据，但可能比较冗长
         # print(f"加载的配置数据: {config_data}")
+        pass
 
     else:
-        print(f"{ACTIVE_TEST_CONFIG_FILE} 未找到活动测试配置或配置不完整。") # 修改日志
+        # print(f"{ACTIVE_TEST_CONFIG_FILE} 未找到活动测试配置或配置不完整。") # 修改日志
+        pass
 
 async def save_autox_trade_logs_async():
     """异步保存 AutoX 交易日志到当天的文件。"""
@@ -655,10 +657,10 @@ async def load_autox_clients_from_file():
     with autox_clients_lock: # 保护对全局变量的写入
         persistent_autox_clients_data = valid_clients
     
-    if persistent_autox_clients_data:
-        print(f"AutoX客户端数据已从 {AUTOX_CLIENTS_FILE} 异步加载。加载了 {len(persistent_autox_clients_data)} 个有效客户端。")
-    else:
-        print(f"{AUTOX_CLIENTS_FILE} 未找到或为空/无效，AutoX客户端数据为空。")
+    # if persistent_autox_clients_data:
+    #     print(f"AutoX客户端数据已从 {AUTOX_CLIENTS_FILE} 异步加载。加载了 {len(persistent_autox_clients_data)} 个有效客户端。")
+    # else:
+    #     print(f"{AUTOX_CLIENTS_FILE} 未找到或为空/无效，AutoX客户端数据为空。")
 
 
 async def save_autox_clients_to_file():
@@ -688,10 +690,11 @@ async def save_autox_clients_to_file():
     
     try:
         await asyncio.to_thread(_blocking_save_json_to_file, AUTOX_CLIENTS_FILE, all_clients_to_save_copy)
-        print(f"AutoX客户端数据已异步保存到文件 {AUTOX_CLIENTS_FILE}。")
+        # print(f"AutoX客户端数据已异步保存到文件 {AUTOX_CLIENTS_FILE}。")
     except Exception as e:
         # _blocking_save_json_to_file 内部已经打印了详细错误
-        print(f"异步保存AutoX客户端数据到 {AUTOX_CLIENTS_FILE} 失败 (从主调函数看)。")
+        # print(f"异步保存AutoX客户端数据到 {AUTOX_CLIENTS_FILE} 失败 (从主调函数看)。")
+        pass
 
 
 async def load_strategy_parameters_from_file():
@@ -712,7 +715,7 @@ async def load_strategy_parameters_from_file():
     strategy_parameters_config["investment_strategies"] = ensure_json_serializable(
         loaded_params.get("investment_strategies", {})
     )
-    print(f"策略参数已从 {STRATEGY_PARAMS_FILE} 异步加载。")
+    # print(f"策略参数已从 {STRATEGY_PARAMS_FILE} 异步加载。")
 
 
 async def save_strategy_parameters_to_file():
@@ -726,8 +729,9 @@ async def save_strategy_parameters_to_file():
     try:
         await asyncio.to_thread(_blocking_save_json_to_file, STRATEGY_PARAMS_FILE, config_copy)
         # print(f"策略参数已异步保存到文件 {STRATEGY_PARAMS_FILE}。") # 保存函数内部会打印
-    except Exception as e:
-        print(f"异步保存策略参数到 {STRATEGY_PARAMS_FILE} 失败 (从主调函数看)。")
+    except Exception:
+        # print(f"异步保存策略参数到 {STRATEGY_PARAMS_FILE} 失败 (从主调函数看)。")
+        pass
 
 
 async def load_live_signals_async():
@@ -743,10 +747,10 @@ async def load_live_signals_async():
     with live_signals_lock: # 保护对全局 live_signals 的写入
         live_signals = loaded_data if isinstance(loaded_data, list) else []
         
-    if live_signals:
-        print(f"已异步加载 {len(live_signals)} 个历史实时信号从 {LIVE_SIGNALS_FILE}")
-    else:
-        print(f"{LIVE_SIGNALS_FILE} 未找到或为空/无效，实时信号列表为空。")
+    # if live_signals:
+    #     print(f"已异步加载 {len(live_signals)} 个历史实时信号从 {LIVE_SIGNALS_FILE}")
+    # else:
+    #     print(f"{LIVE_SIGNALS_FILE} 未找到或为空/无效，实时信号列表为空。")
 
 
 async def save_live_signals_async():
@@ -759,8 +763,9 @@ async def save_live_signals_async():
     try:
         await asyncio.to_thread(_blocking_save_json_to_file, LIVE_SIGNALS_FILE, signals_copy)
         # print(f"实时信号已异步保存到文件 {LIVE_SIGNALS_FILE}。") # 保存函数内部会打印
-    except Exception as e:
-        print(f"异步保存实时信号到 {LIVE_SIGNALS_FILE} 失败 (从主调函数看)。")
+    except Exception:
+        # print(f"异步保存实时信号到 {LIVE_SIGNALS_FILE} 失败 (从主调函数看)。")
+        pass
 
 
 # --- 核心业务逻辑函数 ---
@@ -936,7 +941,7 @@ async def background_signal_verifier():
                     'verified': True, 'verify_time': format_for_display(current_time_utc),
                     'verification_status': 'success'
                 }
-                logger.debug(f"[background_signal_verifier] Signal {signal_copy_to_verify.get('id')}: Created update_fields: {json.dumps(ensure_json_serializable(update_fields), indent=2)}")
+                # logger.debug(f"[background_signal_verifier] Signal {signal_copy_to_verify.get('id')}: Created update_fields: {json.dumps(ensure_json_serializable(update_fields), indent=2)}")
 
                 original_updated = False
                 with live_signals_lock:
@@ -990,8 +995,8 @@ async def background_signal_verifier():
                     # Broadcast the next investment amount after state change
                     await broadcast_next_investment_amount(config_id_of_signal)
                     
-                    logger.debug(f"[background_signal_verifier] Broadcasting 'verified_signal' for signal {signal_copy_to_verify.get('id')}: {json.dumps(signal_copy_to_verify, indent=2)}")
-                    logger.debug(f"[background_signal_verifier] Broadcasting 'verified_signal' for signal {signal_copy_to_verify.get('id')}: {json.dumps(ensure_json_serializable(signal_copy_to_verify), indent=2)}")
+                    # logger.debug(f"[background_signal_verifier] Broadcasting 'verified_signal' for signal {signal_copy_to_verify.get('id')}: {json.dumps(signal_copy_to_verify, indent=2)}")
+                    # logger.debug(f"[background_signal_verifier] Broadcasting 'verified_signal' for signal {signal_copy_to_verify.get('id')}: {json.dumps(ensure_json_serializable(signal_copy_to_verify), indent=2)}")
                     await manager.broadcast_json(
                         {"type": "verified_signal", "data": signal_copy_to_verify},
                         filter_func=lambda c: websocket_to_config_id_map.get(c) == signal_copy_to_verify.get('origin_config_id')
@@ -1040,7 +1045,7 @@ async def _send_autox_command(client_ws: WebSocket, command: Dict[str, Any]): # 
             if client_info:
                 client_id_for_log = client_info.get('client_id', '未知')
         
-        print(f"已向AutoX客户端 {client_id_for_log} 发送指令: {command.get('type')}")
+        # print(f"已向AutoX客户端 {client_id_for_log} 发送指令: {command.get('type')}")
         
         log_entry_data = {
             "client_id": client_id_for_log,
@@ -1244,7 +1249,7 @@ async def broadcast_next_investment_amount(config_id: str):
         payload,
         filter_func=lambda c: websocket_to_config_id_map.get(c) == config_id
     )
-    logger.info(f"Broadcasted next investment amount for config {config_id}: {next_amount:.2f}")
+    # logger.info(f"Broadcasted next investment amount for config {config_id}: {next_amount:.2f}")
 
 
 async def handle_kline_data(kline_data: dict):
@@ -1271,10 +1276,10 @@ async def handle_kline_data(kline_data: dict):
             'taker_buy_quote_asset_volume': kline_data.get('taker_buy_quote_asset_volume', 0)
         }
 
-        logger.debug(f"[WS_KLINE] {kline_symbol}_{kline_interval}: "
-                    f"Time={ws_kline_data['open_time'].strftime('%H:%M:%S')}, "
-                    f"OHLC={ws_kline_data['open']:.4f}/{ws_kline_data['high']:.4f}/"
-                    f"{ws_kline_data['low']:.4f}/{ws_kline_data['close']:.4f}")
+        # logger.debug(f"[WS_KLINE] {kline_symbol}_{kline_interval}: "
+        #             f"Time={ws_kline_data['open_time'].strftime('%H:%M:%S')}, "
+        #             f"OHLC={ws_kline_data['open']:.4f}/{ws_kline_data['high']:.4f}/"
+        #             f"{ws_kline_data['low']:.4f}/{ws_kline_data['close']:.4f}")
 
         active_test_configs_for_this_kline = []
         with running_live_test_configs_lock: # 保护读取
@@ -1357,9 +1362,9 @@ async def handle_kline_data(kline_data: dict):
             # Remove any duplicate timestamps (in case API already included the latest kline)
             df_klines = df_klines[~df_klines.index.duplicated(keep='last')]
 
-            logger.info(f"[HYBRID_DATA] Config {live_test_config_data['_config_id']}: "
-                       f"API klines: {len(df_historical)}, WebSocket kline: 1, Final total: {len(df_klines)}. "
-                       f"Latest: {ws_kline_data['open_time'].strftime('%H:%M:%S')} Close={ws_kline_data['close']:.4f}")
+            # logger.info(f"[HYBRID_DATA] Config {live_test_config_data['_config_id']}: "
+            #            f"API klines: {len(df_historical)}, WebSocket kline: 1, Final total: {len(df_klines)}. "
+            #            f"Latest: {ws_kline_data['open_time'].strftime('%H:%M:%S')} Close={ws_kline_data['close']:.4f}")
 
             # Debug: Check if WebSocket kline was actually added
             if len(df_klines) == len(df_historical):
@@ -1368,23 +1373,23 @@ async def handle_kline_data(kline_data: dict):
                 if not df_historical.empty:
                     hist_last_time = df_historical.index[-1]
                     ws_time = ws_kline_data['open_time']
-                    logger.debug(f"[HYBRID_DATA] Historical last time: {hist_last_time}")
-                    logger.debug(f"[HYBRID_DATA] WebSocket time: {ws_time}")
+                    # logger.debug(f"[HYBRID_DATA] Historical last time: {hist_last_time}")
+                    # logger.debug(f"[HYBRID_DATA] WebSocket time: {ws_time}")
 
                     # Check if timestamps are exactly the same
                     if hist_last_time == ws_time:
                         # Replace the last historical kline with WebSocket data
                         df_klines.iloc[-1] = ws_df.iloc[0]
-                        logger.info(f"[HYBRID_DATA] Replaced duplicate timestamp kline with WebSocket data. Total: {len(df_klines)}")
+                        # logger.info(f"[HYBRID_DATA] Replaced duplicate timestamp kline with WebSocket data. Total: {len(df_klines)}")
                     else:
                         # Different timestamps, force add
                         df_klines = pd.concat([df_klines, ws_df], ignore_index=False)
                         df_klines = df_klines.sort_index()
-                        logger.info(f"[HYBRID_DATA] Force added WebSocket kline with different timestamp. New total: {len(df_klines)}")
+                        # logger.info(f"[HYBRID_DATA] Force added WebSocket kline with different timestamp. New total: {len(df_klines)}")
                 else:
                     # No historical data, just use WebSocket data
                     df_klines = ws_df.copy()
-                    logger.info(f"[HYBRID_DATA] No historical data, using only WebSocket kline. Total: {len(df_klines)}")
+                    # logger.info(f"[HYBRID_DATA] No historical data, using only WebSocket kline. Total: {len(df_klines)}")
             # --- END MODIFICATION ---
             
             if df_klines.empty:
@@ -1397,17 +1402,17 @@ async def handle_kline_data(kline_data: dict):
                 continue
             
             # Debug: Check input data before strategy calculation
-            logger.debug(f"[STRATEGY_INPUT] Config {live_test_config_data['_config_id']}: "
-                        f"Input klines count: {len(df_klines)}, "
-                        f"Columns: {list(df_klines.columns)}, "
-                        f"Last close: {df_klines['close'].iloc[-1]:.4f}")
+            # logger.debug(f"[STRATEGY_INPUT] Config {live_test_config_data['_config_id']}: "
+            #             f"Input klines count: {len(df_klines)}, "
+            #             f"Columns: {list(df_klines.columns)}, "
+            #             f"Last close: {df_klines['close'].iloc[-1]:.4f}")
 
             signal_df = pred_strat_info['class'](params=final_pred_params).generate_signals(df_klines.copy()) # 策略计算（如 generate_signals）通常是CPU密集型操作。如果耗时较长，建议后续使用 await asyncio.to_thread() 将其移出事件循环执行，以避免阻塞。
 
             # Debug: Check output data after strategy calculation
-            logger.debug(f"[STRATEGY_OUTPUT] Config {live_test_config_data['_config_id']}: "
-                        f"Output signal_df count: {len(signal_df) if not signal_df.empty else 0}, "
-                        f"Columns: {list(signal_df.columns) if not signal_df.empty else 'EMPTY'}")
+            # logger.debug(f"[STRATEGY_OUTPUT] Config {live_test_config_data['_config_id']}: "
+            #             f"Output signal_df count: {len(signal_df) if not signal_df.empty else 0}, "
+            #             f"Columns: {list(signal_df.columns) if not signal_df.empty else 'EMPTY'}")
 
 # --- START LOGGING LATEST K-LINE DATA ---
             try:
@@ -1474,8 +1479,9 @@ async def handle_kline_data(kline_data: dict):
                 logger.info(debug_info)
 
             elif sig_val != 0:  # Signal generated but below threshold
-                logger.debug(f"[SIGNAL_BELOW_THRESHOLD] {live_test_config_data['symbol']}_{live_test_config_data['interval']}: "
-                           f"Signal={sig_val}, Conf={conf_val:.2f} < {current_confidence_threshold}")
+                    # logger.debug(f"[SIGNAL_BELOW_THRESHOLD] {live_test_config_data['symbol']}_{live_test_config_data['interval']}: "
+                    #            f"Signal={sig_val}, Conf={conf_val:.2f} < {current_confidence_threshold}")
+                    pass
             # --- END SIGNAL DEBUGGING ---
 
             if sig_val != 0 and conf_val >= current_confidence_threshold:
@@ -1657,7 +1663,7 @@ async def handle_kline_data(kline_data: dict):
                     'verification_status': 'pending',
                     'autox_triggered_info': []
                 }
-                logger.debug(f"[handle_kline_data] Created new_live_signal object: {json.dumps(ensure_json_serializable(new_live_signal), indent=2)}")
+                # logger.debug(f"[handle_kline_data] Created new_live_signal object: {json.dumps(ensure_json_serializable(new_live_signal), indent=2)}")
 
                 # --- MODIFICATION: Deduct investment amount immediately ---
                 config_id_for_balance_update = live_test_config_data.get('_config_id')
@@ -1671,7 +1677,8 @@ async def handle_kline_data(kline_data: dict):
                             if current_config_bal is not None:
                                 running_live_test_configs[config_id_for_balance_update]['current_balance'] = current_config_bal - investment_amount_deducted
                                 new_config_balance_after_deduction = running_live_test_configs[config_id_for_balance_update]['current_balance']
-                                print(f"Config ID {config_id_for_balance_update}: 信号触发，扣除投资额 {investment_amount_deducted:.2f}。新余额: {new_config_balance_after_deduction:.2f}")
+                                # print(f"Config ID {config_id_for_balance_update}: 信号触发，扣除投资额 {investment_amount_deducted:.2f}。新余额: {new_config_balance_after_deduction:.2f}")
+                                pass
                             else:
                                 print(f"警告: Config ID {config_id_for_balance_update} 在信号触发时缺少 current_balance。无法扣除投资额。")
 
@@ -1731,7 +1738,7 @@ async def handle_kline_data(kline_data: dict):
                         if not new_live_signal['autox_triggered_info']:
                              new_live_signal['autox_triggered_info'] = {"status": "command_preparation_failed_or_no_client_info_logged"}
                     else:
-                        print(f"信号 {new_live_signal['id']} 符合AutoX触发条件，但未找到合适的空闲AutoX客户端进行广播。")
+                        # print(f"信号 {new_live_signal['id']} 符合AutoX触发条件，但未找到合适的空闲AutoX客户端进行广播。")
                         new_live_signal['autox_triggered_info'] = {"status": "no_available_client_for_broadcast"}
 
                 with live_signals_lock: live_signals.append(new_live_signal)
@@ -1743,8 +1750,8 @@ async def handle_kline_data(kline_data: dict):
                 
                 print(f"有效交易信号 (Config ID: {live_test_config_data['_config_id']}): ID={new_live_signal['id']}, 交易对={new_live_signal['symbol']}_{new_live_signal['interval']}, 方向={'上涨' if new_live_signal['signal'] == 1 else '下跌'}, 置信度={new_live_signal['confidence']:.2f}, 投资额={new_live_signal['investment_amount']:.2f}, AutoX触发客户端数: {num_triggered}")
                 
-                logger.debug(f"[handle_kline_data] Broadcasting 'new_signal': {json.dumps(new_live_signal, indent=2)}")
-                logger.debug(f"[handle_kline_data] Broadcasting 'new_signal': {json.dumps(ensure_json_serializable(new_live_signal), indent=2)}")
+                # logger.debug(f"[handle_kline_data] Broadcasting 'new_signal': {json.dumps(new_live_signal, indent=2)}")
+                # logger.debug(f"[handle_kline_data] Broadcasting 'new_signal': {json.dumps(ensure_json_serializable(new_live_signal), indent=2)}")
                 await manager.broadcast_json(
                     {"type": "new_signal", "data": new_live_signal},
                     filter_func=lambda c: websocket_to_config_id_map.get(c) == new_live_signal['origin_config_id']
@@ -1772,16 +1779,16 @@ async def start_kline_websocket_if_needed(symbol: str, interval: str):
         current_refs = active_kline_streams.get(stream_key, 0)
         if current_refs == 0:
             try:
-                print(f"准备为 {symbol} {interval} 启动K线流 (首次需要)...")
+                # print(f"准备为 {symbol} {interval} 启动K线流 (首次需要)...")
                 binance_client.start_kline_websocket(symbol, interval, kline_callback_wrapper)
-                print(f"已为 {symbol} {interval} 启动K线流的请求已发送。")
+                # print(f"已为 {symbol} {interval} 启动K线流的请求已发送。")
             except Exception as e:
                 print(f"为 {symbol} {interval} 启动K线流失败: {e}")
                 # 如果启动失败，不应该增加引用计数，或者应该有错误处理机制
                 # 此处暂不修改，但标记为潜在改进点
                 raise # 将异常抛出，让调用者处理
         active_kline_streams[stream_key] = current_refs + 1
-        print(f"K线流 {stream_key} 当前引用计数: {active_kline_streams[stream_key]}")
+        # print(f"K线流 {stream_key} 当前引用计数: {active_kline_streams[stream_key]}")
 
 
 async def stop_kline_websocket_if_not_needed(symbol: str, interval: str):
@@ -1789,19 +1796,19 @@ async def stop_kline_websocket_if_not_needed(symbol: str, interval: str):
     with active_kline_streams_lock:
         current_refs = active_kline_streams.get(stream_key, 0)
         if current_refs <= 0:
-            print(f"警告: 尝试减少 {stream_key} 的引用计数，但已为0或更少。")
+            # print(f"警告: 尝试减少 {stream_key} 的引用计数，但已为0或更少。")
             if stream_key in active_kline_streams: del active_kline_streams[stream_key]
             return
-        
+
         new_refs = current_refs - 1
         active_kline_streams[stream_key] = new_refs
-        print(f"K线流 {stream_key} 新的引用计数: {new_refs}")
+        # print(f"K线流 {stream_key} 新的引用计数: {new_refs}")
 
         if new_refs == 0:
             try:
-                print(f"准备停止 {symbol} {interval} 的K线流 (不再需要)...")
+                # print(f"准备停止 {symbol} {interval} 的K线流 (不再需要)...")
                 binance_client.stop_kline_websocket(symbol, interval)
-                print(f"已发送停止 {symbol} {interval} 的K线流的请求。")
+                # print(f"已发送停止 {symbol} {interval} 的K线流的请求。")
             except Exception as e:
                 print(f"停止 {symbol} {interval} 的K线流失败: {e}")
             if stream_key in active_kline_streams:
@@ -1835,21 +1842,24 @@ async def startup_event():
             if symbol and interval and symbol != 'all' and interval != 'all':
                 try:
                     await start_kline_websocket_if_needed(symbol, interval)
-                    print(f"应用启动：已根据活动配置 {current_active_config_id} 启动 {symbol} {interval} 的K线流。")
+                    # print(f"应用启动：已根据活动配置 {current_active_config_id} 启动 {symbol} {interval} 的K线流。")
                 except Exception as e:
                     print(f"应用启动：根据活动配置 {current_active_config_id} 启动K线流失败: {e}")
             else:
-                 print(f"应用启动：活动配置 {current_active_config_id} 的交易对或周期无效，未启动K线流。")
+                 # print(f"应用启动：活动配置 {current_active_config_id} 的交易对或周期无效，未启动K线流。")
+                 pass
         else:
-             print(f"应用启动：未在 running_live_test_configs 中找到 ID 为 {current_active_config_id} 的活动配置数据。")
+             # print(f"应用启动：未在 running_live_test_configs 中找到 ID 为 {current_active_config_id} 的活动配置数据。")
+             pass
     else:
-        print("应用启动：未找到活动测试配置。")
+        # print("应用启动：未找到活动测试配置。")
+        pass
 
 
     # 创建后台任务
     asyncio.create_task(process_kline_queue())
     asyncio.create_task(background_signal_verifier())
-    print("应用启动完成。后台任务已启动。")
+    # print("应用启动完成。后台任务已启动。")
 
     # 新增：启动每日日志切换和清理任务
     asyncio.create_task(daily_log_rotation_and_cleanup())
@@ -1870,7 +1880,7 @@ async def daily_log_rotation_and_cleanup():
             break
         # TODO: 实现日志轮转和清理逻辑
         # 例如：检查当前日期是否与日志文件日期一致，不一致则切换并清理旧文件
-        logger.debug("daily_log_rotation_and_cleanup: hourly check.")
+        # logger.debug("daily_log_rotation_and_cleanup: hourly check.")
     logger.info("daily_log_rotation_and_cleanup task gracefully shut down.")
 
 
@@ -1886,7 +1896,8 @@ async def websocket_optimization_endpoint(websocket: WebSocket, optimization_id:
             # We can add a timeout to detect stale connections if needed.
             await websocket.receive_text() # This will wait for a message, effectively keeping it alive.
     except WebSocketDisconnect:
-        logger.info(f"Client for optimization_id {optimization_id} disconnected.")
+        # logger.info(f"Client for optimization_id {optimization_id} disconnected.")
+        pass
     except Exception as e:
         logger.error(f"Error in optimization websocket for {optimization_id}: {e}", exc_info=True)
     finally:
@@ -2035,16 +2046,16 @@ async def websocket_endpoint(websocket: WebSocket):
                     await websocket.send_json({"type": "session_not_found", "data": {"config_id": client_config_id}})
             
             elif message_type == 'set_runtime_config':
-                logger.info(f"[DEBUG] Received 'set_runtime_config' message. Raw data: {json.dumps(data, indent=2)}")
+                # logger.info(f"[DEBUG] Received 'set_runtime_config' message. Raw data: {json.dumps(data, indent=2)}")
                 config_payload_data = data.get('data', {})
 
                 # 修正：在验证之前，手动合并策略特定参数到 investment_settings 中
                 if 'investment_settings' in config_payload_data and 'investment_strategy_specific_params' in config_payload_data['investment_settings']:
                     specific_params = config_payload_data['investment_settings'].pop('investment_strategy_specific_params')
                     if specific_params:
-                        logger.info(f"[DEBUG] Merging specific params into investment_settings: {specific_params}")
+                        # logger.info(f"[DEBUG] Merging specific params into investment_settings: {specific_params}")
                         config_payload_data['investment_settings'].update(specific_params)
-                        logger.info(f"[DEBUG] Final investment_settings before validation: {config_payload_data['investment_settings']}")
+                        # logger.info(f"[DEBUG] Final investment_settings before validation: {config_payload_data['investment_settings']}")
 
                 try:
                     required_keys = ["symbol", "interval", "prediction_strategy_id", "confidence_threshold", "event_period", "investment_settings"]
@@ -2239,7 +2250,7 @@ async def autox_websocket_endpoint(websocket: WebSocket):
             try:
                 # 处理不同类型的WebSocket消息
                 data = await websocket.receive_json()
-                logger.debug(f"收到AutoX客户端消息 (JSON): {data}")
+                # logger.debug(f"收到AutoX客户端消息 (JSON): {data}")
                 message_type = data.get("type")
                 payload = data.get("payload", {})
 
@@ -2302,7 +2313,7 @@ async def autox_websocket_endpoint(websocket: WebSocket):
                                 active_autox_clients[websocket] = client_info_to_store_dict
                                 persistent_autox_clients_data[client_id_local] = client_info_to_store_dict
 
-                            print(f"AutoX客户端已注册/更新: ID={client_id_local}, 支持交易对={supported_symbols_list}, 备注='{client_info_to_store_dict.get('notes', '') if client_info_to_store_dict else ''}'")
+                            # print(f"AutoX客户端已注册/更新: ID={client_id_local}, 支持交易对={supported_symbols_list}, 备注='{client_info_to_store_dict.get('notes', '') if client_info_to_store_dict else ''}'")
                             await websocket.send_json({"type": "registered", "message": "客户端注册成功。", "client_info": client_info_to_store_dict})
                             
                             await debounced_broadcast_autox_clients_status()
@@ -2315,7 +2326,7 @@ async def autox_websocket_endpoint(websocket: WebSocket):
 
                     client_reported_status = payload.get("status")
                     if not client_reported_status:
-                        print(f"AutoX客户端 {client_id_local} 发送的状态更新中缺少 status 字段。")
+                        # print(f"AutoX客户端 {client_id_local} 发送的状态更新中缺少 status 字段。")
                         continue
 
                     updated_info_for_broadcast = None
@@ -2332,8 +2343,8 @@ async def autox_websocket_endpoint(websocket: WebSocket):
                     }
 
                     # 记录状态更新处理开始时间
-                    status_update_start_time = time.time()
-                    logger.debug(f"开始处理客户端 {client_id_local} 状态更新 - {datetime.now().isoformat()}")
+                    # status_update_start_time = time.time()
+                    # logger.debug(f"开始处理客户端 {client_id_local} 状态更新 - {datetime.now().isoformat()}")
                     
                     # 在锁内准备数据，但不执行耗时操作
                     updated_info_for_broadcast = None
@@ -2380,8 +2391,8 @@ async def autox_websocket_endpoint(websocket: WebSocket):
                             updated_info_for_broadcast = current_client_info_active.copy()
                     
                     # 记录锁释放时间
-                    lock_release_time = time.time()
-                    logger.debug(f"状态更新锁内处理完成，耗时: {(lock_release_time - status_update_start_time):.4f}秒 - {datetime.now().isoformat()}")
+                    # lock_release_time = time.time()
+                    # logger.debug(f"状态更新锁内处理完成，耗时: {(lock_release_time - status_update_start_time):.4f}秒 - {datetime.now().isoformat()}")
                     
                     # 如果需要跳过后续处理，直接返回
                     if should_continue:
@@ -2406,8 +2417,8 @@ async def autox_websocket_endpoint(websocket: WebSocket):
                           f"客户端最终状态设置为: '{final_set_status}'")
                     
                     # 记录日志处理完成时间
-                    log_process_time = time.time()
-                    logger.debug(f"状态更新日志处理完成，耗时: {(log_process_time - lock_release_time):.4f}秒 - {datetime.now().isoformat()}")
+                    # log_process_time = time.time()
+                    # logger.debug(f"状态更新日志处理完成，耗时: {(log_process_time - lock_release_time):.4f}秒 - {datetime.now().isoformat()}")
                     
                     # 锁外执行广播和文件保存操作
                     if updated_info_for_broadcast:
@@ -2415,8 +2426,8 @@ async def autox_websocket_endpoint(websocket: WebSocket):
                         await save_autox_clients_to_file()
                         
                     # 记录整个状态更新处理完成时间
-                    status_update_end_time = time.time()
-                    logger.debug(f"状态更新处理完成，总耗时: {(status_update_end_time - status_update_start_time):.4f}秒 - {datetime.now().isoformat()}")
+                    # status_update_end_time = time.time()
+                    # logger.debug(f"状态更新处理完成，总耗时: {(status_update_end_time - status_update_start_time):.4f}秒 - {datetime.now().isoformat()}")
  
                 elif message_type == "pong":
                     # 收到客户端的 pong 回复，更新最后活动时间和 pong 时间
@@ -2428,11 +2439,11 @@ async def autox_websocket_endpoint(websocket: WebSocket):
                                 persistent_autox_clients_data[client_id_local]['last_seen'] = now_utc().isoformat()
                                 # persistent_autox_clients_data 不存储 last_pong_time，只存储最后活动时间
                 else:
-                    print(f"收到来自AutoX客户端 {client_id_local or '未知'} 的未知消息类型: {message_type}")
+                    # print(f"收到来自AutoX客户端 {client_id_local or '未知'} 的未知消息类型: {message_type}")
                     await websocket.send_json({"type": "error", "message": f"不支持的消息类型: {message_type}"})
 
             except json.JSONDecodeError:
-                print(f"Received invalid JSON from AutoX client {client_id_local or 'unknown'}.")
+                # print(f"Received invalid JSON from AutoX client {client_id_local or 'unknown'}.")
                 await websocket.send_json({"type": "error", "message": "Invalid JSON format."})
             except Exception as e:
                 print(f"Error processing AutoX client text message ({client_id_local or 'unknown'}): {e}\n{traceback.format_exc()}")
@@ -2441,7 +2452,7 @@ async def autox_websocket_endpoint(websocket: WebSocket):
             # Handle other message types if needed (e.g., binary)
 
             except WebSocketDisconnect:
-                print(f"AutoX客户端 {client_id_local or getattr(websocket, 'client', 'N/A')} 断开连接。")
+                # print(f"AutoX客户端 {client_id_local or getattr(websocket, 'client', 'N/A')} 断开连接。")
                 break # Exit the loop on disconnect
             except Exception as e:
                 print(f"AutoX WebSocket端点错误 ({client_id_local or getattr(websocket, 'client', 'N/A')}): {e}\n{traceback.format_exc()}")
@@ -2486,7 +2497,8 @@ async def autox_status_websocket_endpoint(websocket: WebSocket):
         while True:
             await websocket.receive_text() # 保持连接，可以处理ping/pong
     except WebSocketDisconnect:
-        print(f"AutoX状态前端客户端 {getattr(websocket, 'client', 'N/A')} 断开连接。")
+        # print(f"AutoX状态前端客户端 {getattr(websocket, 'client', 'N/A')} 断开连接。")
+        pass
     except Exception as e:
         print(f"AutoX状态WebSocket端点错误 ({getattr(websocket, 'client', 'N/A')}): {e}\n{traceback.format_exc()}")
     finally:
@@ -2503,12 +2515,14 @@ async def _execute_broadcast_after_delay():
         await asyncio.sleep(DEBOUNCE_DELAY_AUTOX_STATUS)
         # 再次检查任务是否在 sleep 期间被取消
         if not asyncio.current_task().cancelled():
-            logger.debug(f"Debounce delay for broadcast_autox_clients_status complete, executing now.")
+            # logger.debug(f"Debounce delay for broadcast_autox_clients_status complete, executing now.")
             await broadcast_autox_clients_status()
         else:
-            logger.debug(f"Debounce task for broadcast_autox_clients_status was cancelled during delay.")
+            # logger.debug(f"Debounce task for broadcast_autox_clients_status was cancelled during delay.")
+            pass
     except asyncio.CancelledError:
-        logger.debug(f"Debounce execution task for broadcast_autox_clients_status cancelled.")
+        # logger.debug(f"Debounce execution task for broadcast_autox_clients_status cancelled.")
+        pass
     except Exception as e:
         logger.error(f"Error during debounced execution of broadcast_autox_clients_status: {e}", exc_info=True)
 
@@ -2521,17 +2535,18 @@ async def debounced_broadcast_autox_clients_status():
     global _debounce_task_autox_status
     
     if _debounce_task_autox_status and not _debounce_task_autox_status.done():
-        logger.debug("Debouncing broadcast_autox_clients_status: cancelling previous task.")
+        # logger.debug("Debouncing broadcast_autox_clients_status: cancelling previous task.")
         _debounce_task_autox_status.cancel()
         try:
             await _debounce_task_autox_status  # 等待任务实际完成取消
         except asyncio.CancelledError:
-            logger.debug("Previous debounce task for broadcast_autox_clients_status successfully cancelled.")
+            # logger.debug("Previous debounce task for broadcast_autox_clients_status successfully cancelled.")
+            pass
         except Exception as e:
             # 这个异常不应该发生，因为我们期望CancelledError
             logger.error(f"Unexpected error waiting for previous debounce task cancellation: {e}", exc_info=True)
 
-    logger.debug(f"Scheduling new debounced broadcast_autox_clients_status in {DEBOUNCE_DELAY_AUTOX_STATUS}s.")
+    # logger.debug(f"Scheduling new debounced broadcast_autox_clients_status in {DEBOUNCE_DELAY_AUTOX_STATUS}s.")
     _debounce_task_autox_status = asyncio.create_task(_execute_broadcast_after_delay())
 
 # --- 辅助函数：广播AutoX客户端状态 (现在从 persistent_autox_clients_data 读取) ---
@@ -2540,26 +2555,26 @@ async def broadcast_autox_clients_status():
     优化：将数据准备和广播分离，避免在锁内进行耗时IO操作
     """
     # 记录开始时间，用于性能监控
-    start_time = time.time()
-    logger.debug(f"开始准备AutoX客户端状态数据 - {datetime.now().isoformat()}")
-    
+    # start_time = time.time()
+    # logger.debug(f"开始准备AutoX客户端状态数据 - {datetime.now().isoformat()}")
+
     # 第一步：在锁内准备所有需要的数据
     clients_data_to_broadcast = []
     persistent_copy = {}
     active_client_ids = set()
-    
+
     with autox_clients_lock: # 保护对客户端数据的读取，但尽量减少锁内操作
         # 创建副本进行迭代和处理
         persistent_copy = {cid: cinfo.copy() for cid, cinfo in persistent_autox_clients_data.items()}
-        
+
         # 收集活跃客户端ID
-        for ws, active_info in active_autox_clients.items():
+        for _, active_info in active_autox_clients.items():
             if active_info.get('client_id'):
                 active_client_ids.add(active_info['client_id'])
-    
+
     # 记录锁释放时间
-    lock_release_time = time.time()
-    logger.debug(f"锁内数据准备完成，耗时: {(lock_release_time - start_time):.4f}秒 - {datetime.now().isoformat()}")
+    # lock_release_time = time.time()
+    # logger.debug(f"锁内数据准备完成，耗时: {(lock_release_time - start_time):.4f}秒 - {datetime.now().isoformat()}")
     
     # 第二步：锁外处理数据
     for client_id, client_info_dict in persistent_copy.items():
@@ -2579,17 +2594,17 @@ async def broadcast_autox_clients_status():
             logger.error(f"序列化AutoX客户端 {client_id} 信息时出错: {e_val}")
     
     # 记录数据处理完成时间
-    data_process_time = time.time()
-    logger.debug(f"数据处理完成，耗时: {(data_process_time - lock_release_time):.4f}秒 - {datetime.now().isoformat()}")
-    
+    # data_process_time = time.time()
+    # logger.debug(f"数据处理完成，耗时: {(data_process_time - lock_release_time):.4f}秒 - {datetime.now().isoformat()}")
+
     # 第三步：执行广播（锁外操作）
     payload = {"type": "autox_clients_update", "data": clients_data_to_broadcast}
-    logger.debug(f"开始广播AutoX客户端状态 - {datetime.now().isoformat()}")
+    # logger.debug(f"开始广播AutoX客户端状态 - {datetime.now().isoformat()}")
     await autox_status_manager.broadcast_json(payload)
-    
+
     # 记录广播完成时间
-    broadcast_end_time = time.time()
-    logger.debug(f"广播完成，耗时: {(broadcast_end_time - data_process_time):.4f}秒，总耗时: {(broadcast_end_time - start_time):.4f}秒 - {datetime.now().isoformat()}")
+    # broadcast_end_time = time.time()
+    # logger.debug(f"广播完成，耗时: {(broadcast_end_time - data_process_time):.4f}秒，总耗时: {(broadcast_end_time - start_time):.4f}秒 - {datetime.now().isoformat()}")
     # print(f"已广播AutoX客户端状态更新到 {len(autox_status_manager.active_connections)} 个前端连接。")
 
 
@@ -2751,14 +2766,14 @@ async def get_optimization_results(optimization_id: str, limit: Optional[int] = 
     try:
         engine = get_optimization_engine()
         results = await engine.get_optimization_results(optimization_id, limit)
-        logger.info(f"DATABASE-DATA for {optimization_id}: {results}")
+        # logger.info(f"DATABASE-DATA for {optimization_id}: {results}")
 
         if 'error' in results:
             raise HTTPException(status_code=404, detail=results['error'])
 
-        logger.info(f"API-RESPONSE for {optimization_id}: {results}")
+        # logger.info(f"API-RESPONSE for {optimization_id}: {results}")
         serializable_results = ensure_json_serializable(results)
-        logger.info(f"API-RESPONSE for {optimization_id}: {serializable_results}")
+        # logger.info(f"API-RESPONSE for {optimization_id}: {serializable_results}")
         return serializable_results
 
     except HTTPException:
@@ -3017,7 +3032,9 @@ async def run_backtest_endpoint(request: BacktestRequest):
             active_backtest_tasks[task_id]["status"] = "failed"
             active_backtest_tasks[task_id]["end_time"] = now_utc()
             active_backtest_tasks[task_id]["error"] = str(exc)
-        error_detail_msg = f"回测过程中发生错误: {str(exc)}"; print(f"{error_detail_msg}\n{traceback.format_exc()}"); raise HTTPException(status_code=500, detail=error_detail_msg)
+        error_detail_msg = f"回测过程中发生错误: {str(exc)}"
+        logger.error(f"{error_detail_msg}\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=error_detail_msg)
     finally:
         # 清理取消标志
         if task_id in backtest_cancellation_flags:
@@ -3209,7 +3226,9 @@ async def save_strategy_parameter_set_endpoint(param_set: StrategyParameterSet):
         await save_strategy_parameters_to_file() # 调用已修改的异步保存函数
         return {"status": "success", "message": "策略参数已保存"}
     except HTTPException as http_exc: raise http_exc
-    except Exception as e: print(f"保存策略参数失败: {e}\n{traceback.format_exc()}"); raise HTTPException(status_code=500, detail=f"保存策略参数失败: {str(e)}")
+    except Exception as e:
+        logger.error(f"保存策略参数失败: {e}\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"保存策略参数失败: {str(e)}")
 
 # --- AutoX管理相关的API端点 ---
 @app.get("/api/autox/trade_logs", response_model=List[AutoXTradeLogEntry])
@@ -3343,7 +3362,7 @@ async def update_client_notes_endpoint(client_id: str, notes_payload: ClientNote
     if not found_client:
         raise HTTPException(status_code=404, detail=f"未找到 Client ID 为 {client_id} 的AutoX客户端记录。")
     
-    print(f"客户端 {client_id} 的备注已更新为: '{notes_payload.notes}'")
+    # print(f"客户端 {client_id} 的备注已更新为: '{notes_payload.notes}'")
     await save_autox_clients_to_file() # 异步保存
     await debounced_broadcast_autox_clients_status() # 广播状态更新（可能包含备注变化）
 
@@ -3648,9 +3667,10 @@ async def generate_enhanced_test_signal(
                         else: # 如果外部指定了amount，则优先使用，但仍需通过min/maxAmount校验
                             final_amount = max(live_inv_model.minAmount, min(live_inv_model.maxAmount, final_amount))
 
-                    except Exception as e_inv:
-                        print(f"增强测试信号：从配置计算投资金额时出错: {e_inv}")
+                    except Exception:
+                        # print(f"增强测试信号：从配置计算投资金额时出错: {e_inv}")
                         # 保持使用之前的 final_amount
+                        pass
             else:
                 print(f"警告：提供的 target_config_id '{target_config_id}' 未在运行中的配置中找到。信号将不会与任何特定配置关联以进行AutoX。")
 
@@ -3717,7 +3737,7 @@ async def generate_enhanced_test_signal(
                 except Exception as e_autox_send_test:
                     autox_attempt_log["status"] = "send_command_error"
                     autox_attempt_log["error"] = str(e_autox_send_test)
-                    print(f"增强测试信号：发送AutoX指令失败: {e_autox_send_test}")
+                    # print(f"增强测试信号：发送AutoX指令失败: {e_autox_send_test}")
                     with autox_clients_lock: # 重置客户端状态
                         if target_autox_client_ws in active_autox_clients:
                             active_autox_clients[target_autox_client_ws]['status'] = 'idle'
@@ -3730,10 +3750,12 @@ async def generate_enhanced_test_signal(
     
     elif trigger_autox_now and not autox_enabled_for_this_signal:
         autox_attempt_log["status"] = "not_triggered_config_autox_disabled"
-        print(f"增强测试信号：API请求触发AutoX，但目标配置 {target_config_id} 未启用AutoX。")
+        # print(f"增强测试信号：API请求触发AutoX，但目标配置 {target_config_id} 未启用AutoX。")
+        pass
     elif trigger_autox_now and not live_test_config_data_for_autox:
          autox_attempt_log["status"] = "not_triggered_no_valid_config_for_autox"
-         print(f"增强测试信号：API请求触发AutoX，但未找到有效的 target_config_id 或其未启用AutoX。")
+         # print(f"增强测试信号：API请求触发AutoX，但未找到有效的 target_config_id 或其未启用AutoX。")
+         pass
 
 
     with live_signals_lock: live_signals.append(test_signal_data)
@@ -3835,11 +3857,11 @@ async def shutdown_event():
 
     # 3. 停止策略优化引擎
     try:
-        logger.info("正在停止策略优化引擎...")
+        # logger.info("正在停止策略优化引擎...")
         engine = get_optimization_engine()
         # 停止所有正在运行的优化任务
         engine.stop_all_optimizations()
-        logger.info("策略优化引擎已停止。")
+        # logger.info("策略优化引擎已停止。")
     except Exception as e:
         logger.error(f"停止策略优化引擎时发生错误: {e}", exc_info=True)
 
