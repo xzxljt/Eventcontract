@@ -2681,6 +2681,7 @@ class OptimizationRequest(BaseModel):
     strategy_id: str = Field(..., description="策略ID")
     strategy_params_ranges: Dict[str, Dict[str, Any]] = Field(..., description="策略参数范围")
     event_period: str = Field(default="10m", description="事件周期")
+    initial_balance: float = Field(default=1000.0, description="回测初始资金")
     investment_strategy_id: str = Field(default="fixed", description="投资策略ID")
     investment_strategy_params: Optional[Dict[str, Any]] = Field(default=None, description="投资策略参数")
     exclude_time_ranges: Optional[List[Dict[str, str]]] = Field(default=None, description="排除时间段")
@@ -2706,6 +2707,7 @@ async def start_optimization(request: OptimizationRequest):
             'strategy_id': request.strategy_id,
             'strategy_params_ranges': request.strategy_params_ranges,
             'event_period': request.event_period,
+            'initial_balance': request.initial_balance,
             'investment_strategy_id': request.investment_strategy_id,
             'investment_strategy_params': request.investment_strategy_params or {'amount': 20.0},
             'exclude_time_ranges': request.exclude_time_ranges or [],

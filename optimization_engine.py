@@ -1236,9 +1236,9 @@ class OptimizationEngine:
 
                 self.progress_tracker.update_progress(optimization_id, current)
                 progress = self.progress_tracker.get_progress(optimization_id)
-                
-                # 同步更新数据库进度
-                if progress:
+
+                # 同步更新数据库进度，但只有在优化未完成时才更新
+                if progress and not _optimization_completed_event.is_set():
                     progress_data_for_db = {
                         'current': progress.current, 'total': progress.total,
                         'percentage': progress.percentage, 'elapsed_time': progress.elapsed_time,
@@ -1275,6 +1275,10 @@ class OptimizationEngine:
 
             # 发出信号，停止所有进一步的“running”状态更新
             _optimization_completed_event.set()
+
+            # 等待一小段时间，确保所有挂起的数据库更新完成
+            import time
+            time.sleep(0.1)
 
             # 6. 存储结果
             self.results_manager.store_results(optimization_id, results)

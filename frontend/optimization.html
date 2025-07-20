@@ -283,6 +283,17 @@
                                                 </div>
                                             </div>
 
+                                            <!-- 投资设置 -->
+                                            <div class="row g-2 mb-2">
+                                                <div class="col-12">
+                                                    <label for="initialBalance" class="form-label small">初始资金</label>
+                                                    <input type="number" class="form-control form-control-sm" id="initialBalance"
+                                                           v-model.number="investmentSettings.initial_balance"
+                                                           min="100" max="1000000" step="100" placeholder="1000.0">
+                                                    <small class="form-text text-muted">回测使用的初始模拟资金</small>
+                                                </div>
+                                            </div>
+
                                             <!-- 投资限制设置 -->
                                             <div class="row g-2">
                                                 <div class="col-6">

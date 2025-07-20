@@ -63,6 +63,7 @@
                     selectedInvestmentStrategy: null,
                     investmentStrategyParams: {},
                     investmentSettings: {
+                        initial_balance: 1000.0,
                         min_investment_amount: 5.0,
                         max_investment_amount: 250.0
                     },
@@ -243,6 +244,9 @@
                             timestamp: Date.now()
                         };
                         localStorage.setItem('optimization_state', JSON.stringify(state));
+
+                        // 保存投资设置
+                        localStorage.setItem('optimization_investment_settings', JSON.stringify(this.investmentSettings));
                     } catch (error) {
                         console.warn('保存状态到本地存储失败:', error);
                     }
@@ -267,6 +271,13 @@
                                 this.optimizationProgress = state.optimizationProgress;
                             }
                         }
+
+                        // 恢复投资设置
+                        const savedInvestmentSettings = localStorage.getItem('optimization_investment_settings');
+                        if (savedInvestmentSettings) {
+                            const settings = JSON.parse(savedInvestmentSettings);
+                            this.investmentSettings = { ...this.investmentSettings, ...settings };
+                        }
                     } catch (error) {
                         console.warn('从本地存储恢复状态失败:', error);
                         this.clearLocalStorage();
@@ -276,6 +287,7 @@
                 clearLocalStorage() {
                     try {
                         localStorage.removeItem('optimization_state');
+                        localStorage.removeItem('optimization_investment_settings');
                     } catch (error) {
                         console.warn('清理本地存储失败:', error);
                     }
@@ -640,6 +652,7 @@
                             end_date: this.optimizationParams.end_date,
                             strategy_id: this.selectedStrategy.id,
                             strategy_params_ranges: strategyParamsRanges,
+                            initial_balance: this.investmentSettings.initial_balance,
                             investment_strategy_id: this.selectedInvestmentStrategy?.id || 'fixed',
                             investment_strategy_params: {
                                 ...investmentStrategyParams,
