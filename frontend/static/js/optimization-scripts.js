@@ -463,7 +463,7 @@
                                 this.parameterRanges[param.name] = {
                                     min: typeof param.min === 'number' ? param.min : 0,
                                     max: typeof param.max === 'number' ? param.max : 100,
-                                    step: typeof param.step === 'number' ? param.step : 1
+                                    step: param.step ?? 1
                                 };
 
                                 // 初始化参数优化配置 - 默认启用所有参数
@@ -493,7 +493,7 @@
                                     this.parameterRanges[param.name] = {
                                         min: typeof param.min === 'number' ? param.min : 0,
                                         max: typeof param.max === 'number' ? param.max : 100,
-                                        step: typeof param.step === 'number' ? param.step : 1
+                                        step: param.step ?? 1
                                     };
                                 }
                             });

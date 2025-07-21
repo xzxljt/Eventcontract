@@ -1419,7 +1419,7 @@ def get_available_strategies() -> List[Dict[str, Any]]:
             'parameters': [
                 {'name': 'rsi_period', 'type': 'int', 'default': 14, 'min': 5, 'max': 30, 'description': 'RSI计算周期'},
                 {'name': 'bb_period', 'type': 'int', 'default': 20, 'min': 10, 'max': 50, 'description': 'RSI布林带周期'},
-                {'name': 'bb_std_dev', 'type': 'float', 'default': 2.0, 'min': 1.0, 'max': 3.0, 'step': 0.1, 'description': 'RSI布林带标准差'},
+                {'name': 'bb_std_dev', 'type': 'float', 'default': 2.0, 'min': 1.0, 'max': 5.0, 'step': 0.1, 'description': 'RSI布林带标准差'},
             ]
         }
     ]
