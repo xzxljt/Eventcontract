@@ -186,7 +186,7 @@
                                                         <input type="number" class="form-control form-control-sm"
                                                                :placeholder="`步长 (${param?.step || 1})`"
                                                                v-model.number="parameterRanges[param.name].step"
-                                                               :step="param?.type === 'int' ? 1 : (param?.step || 0.01)"
+                                                               :step="param?.type === 'int' ? 1 : (param?.step || 0.1)"
                                                                :min="param?.type === 'int' ? 1 : 0.01">
                                                         <small class="text-muted">步长</small>
                                                     </div>
@@ -383,7 +383,7 @@
                                         停止优化
                                     </button>
                                     <button type="button" class="btn btn-outline-info"
-                                            @click="openHistoryModal" :disabled="isOptimizing">
+                                            @click="openHistoryModal">
                                         <i class="bi bi-clock-history"></i> 历史记录
                                     </button>
                                 </div>
