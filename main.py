@@ -889,8 +889,8 @@ async def background_signal_verifier():
 
                         if not kline_df.empty:
                             # Use OPEN price instead of CLOSE price for verification
-                            actual_price = float(kline_df.iloc[0]['open'])
-                            verify_time_str = kline_df.index[0].strftime('%H:%M')
+                            actual_price = float(kline_df.iloc['open'])
+                            verify_time_str = kline_df.index.strftime('%H:%M')
                             logger.info(f"验证 {signal_copy_to_verify['id']}: 使用 {verify_time_str} 验证时间点指数开盘价 {actual_price}")
                             break  # Success, exit retry loop
                         else:
@@ -1164,7 +1164,7 @@ async def update_signal_entry_price(signal_id: str, symbol: str, signal_time_dt:
 
             if not index_price_df.empty:
                 # Use the OPEN price of the entry minute as entry price
-                new_entry_price = float(index_price_df.iloc[0]['open'])
+                new_entry_price = float(index_price_df.iloc['open'])
                 # logger.info(f"[update_signal_entry_price] New entry price (entry minute open): {new_entry_price}")
 
                 # Update the signal in live_signals
@@ -1374,6 +1374,14 @@ async def handle_kline_data(kline_data: dict):
             # Ensure column order matches the historical DataFrame
             if not df_historical.empty:
                 ws_df = ws_df.reindex(columns=df_historical.columns, fill_value=0)
+
+            # --- START: 数据冲突处理 (用WebSocket数据替换历史数据的最后一条) ---
+            # 根据设计意图，无论API返回的历史数据是否包含最新的K线，
+            # 我们都优先使用由WebSocket确认收盘的K线。
+            # 因此，直接移除历史数据的最后一条，然后拼接上WebSocket的数据。
+            if not df_historical.empty:
+                df_historical = df_historical.iloc[:-1]
+            # --- END: 数据冲突处理 ---
 
             # Combine historical data with WebSocket data
             df_klines = pd.concat([df_historical, ws_df], ignore_index=False)
