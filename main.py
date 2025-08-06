@@ -889,7 +889,7 @@ async def background_signal_verifier():
 
                         if not kline_df.empty:
                             # Use OPEN price instead of CLOSE price for verification
-                            actual_price = float(kline_df.iloc['open'])
+                            actual_price = float(kline_df.iloc[0]['open'])
                             verify_time_str = kline_df.index.strftime('%H:%M')
                             logger.info(f"验证 {signal_copy_to_verify['id']}: 使用 {verify_time_str} 验证时间点指数开盘价 {actual_price}")
                             break  # Success, exit retry loop
@@ -1164,7 +1164,7 @@ async def update_signal_entry_price(signal_id: str, symbol: str, signal_time_dt:
 
             if not index_price_df.empty:
                 # Use the OPEN price of the entry minute as entry price
-                new_entry_price = float(index_price_df.iloc['open'])
+                new_entry_price = float(index_price_df.iloc[0]['open'])
                 # logger.info(f"[update_signal_entry_price] New entry price (entry minute open): {new_entry_price}")
 
                 # Update the signal in live_signals
