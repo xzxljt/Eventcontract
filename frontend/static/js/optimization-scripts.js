@@ -30,6 +30,7 @@
                     optimizationParams: {
                         symbol: '',
                         interval: '1m',
+                        event_period: '10m',
                         start_date: (() => {
                             const date = new Date();
                             date.setDate(date.getDate() - 7);
@@ -648,6 +649,7 @@
                         const requestData = {
                             symbol: this.optimizationParams.symbol,
                             interval: this.optimizationParams.interval,
+                            event_period: this.optimizationParams.event_period,
                             start_date: this.optimizationParams.start_date,
                             end_date: this.optimizationParams.end_date,
                             strategy_id: this.selectedStrategy.id,

@@ -100,6 +100,16 @@
                                     <div v-if="fieldErrors.interval" class="invalid-feedback">{{ fieldErrors.interval }}</div>
                                 </div>
 
+                               <div class="mb-3">
+                                   <label for="event_period" class="form-label">事件合约周期</label>
+                                   <select class="form-select" id="event_period" v-model="optimizationParams.event_period">
+                                       <option value="10m">10分钟</option>
+                                       <option value="30m">30分钟</option>
+                                       <option value="1h">1小时</option>
+                                       <option value="1d">1天</option>
+                                   </select>
+                               </div>
+
                                 <div class="row">
                                     <div class="col-6">
                                         <div class="mb-3">
