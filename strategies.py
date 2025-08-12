@@ -1328,6 +1328,200 @@ class RsiBollingerStrategy(Strategy):
         return df_signaled
 
 
+# --- RsiMomentumExhaustionStrategy ---
+class RsiMomentumExhaustionStrategy(Strategy):
+    """
+    RSI动能衰竭与成交量确认策略 (智能切换版)。
+    该策略能够根据成交量环境，在“进场触发”和“离场触发”两种模式间智能切换。
+    1. 极端信号：RSI穿越极端阈值（如90/10），立即执行。
+    2. 标准信号：
+        - 在高成交量环境，采用“离场触发”：RSI从超买区回落或从超卖区回升，且必须有成交量萎缩确认。
+        - 在低成交量环境，可选择采用“进场触发”：RSI首次进入超买/超卖区就触发信号，无需等待回头。
+    """
+    def __init__(self, params: Dict[str, Any] = None):
+        default_params = {
+            'rsi_period': 14,
+            'overbought_level': 80,
+            'oversold_level': 20,
+            'extreme_overbought_level': 90,
+            'extreme_oversold_level': 10,
+            'vma_period': 20,
+            'volume_confirmation_multiplier': 0.9,
+            'volume_bypass_threshold': 0, # 新增：成交量绕过阈值，0表示禁用
+            'low_volume_on_entry': True, # 新增：在低成交量时使用“进场触发”模式
+        }
+        if params:
+            default_params.update(params)
+        super().__init__(default_params)
+        
+        self.name = "RSI动能衰竭策略(智能版)"
+        self.min_history_periods = max(self.params['rsi_period'], self.params['vma_period']) + 1
+
+    def calculate_all_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
+        df = super().calculate_all_indicators(df)
+        try:
+            rsi_period = self.params['rsi_period']
+            df.ta.rsi(length=rsi_period, append=True)
+            self.rsi_col = f"RSI_{rsi_period}"
+
+            if 'volume' in df.columns:
+                vma_period = self.params['vma_period']
+                df.ta.ema(close=df['volume'], length=vma_period, append=True)
+                self.vma_col = f"EMA_{vma_period}"
+            else:
+                logger.warning(f"({self.name}) 'volume' 列不存在，无法计算VMA。")
+                self.vma_col = None
+        except Exception as e:
+            logger.error(f"({self.name}) 在 calculate_all_indicators 中发生错误: {e}", exc_info=True)
+            self.rsi_col = None
+            self.vma_col = None
+        return df
+
+    def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
+        df_with_indicators = self.calculate_all_indicators(df.copy())
+        df_signaled = df_with_indicators.copy()
+        df_signaled['signal'] = 0
+        df_signaled['confidence'] = 0
+
+        if not hasattr(self, 'rsi_col') or not self.rsi_col or self.rsi_col not in df_signaled.columns:
+            return df_signaled
+        
+        p = self.params
+        current_rsi = df_signaled[self.rsi_col]
+        previous_rsi = df_signaled[self.rsi_col].shift(1)
+
+        # --- 信号条件 ---
+        # 极端信号 (总是“进场”触发)
+        extreme_sell_signal = (previous_rsi < p['extreme_overbought_level']) & (current_rsi >= p['extreme_overbought_level'])
+        extreme_buy_signal = (previous_rsi > p['extreme_oversold_level']) & (current_rsi <= p['extreme_oversold_level'])
+
+        # 标准信号的RSI穿越条件
+        standard_sell_exit_trigger = (previous_rsi > p['overbought_level']) & (current_rsi <= p['overbought_level'])
+        standard_buy_exit_trigger = (previous_rsi < p['oversold_level']) & (current_rsi >= p['oversold_level'])
+        
+        standard_sell_entry_trigger = (previous_rsi < p['overbought_level']) & (current_rsi >= p['overbought_level'])
+        standard_buy_entry_trigger = (previous_rsi > p['oversold_level']) & (current_rsi <= p['oversold_level'])
+
+        # --- 成交量环境判断 ---
+        is_low_volume_env = pd.Series(False, index=df_signaled.index)
+        volume_check_passed = pd.Series(False, index=df_signaled.index)
+
+        if hasattr(self, 'vma_col') and self.vma_col and self.vma_col in df_signaled.columns and 'volume' in df_signaled.columns:
+            current_vma = df_signaled[self.vma_col]
+            current_volume = df_signaled['volume']
+            
+            # 检查是否为低成交量环境
+            if p['volume_bypass_threshold'] > 0:
+                is_low_volume_env = current_vma < p['volume_bypass_threshold']
+            
+            # 常规成交量确认
+            volume_check_passed = current_volume < (p['volume_confirmation_multiplier'] * current_vma)
+        else:
+            logger.warning(f"({self.name}) 无法进行成交量确认，标准信号将被禁用。")
+
+        # --- 根据环境组合最终信号 ---
+        # 在低成交量且启用“进场触发”模式时，使用 entry_trigger
+        use_entry_trigger = is_low_volume_env & p['low_volume_on_entry']
+        
+        # 做空信号
+        sell_trigger = pd.Series(False, index=df_signaled.index)
+        sell_trigger.loc[use_entry_trigger] = standard_sell_entry_trigger[use_entry_trigger]
+        sell_trigger.loc[~use_entry_trigger] = standard_sell_exit_trigger[~use_entry_trigger]
+        
+        standard_sell_signal = sell_trigger & (is_low_volume_env | volume_check_passed)
+
+        # 做多信号
+        buy_trigger = pd.Series(False, index=df_signaled.index)
+        buy_trigger.loc[use_entry_trigger] = standard_buy_entry_trigger[use_entry_trigger]
+        buy_trigger.loc[~use_entry_trigger] = standard_buy_exit_trigger[~use_entry_trigger]
+
+        standard_buy_signal = buy_trigger & (is_low_volume_env | volume_check_passed)
+
+        # --- 合并所有信号 ---
+        df_signaled.loc[standard_buy_signal, 'signal'] = 1
+        df_signaled.loc[standard_sell_signal, 'signal'] = -1
+        # 极端信号具有最高优先级，会覆盖标准信号
+        df_signaled.loc[extreme_buy_signal, 'signal'] = 1
+        df_signaled.loc[extreme_sell_signal, 'signal'] = -1
+        
+        df_signaled.loc[df_signaled['signal'] != 0, 'confidence'] = 100
+        return df_signaled
+
+    def generate_signals_from_indicators_on_window(self, df_window_with_indicators: pd.DataFrame) -> pd.DataFrame:
+        df_out = df_window_with_indicators.copy()
+        if 'signal' not in df_out.columns: df_out['signal'] = 0
+        if 'confidence' not in df_out.columns: df_out['confidence'] = 0
+
+        if len(df_out) < 2 or not hasattr(self, 'rsi_col') or not self.rsi_col or self.rsi_col not in df_out.columns:
+            return df_out
+
+        current = df_out.iloc[-1]
+        previous = df_out.iloc[-2]
+        
+        if pd.isna(current[self.rsi_col]) or pd.isna(previous[self.rsi_col]):
+            return df_out
+        
+        p = self.params
+        current_rsi = current[self.rsi_col]
+        previous_rsi = previous[self.rsi_col]
+        signal = 0
+
+        # --- 极端信号检查 (最高优先级) ---
+        if previous_rsi < p['extreme_overbought_level'] and current_rsi >= p['extreme_overbought_level']:
+            signal = -1
+        elif previous_rsi > p['extreme_oversold_level'] and current_rsi <= p['extreme_oversold_level']:
+            signal = 1
+        
+        # --- 标准信号检查 (仅在无极端信号时) ---
+        if signal == 0:
+            # 检查成交量环境
+            is_low_volume_env = False
+            volume_check_passed = False
+            if hasattr(self, 'vma_col') and self.vma_col and self.vma_col in current and 'volume' in current and pd.notna(current[self.vma_col]) and pd.notna(current['volume']):
+                if p['volume_bypass_threshold'] > 0 and current[self.vma_col] < p['volume_bypass_threshold']:
+                    is_low_volume_env = True
+                if current['volume'] < p['volume_confirmation_multiplier'] * current[self.vma_col]:
+                    volume_check_passed = True
+
+            # 确定是否满足成交量条件
+            volume_condition_met = is_low_volume_env or volume_check_passed
+            
+            if volume_condition_met:
+                # 根据环境确定RSI触发模式
+                use_entry_trigger = is_low_volume_env and p['low_volume_on_entry']
+                
+                # 做空信号
+                sell_trigger_met = False
+                if use_entry_trigger: # 进场触发
+                    if previous_rsi < p['overbought_level'] and current_rsi >= p['overbought_level']:
+                        sell_trigger_met = True
+                else: # 离场触发
+                    if previous_rsi > p['overbought_level'] and current_rsi <= p['overbought_level']:
+                        sell_trigger_met = True
+                
+                if sell_trigger_met:
+                    signal = -1
+
+                # 做多信号 (仅在无做空信号时)
+                if signal == 0:
+                    buy_trigger_met = False
+                    if use_entry_trigger: # 进场触发
+                        if previous_rsi > p['oversold_level'] and current_rsi <= p['oversold_level']:
+                            buy_trigger_met = True
+                    else: # 离场触发
+                        if previous_rsi < p['oversold_level'] and current_rsi >= p['oversold_level']:
+                            buy_trigger_met = True
+                    
+                    if buy_trigger_met:
+                        signal = 1
+
+        if signal != 0:
+            df_out.iloc[-1, df_out.columns.get_loc('signal')] = signal
+            df_out.iloc[-1, df_out.columns.get_loc('confidence')] = 100
+            
+        return df_out
+
+
 # --- get_available_strategies ---
 def get_available_strategies() -> List[Dict[str, Any]]:
     """获取所有可用策略的列表"""
@@ -1409,6 +1603,21 @@ def get_available_strategies() -> List[Dict[str, Any]]:
                 # --- TD Sequential Params ---
                 {'name': 'td_seq_buy_setup', 'type': 'select', 'default': 9, 'options': [9, 13], 'description': 'TD买入计数'},
                 {'name': 'td_seq_sell_setup', 'type': 'select', 'default': 9, 'options': [9, 13], 'description': 'TD卖出计数'},
+            ]
+        },
+        {
+            'id': 'rsi_momentum_exhaustion',
+            'name': 'RSI动能衰竭与成交量确认',
+            'class': RsiMomentumExhaustionStrategy,
+            'description': '结合极端RSI反转和标准RSI反转+成交量确认的双层信号策略。',
+            'parameters': [
+                {'name': 'rsi_period', 'type': 'int', 'default': 14, 'min': 5, 'max': 50, 'step': 1, 'description': 'RSI计算周期'},
+                {'name': 'overbought_level', 'type': 'int', 'default': 80, 'min': 60, 'max': 95, 'step': 1, 'description': '标准超买阈值'},
+                {'name': 'oversold_level', 'type': 'int', 'default': 20, 'min': 5, 'max': 40, 'step': 1, 'description': '标准超卖阈值'},
+                {'name': 'extreme_overbought_level', 'type': 'int', 'default': 90, 'min': 80, 'max': 99, 'step': 1, 'description': '极端超买阈值'},
+                {'name': 'extreme_oversold_level', 'type': 'int', 'default': 10, 'min': 1, 'max': 20, 'step': 1, 'description': '极端超卖阈值'},
+                {'name': 'vma_period', 'type': 'int', 'default': 20, 'min': 5, 'max': 100, 'step': 1, 'description': '成交量移动平均(VMA)周期'},
+                {'name': 'volume_confirmation_multiplier', 'type': 'float', 'default': 0.9, 'min': 0.1, 'max': 2.0, 'step': 0.1, 'description': '成交量确认乘数 (<1表示缩量)'},
             ]
         },
         {
