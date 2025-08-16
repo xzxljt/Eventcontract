@@ -39,7 +39,7 @@ class Strategy:
         在完整的DataFrame上一次性计算所有需要的技术指标。
         子策略应重写此方法。
         """
-        logger.info(f"({self.name}) 基类 calculate_all_indicators 调用，检查数据类型。")
+        # logger.info(f"({self.name}) 基类 calculate_all_indicators 调用，检查数据类型。")
         df_checked = self._ensure_data_types(df)
         # 子类将在这里添加具体的指标计算
         return df_checked
@@ -237,28 +237,6 @@ class SimpleRSIStrategy(Strategy):
             df_signaled.iloc[i, df_signaled.columns.get_loc('signal')] = signal
             df_signaled.iloc[i, df_signaled.columns.get_loc('confidence')] = int(max(0, min(100, confidence_score)))
         return df_signaled
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 # --- RsiBollingerBandsStrategy ---
 class RsiBollingerBandsStrategy(Strategy):
@@ -1536,6 +1514,19 @@ def get_available_strategies() -> List[Dict[str, Any]]:
             ]
         },
         {
+            'id': 'rsi_with_price_change_filter',
+            'name': 'RSI价格变化过滤策略',
+            'class': RSIWithPriceChangeFilter,
+            'description': '在RSI信号基础上，增加价格在N周期内的变化幅度作为额外过滤条件。',
+            'parameters': [
+                {'name': 'rsi_period', 'type': 'int', 'default': 14, 'min': 5, 'max': 30, 'step': 1, 'description': 'RSI和价格变化计算周期'},
+                {'name': 'rsi_overbought', 'type': 'int', 'default': 70, 'min': 1, 'max': 99, 'step': 1, 'description': 'RSI超买阈值'},
+                {'name': 'rsi_oversold', 'type': 'int', 'default': 30, 'min': 1, 'max': 99, 'step': 1, 'description': 'RSI超卖阈值'},
+                {'name': 'price_change_percentage', 'type': 'float', 'default': 1.0, 'min': -10.0, 'max': 10.0, 'step': 0.1, 'description': '价格变化百分比阈值'},
+                {'name': 'price_change_operator', 'type': 'select', 'default': '>', 'options': ['>', '<'], 'description': '价格变化比较操作符'},
+            ]
+        },
+        {
             'id': 'rsi_divergence', 'name': 'RSI背离策略', 'class': RsiDivergenceStrategy,
             'description': '实现RSI穿越警报与价格背离确认的逻辑。',
             'parameters': [
@@ -1601,8 +1592,8 @@ def get_available_strategies() -> List[Dict[str, Any]]:
                 {'name': 'rsi_oversold', 'type': 'int', 'default': 30, 'min': 1, 'max': 45, 'description': 'RSI超卖阈值'},
 
                 # --- TD Sequential Params ---
-                {'name': 'td_seq_buy_setup', 'type': 'select', 'default': 9, 'options': [9, 13], 'description': 'TD买入计数'},
-                {'name': 'td_seq_sell_setup', 'type': 'select', 'default': 9, 'options': [9, 13], 'description': 'TD卖出计数'},
+                {'name': 'td_seq_buy_setup', 'type': 'select', 'default': 9, 'options':[9, 13], 'description': 'TD买入计数'},
+                {'name': 'td_seq_sell_setup', 'type': 'select', 'default': 9, 'options':[9, 13], 'description': 'TD卖出计数'},
             ]
         },
         {
@@ -1636,3 +1627,99 @@ def get_available_strategies() -> List[Dict[str, Any]]:
     if len(ids) != len(set(ids)):
         raise ValueError("策略ID不唯一！请检查 get_available_strategies 函数。")
     return strategies
+
+
+class RSIWithPriceChangeFilter(Strategy):
+    """
+    结合RSI与价格变化过滤器的策略。
+    仅当RSI条件和价格变化条件同时满足时，才生成买入信号。
+    卖出信号（平仓）逻辑保持不变。
+    """
+    def __init__(self, params: Dict[str, Any] = None):
+        default_params = {
+            'rsi_period': 14,
+            'rsi_overbought': 70,
+            'rsi_oversold': 30,
+            'price_change_percentage': 1.0,
+            'price_change_operator': '>'
+        }
+        if params: default_params.update(params)
+        super().__init__(default_params)
+        self.name = "RSI价格变化过滤策略"
+        self.min_history_periods = self.params['rsi_period'] + 1
+
+    def calculate_all_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
+        df = super().calculate_all_indicators(df)
+        rsi_period = self.params['rsi_period']
+        
+        # 1. 计算RSI
+        df.ta.rsi(length=rsi_period, append=True)
+        self.rsi_col = f"RSI_{rsi_period}"
+
+        # 2. 计算价格变化百分比
+        price_n_periods_ago = df['close'].shift(rsi_period)
+        price_change = ((df['close'] - price_n_periods_ago) / price_n_periods_ago) * 100
+        df['price_change_pct'] = price_change.fillna(0)
+        
+        return df
+
+    def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
+        df_with_indicators = self.calculate_all_indicators(df.copy())
+        df_signaled = df_with_indicators.copy()
+        df_signaled['signal'] = 0
+        df_signaled['confidence'] = 0
+
+        p = self.params
+        rsi_col = getattr(self, 'rsi_col', f"RSI_{p['rsi_period']}")
+
+        if rsi_col not in df_signaled.columns:
+            logger.warning(f"({self.name}) RSI列 '{rsi_col}' 不存在，无法生成信号。")
+            return df_signaled
+
+        # 条件1: 价格变化过滤
+        price_cond_met = pd.Series(True, index=df_signaled.index) # 默认满足
+        if p['price_change_operator'] == '>':
+            price_cond_met = df_signaled['price_change_pct'] > p['price_change_percentage']
+        elif p['price_change_operator'] == '<':
+            price_cond_met = df_signaled['price_change_pct'] < p['price_change_percentage']
+
+        # 条件2: RSI穿越信号
+        prev_rsi = df_signaled[rsi_col].shift(1)
+        buy_rsi_crossover = (df_signaled[rsi_col] < p['rsi_oversold']) & (prev_rsi >= p['rsi_oversold'])
+        sell_rsi_crossover = (df_signaled[rsi_col] > p['rsi_overbought']) & (prev_rsi <= p['rsi_overbought'])
+
+        # 组合信号
+        # 买入信号: RSI穿越超卖区 且 满足价格变化条件
+        buy_signal = buy_rsi_crossover & price_cond_met
+        
+        # 卖出信号: RSI穿越超买区 (平仓逻辑，不应用价格过滤器)
+        sell_signal = sell_rsi_crossover
+
+        df_signaled.loc[buy_signal, 'signal'] = 1
+        df_signaled.loc[sell_signal, 'signal'] = -1
+        df_signaled.loc[buy_signal | sell_signal, 'confidence'] = 100
+
+        return df_signaled
+
+    def generate_signals_from_indicators_on_window(self, df_window_with_indicators: pd.DataFrame) -> pd.DataFrame:
+        # 对于需要状态的策略或实时交易，这个方法更重要。
+        # 这里我们用一个简单的方法，直接在窗口上调用完整的generate_signals，然后取最后一行。
+        # 注意：这在性能上不是最优的，但对于回测框架是兼容的。
+        if len(df_window_with_indicators) < self.min_history_periods:
+            df_out = df_window_with_indicators.copy()
+            if 'signal' not in df_out.columns: df_out['signal'] = 0
+            if 'confidence' not in df_out.columns: df_out['confidence'] = 0
+            return df_out
+
+        # 在小窗口上运行向量化信号生成
+        signaled_window = self.generate_signals(df_window_with_indicators)
+        
+        # 只保留最后一行信号
+        df_out = df_window_with_indicators.copy()
+        if 'signal' not in df_out.columns: df_out['signal'] = 0
+        if 'confidence' not in df_out.columns: df_out['confidence'] = 0
+        
+        df_out.iloc[-1, df_out.columns.get_loc('signal')] = signaled_window.iloc[-1]['signal']
+        df_out.iloc[-1, df_out.columns.get_loc('confidence')] = signaled_window.iloc[-1]['confidence']
+        
+        return df_out
