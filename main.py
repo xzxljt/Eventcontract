@@ -52,10 +52,11 @@ if not os.path.exists(LOG_DIR):
 # --- AutoX 交易日志配置 ---
 AUTOX_TRADE_LOG_DIR = os.path.join(LOG_DIR, "trade_logs")
 
-def get_autox_trade_log_file_path(date: Optional[datetime.date] = None) -> str:
+def get_autox_trade_log_file_path(log_date: Optional[date] = None) -> str:
     """获取指定日期或今天的 AutoX 交易日志文件路径。"""
-    if date is None: date = datetime.date.today()
-    return os.path.join(AUTOX_TRADE_LOG_DIR, f"trade_logs_{date.strftime('%Y-%m-%d')}.json")
+    if log_date is None:
+        log_date = date.today()
+    return os.path.join(AUTOX_TRADE_LOG_DIR, f"trade_logs_{log_date.strftime('%Y-%m-%d')}.json")
 
 # 构建完整的日志文件路径
 log_file_path = os.path.join(LOG_DIR, LOG_FILENAME)
