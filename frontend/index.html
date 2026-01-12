@@ -134,8 +134,9 @@
                                     <label for="eventPeriod" class="form-label">事件合约周期</label>
                                     <select class="form-select" id="eventPeriod" v-model="backtestParams.eventPeriod" required
                                             :class="{'is-invalid': fieldErrors.eventPeriod}">
-                                        <option value="10m">10分钟</option> <option value="30m">30分钟</option>
-                                        <option value="1h">1小时</option> <option value="1d">1天</option>
+                                        <option value="5m">5分钟</option> <option value="10m">10分钟</option>
+                                        <option value="30m">30分钟</option> <option value="1h">1小时</option>
+                                        <option value="1d">1天</option>
                                     </select>
                                     <div v-if="fieldErrors.eventPeriod" class="invalid-feedback">
                                         {{ fieldErrors.eventPeriod }}

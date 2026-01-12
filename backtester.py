@@ -92,6 +92,7 @@ class Backtester:
 
     def _convert_period_to_minutes(self, period: str) -> int:
         if period == '3m': return 3
+        elif period == '5m': return 5
         elif period == '10m': return 10
         elif period == '30m': return 30
         elif period == '1h': return 60

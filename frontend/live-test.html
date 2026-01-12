@@ -157,8 +157,9 @@
                                 <select id="eventPeriodMonitor" class="form-select form-select-sm"
                                         v-model="monitorSettings.event_period"
                                         :class="{'is-invalid': getValidationError(['event_period'])}">
-                                    <option value="10m">10分钟</option> <option value="30m">30分钟</option>
-                                    <option value="1h">1小时</option> <option value="1d">1天</option>
+                                    <option value="5m">5分钟</option> <option value="10m">10分钟</option>
+                                    <option value="30m">30分钟</option> <option value="1h">1小时</option>
+                                    <option value="1d">1天</option>
                                 </select>
                                 <div v-if="getValidationError(['event_period'])" class="invalid-feedback">
                                     {{ getValidationError(['event_period']) }}

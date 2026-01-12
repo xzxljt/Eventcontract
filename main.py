@@ -1576,7 +1576,7 @@ async def handle_kline_data(kline_data: dict):
                             logger.info(f"信号 (Config: {live_test_config_data['_config_id']}) 被最小开单间隔规则跳过。间隔: {time_diff_minutes:.2f} < {min_interval_minutes} 分钟。")
                             return # 直接返回，彻底忽略此信号
 
-                event_period_minutes = {'3m': 3, '10m': 10, '30m': 30, '1h': 60, '1d': 1440}.get(
+                event_period_minutes = {'3m': 3, '5m': 5, '10m': 10, '30m': 30, '1h': 60, '1d': 1440}.get(
                     live_test_config_data.get("event_period", "10m"), 10
                 )
                 
@@ -2667,6 +2667,14 @@ async def read_optimization():
 
 
 # --- API 端点 ---
+def _extract_base_symbol(symbol: str) -> str:
+    if "_" in symbol:
+        return symbol.split("_", 1)[0]
+    if symbol.upper().endswith("USDT") and len(symbol) > 4:
+        return symbol[:-4]
+    return symbol
+
+
 @app.get("/api/symbols", response_model=List[str])
 async def get_symbols_endpoint(): # 基本不变，依赖的binance_client方法是同步的
     try:
@@ -2676,17 +2684,25 @@ async def get_symbols_endpoint(): # 基本不变，依赖的binance_client方法
         hot_symbols = await asyncio.to_thread(binance_client.get_hot_symbols_by_volume, top_n=50)
         all_symbols = await asyncio.to_thread(binance_client.get_available_symbols)
         
+        allowed_bases = {"BTC", "ETH", "SOL", "BNB"}
+        def is_allowed(symbol: str) -> bool:
+            return _extract_base_symbol(symbol.upper()) in allowed_bases
+
         combined_symbols = []; seen_symbols = set()
         if hot_symbols:
             for s in hot_symbols:
-                if s not in seen_symbols: combined_symbols.append(s); seen_symbols.add(s)
+                if s not in seen_symbols and is_allowed(s):
+                    combined_symbols.append(s)
+                    seen_symbols.add(s)
         if all_symbols:
             for s in sorted(all_symbols): 
-                 if s not in seen_symbols: combined_symbols.append(s); seen_symbols.add(s)
-        return combined_symbols if combined_symbols else ["BTCUSDT", "ETHUSDT"]
+                 if s not in seen_symbols and is_allowed(s):
+                     combined_symbols.append(s)
+                     seen_symbols.add(s)
+        return combined_symbols if combined_symbols else ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"]
     except Exception as e:
         print(f"获取交易对列表失败: {e}")
-        return ["BTCUSDT", "ETHUSDT", "BNBUSDT", "ADAUSDT", "DOGEUSDT"] # 返回默认列表
+        return ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"] # 返回默认列表
 
 @app.get("/api/prediction-strategies", response_model=List[Dict[str, Any]])
 async def get_prediction_strategies_endpoint(): # 基本不变，get_available_strategies 是同步的但快
@@ -3638,7 +3654,7 @@ async def generate_enhanced_test_signal(
     direction: Optional[int] = Query(None, description="信号方向 (1 for up, -1 for down), 默认随机"),
     confidence: Optional[float] = Query(None, description="信号置信度, 默认随机 (60-95)"),
     amount: Optional[float] = Query(None, description="投资金额, 默认20.0"),
-    event_period: Optional[str] = Query("10m", description="事件周期, e.g., 10m, 30m"),
+    event_period: Optional[str] = Query("10m", description="事件周期, e.g., 5m, 10m, 30m"),
     trigger_autox_now: bool = Query(False, description="是否立即尝试触发AutoX逻辑")
 ):
     global running_live_test_configs, live_signals, strategy_parameters_config, active_autox_clients, binance_client # 确保这些全局变量可用
@@ -3647,7 +3663,7 @@ async def generate_enhanced_test_signal(
     signal_time_dt = current_time
     
     # 确定事件周期和结束时间
-    event_period_minutes_map = {'10m': 10, '30m': 30, '1h': 60, '1d': 1440}
+    event_period_minutes_map = {'5m': 5, '10m': 10, '30m': 30, '1h': 60, '1d': 1440}
     actual_event_period_minutes = event_period_minutes_map.get(event_period, 10)
     expected_end_time_dt = signal_time_dt + timedelta(minutes=actual_event_period_minutes)
 
