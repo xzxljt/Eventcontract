@@ -226,11 +226,15 @@ class GateClient:
             raise ValueError(f"不支持的K线周期: {interval}")
 
         while current_start <= final_end:
+            request_end = min(
+                final_end,
+                current_start + interval_seconds * (self.MAX_KLINE_LIMIT - 1)
+            )
             params = {
                 'contract': normalized_symbol,
                 'interval': interval,
                 'from': current_start,
-                'to': final_end,
+                'to': request_end,
                 'limit': self.MAX_KLINE_LIMIT
             }
             data_segment = self._request('GET', f"{self.FUTURES_PREFIX}/candlesticks", params=params)
