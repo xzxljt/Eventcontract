@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 import logging
 from strategies import Strategy, get_available_strategies # 确保 strategies.py 在同一目录或PYTHONPATH中
 from investment_strategies import BaseInvestmentStrategy, get_available_investment_strategies # 确保 investment_strategies.py
-from binance_client import BinanceClient
+from market_client import get_market_client
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +70,7 @@ class Backtester:
         self.results = None
         self.period_minutes = self._convert_period_to_minutes(event_period)
         self.df_with_indicators = None # 将在此处存储带有全局指标的DataFrame
-        self.binance_client = BinanceClient() # 初始化Binance客户端
+        self.binance_client = get_market_client() # 初始化行情客户端
 
         # 任务管理相关
         self.task_id = task_id

@@ -19,7 +19,7 @@ from dataclasses import dataclass
 # 导入现有模块
 from backtester import run_single_backtest
 from strategies import get_available_strategies
-from binance_client import BinanceClient
+from market_client import get_market_client
 from optimization_database import OptimizationDatabase, OptimizationRecord, get_optimization_db
 
 # 配置日志
@@ -738,7 +738,7 @@ class OptimizationEngine:
         self.optimizer = GridSearchOptimizer()
         self.progress_tracker = ProgressTracker()
         self.results_manager = ResultsManager()
-        self.binance_client = BinanceClient()
+        self.binance_client = get_market_client()
 
         # 单任务管理
         self._current_optimization_id: Optional[str] = None
