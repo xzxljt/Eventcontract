@@ -105,7 +105,7 @@ from strategies import Strategy, get_available_strategies
 from investment_strategies import BaseInvestmentStrategy, get_available_investment_strategies
 from backtester import Backtester
 from timezone_utils import to_china_timezone, to_utc, now_china, now_utc, format_for_display, parse_frontend_datetime, CHINA_TIMEZONE
-from binance_client import BinanceClient
+from market_client import get_market_client
 
 # --- 全局变量和配置 ---
 # 存储策略参数的配置字典
@@ -354,7 +354,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, 
 app.mount("/static", StaticFiles(directory="frontend/static"), name="static")
 app.mount("/templates", StaticFiles(directory="templates"), name="templates") # Add this line to serve templates directory
 # app.mount("/autoxjs", StaticFiles(directory="autoxjs"), name="autoxjs") # Add this line to serve autoxjs directory
-binance_client = BinanceClient()
+binance_client = get_market_client()
 
 # --- WebSocket 连接管理器 ---
 manager = ConnectionManager()
