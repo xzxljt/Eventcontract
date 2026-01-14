@@ -1,0 +1,648 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>币安事件合约交易信号机器人 - 回测</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
+    <!-- Shared Custom CSS -->
+    <link rel="stylesheet" href="/static/css/shared-styles.css">
+    <!-- Custom CSS for this page -->
+    <link rel="stylesheet" href="/static/css/index-styles.css?v=1.1">
+    <link rel="stylesheet" href="https://font.sec.miui.com/font/css?family=MiSans:400,700:MiSans" />
+<link rel="icon" href="/static/favicon.ico" type="image/x-icon">
+<link rel="stylesheet" href="https://unpkg.com/vue-virtual-scroller/dist/vue-virtual-scroller.css"/>
+</head>
+<body>
+    <div id="app">
+        <div id="navbar-container"></div>
+
+
+        <div class="container mt-4">
+            <div class="row">
+                <div class="col-lg-4">
+                    <div class="card">
+                        <div class="card-header bg-primary text-white"> <h5 class="mb-0">回测参数设置</h5> </div>
+                        <div class="card-body">
+                            <form @submit.prevent="runBacktest">
+                                <div class="mb-3">
+                                    <label for="symbol" class="form-label">交易对</label>
+                                    <div class="input-group">
+                                        <select class="form-select" id="symbol" v-model="backtestParams.symbol" required
+                                                :class="{'is-invalid': fieldErrors.symbol}">
+                                            <option value="" disabled>选择交易对</option>
+                                            <template v-for="s in symbols" :key="s">
+                                                <option :value="s">
+                                                    {{ s }}
+                                                    <span v-if="isFavorite(s)">⭐</span>
+                                                </option>
+                                            </template>
+                                        </select>
+                                        <button type="button" @click="toggleFavorite(backtestParams.symbol)"
+                                                v-if="backtestParams.symbol"
+                                                class="btn btn-outline-secondary favorite-btn" :title="isFavorite(backtestParams.symbol) ? '取消收藏' : '收藏'">
+                                            <i :class="isFavorite(backtestParams.symbol) ? 'bi bi-star-fill' : 'bi bi-star'"></i>
+                                        </button>
+                                    </div>
+                                    <div v-if="fieldErrors.symbol" class="invalid-feedback">
+                                        {{ fieldErrors.symbol }}
+                                    </div>
+                                </div>
+
+                                <div class="mb-3">
+                                    <label for="interval" class="form-label">K线周期</label>
+                                    <select class="form-select" id="interval" v-model="backtestParams.interval" required
+                                            :class="{'is-invalid': fieldErrors.interval}">
+                                        <option value="1m">1分钟</option> <option value="3m">3分钟</option> <option value="5m">5分钟</option>
+                                        <option value="15m">15分钟</option> <option value="30m">30分钟</option>
+                                        <option value="1h">1小时</option> <option value="4h">4小时</option> <option value="1d">1天</option>
+                                    </select>
+                                    <div v-if="fieldErrors.interval" class="invalid-feedback">
+                                        {{ fieldErrors.interval }}
+                                    </div>
+                                </div>
+
+                                <div class="row">
+                                    <div class="col-md-6 mb-3">
+                                        <label for="startTime" class="form-label">开始时间</label>
+                                        <input type="text" class="form-control" id="startTime" required
+                                               :class="{'is-invalid': fieldErrors.startTime}">
+                                    </div>
+                                    <div v-if="fieldErrors.startTime" class="invalid-feedback">
+                                        {{ fieldErrors.startTime }}
+                                    </div>
+                                    <div class="col-md-6 mb-3">
+                                        <label for="endTime" class="form-label">结束时间</label>
+                                        <input type="text" class="form-control" id="endTime" required
+                                               :class="{'is-invalid': fieldErrors.endTime}">
+                                    </div>
+                                    <div v-if="fieldErrors.endTime" class="invalid-feedback">
+                                        {{ fieldErrors.endTime }}
+                                    </div>
+                                </div>
+
+                                <div class="mb-3">
+                                    <label for="predictionStrategy" class="form-label">预测策略</label>
+                                    <select class="form-select" id="predictionStrategy" v-model="selectedPredictionStrategy" required
+                                            :class="{'is-invalid': fieldErrors.predictionStrategy}">
+                                        <option :value="null" disabled>选择预测策略</option>
+                                        <option v-for="strategy in predictionStrategies" :key="strategy.id" :value="strategy">{{ strategy.name }}</option>
+                                    </select>
+                                    <div v-if="fieldErrors.predictionStrategy" class="invalid-feedback">
+                                        {{ fieldErrors.predictionStrategy }}
+                                    </div>
+                                </div>
+                                
+                                <div v-if="selectedPredictionStrategy && selectedPredictionStrategy.parameters && Object.keys(predictionStrategyParams).length > 0" class="mb-3 border p-2 rounded bg-light">
+                                    <label class="form-label small text-muted">预测策略参数 ({{ selectedPredictionStrategy.name }}):</label>
+                                    <div v-for="paramDef in selectedPredictionStrategy.parameters.filter(p => !p.advanced)" :key="paramDef.name" class="mb-2">
+                                        <label :for="'pred_param_' + paramDef.name" class="form-label small">{{ paramDef.description || paramDef.name }}</label>
+                                        <input
+                                            v-if="paramDef.type !== 'select' && paramDef.type !== 'boolean'"
+                                            :type="paramDef.type === 'int' || paramDef.type === 'float' ? 'number' : 'text'"
+                                            class="form-control form-control-sm"
+                                            :class="{'is-invalid': fieldErrors['predictionStrategyParams.' + paramDef.name]}"
+                                            :id="'pred_param_' + paramDef.name"
+                                            v-model="predictionStrategyParams[paramDef.name]"
+                                            :step="paramDef.type === 'float' ? (paramDef.step || 0.01) : (paramDef.type === 'int' ? 1 : null)"
+                                            :min="paramDef.min" :max="paramDef.max" :placeholder="paramDef.default">
+                                        <select v-else-if="paramDef.type === 'select'" class="form-select form-select-sm"
+                                                :class="{'is-invalid': fieldErrors['predictionStrategyParams.' + paramDef.name]}"
+                                                v-model="predictionStrategyParams[paramDef.name]">
+                                            <option v-for="opt in paramDef.options" :key="opt" :value="opt">{{opt}}</option>
+                                        </select>
+                                        <div v-else-if="paramDef.type === 'boolean'" class="form-check form-switch">
+                                            <input class="form-check-input" type="checkbox" role="switch"
+                                                   :id="'pred_param_' + paramDef.name"
+                                                   v-model="predictionStrategyParams[paramDef.name]">
+                                            <label class="form-check-label small" :for="'pred_param_' + paramDef.name">
+                                                {{ predictionStrategyParams[paramDef.name] ? '已启用' : '已禁用' }}
+                                            </label>
+                                        </div>
+                                        <div v-if="fieldErrors['predictionStrategyParams.' + paramDef.name]" class="invalid-feedback">
+                                            {{ fieldErrors['predictionStrategyParams.' + paramDef.name] }}
+                                        </div>
+                                    </div>
+                                     <div v-if="!selectedPredictionStrategy.parameters.filter(p => !p.advanced).length" class="text-muted small fst-italic">
+                                        此预测策略无用户可配置参数。
+                                    </div>
+                                </div>
+
+                                <div class="mb-3">
+                                    <label for="eventPeriod" class="form-label">事件合约周期</label>
+                                    <select class="form-select" id="eventPeriod" v-model="backtestParams.eventPeriod" required
+                                            :class="{'is-invalid': fieldErrors.eventPeriod}">
+                                        <option value="5m">5分钟</option> <option value="10m">10分钟</option>
+                                        <option value="30m">30分钟</option> <option value="1h">1小时</option>
+                                        <option value="1d">1天</option>
+                                    </select>
+                                    <div v-if="fieldErrors.eventPeriod" class="invalid-feedback">
+                                        {{ fieldErrors.eventPeriod }}
+                                    </div>
+                                </div>
+
+
+                                
+                                <hr> <h6 class="text-primary">投资设置</h6>
+                                
+                                <div class="mb-3">
+                                    <label for="initialBalance" class="form-label">初始模拟资金 (USDT)</label>
+                                    <input type="number" class="form-control" id="initialBalance" v-model.number="backtestParams.investment.initial_balance" min="1" step="0.01"
+                                           :class="{'is-invalid': fieldErrors['investment.initial_balance']}">
+                                </div>
+                                <div v-if="fieldErrors['investment.initial_balance']" class="invalid-feedback">
+                                    {{ fieldErrors['investment.initial_balance'] }}
+                                </div>
+                                <div class="row mb-3">
+                                    <div class="col-6">
+                                        <label for="profitRate" class="form-label">盈利 (%)</label>
+                                        <input type="number" class="form-control" id="profitRate" v-model.number="backtestParams.investment.profit_rate_pct" min="1" max="500" step="0.1"
+                                               :class="{'is-invalid': fieldErrors['investment.profit_rate_pct']}">
+                                    </div>
+                                    <div v-if="fieldErrors['investment.profit_rate_pct']" class="invalid-feedback">
+                                        {{ fieldErrors['investment.profit_rate_pct'] }}
+                                    </div>
+                                    <div class="col-6">
+                                        <label for="lossRate" class="form-label">亏损 (%)</label>
+                                        <input type="number" class="form-control" id="lossRate" v-model.number="backtestParams.investment.loss_rate_pct" min="1" max="100" step="0.1"
+                                               :class="{'is-invalid': fieldErrors['investment.loss_rate_pct']}">
+                                    </div>
+                                    <div v-if="fieldErrors['investment.loss_rate_pct']" class="invalid-feedback">
+                                        {{ fieldErrors['investment.loss_rate_pct'] }}
+                                    </div>
+                                </div>
+                                <div class="row mb-3">
+                                    <div class="col-6">
+                                        <label for="minInvestment" class="form-label">最小投资</label>
+                                        <input type="number" class="form-control" id="minInvestment" v-model.number="backtestParams.investment.min_investment_amount" min="1" step="0.01"
+                                               :class="{'is-invalid': fieldErrors['investment.min_investment_amount']}">
+                                    </div>
+                                    <div v-if="fieldErrors['investment.min_investment_amount']" class="invalid-feedback">
+                                        {{ fieldErrors['investment.min_investment_amount'] }}
+                                    </div>
+                                    <div class="col-6">
+                                        <label for="maxInvestment" class="form-label">最大投资</label>
+                                        <input type="number" class="form-control" id="maxInvestment" v-model.number="backtestParams.investment.max_investment_amount" min="1" step="0.01"
+                                               :class="{'is-invalid': fieldErrors['investment.max_investment_amount']}">
+                                    </div>
+                                    <div v-if="fieldErrors['investment.max_investment_amount']" class="invalid-feedback">
+                                        {{ fieldErrors['investment.max_investment_amount'] }}
+                                    </div>
+                                </div>
+
+                                <div class="mb-3">
+                                    <label for="min_trade_interval_minutes" class="form-label">最小开单间隔 (分钟)</label>
+                                    <input type="number" class="form-control" id="min_trade_interval_minutes" v-model.number="backtestParams.investment.min_trade_interval_minutes" min="0" step="1"
+                                           :class="{'is-invalid': fieldErrors['investment.min_trade_interval_minutes']}">
+                                    <div v-if="fieldErrors['investment.min_trade_interval_minutes']" class="invalid-feedback">
+                                        {{ fieldErrors['investment.min_trade_interval_minutes'] }}
+                                    </div>
+                                    <small class="text-muted x-small">0 表示不限制。如果新信号与上一笔实际交易的间隔小于此值，则跳过该信号。</small>
+                                </div>
+
+                                <div class="mb-3">
+                                    <label for="investmentStrategySelect" class="form-label">投资策略</label>
+                                    <select class="form-select" id="investmentStrategySelect" v-model="selectedInvestmentStrategy" required
+                                            :class="{'is-invalid': fieldErrors.investmentStrategy}">
+                                        <option :value="null" disabled>选择投资策略</option>
+                                        <option v-for="strategy in investmentStrategies" :key="strategy.id" :value="strategy">
+                                            {{ strategy.name }} <span v-if="strategy.description && strategy.id !=='martingale_user_defined'" class="text-muted x-small">({{ strategy.description }})</span>
+                                        </option>
+                                    </select>
+                                    <div v-if="fieldErrors.investmentStrategy" class="invalid-feedback">
+                                        {{ fieldErrors.investmentStrategy }}
+                                    </div>
+                                </div>
+                                
+                                <div v-if="selectedInvestmentStrategy && selectedInvestmentStrategy.parameters && Object.keys(investmentStrategyParams).length > 0" class="mb-3 border p-2 rounded bg-light">
+                                    <label class="form-label small text-muted">投资策略特定参数 ({{ selectedInvestmentStrategy.name }}):</label>
+                                    <div v-for="paramDef in selectedInvestmentStrategy.parameters.filter(p => !p.advanced && !p.readonly)" :key="paramDef.name" class="mb-2">
+                                        <label :for="'inv_param_' + paramDef.name" class="form-label small">{{ paramDef.description || paramDef.name }}</label>
+                                        <input
+                                            v-if="paramDef.type !== 'boolean' && paramDef.editor !== 'text_list' && paramDef.type !== 'list_float'"
+                                            :type="paramDef.type === 'int' || paramDef.type === 'float' ? 'number' : 'text'"
+                                            class="form-control form-control-sm"
+                                            :class="{'is-invalid': fieldErrors['investmentStrategyParams.' + paramDef.name]}"
+                                            :id="'inv_param_' + paramDef.name"
+                                            v-model="investmentStrategyParams[paramDef.name]"
+                                            :step="paramDef.type === 'float' ? (paramDef.step || 0.01) : (paramDef.type === 'int' ? 1 : null)"
+                                            :min="paramDef.min" :max="paramDef.max" :placeholder="paramDef.default">
+                                        <textarea v-else-if="paramDef.editor === 'text_list'"
+                                            class="form-control form-control-sm"
+                                            :class="{'is-invalid': fieldErrors['investmentStrategyParams.' + paramDef.name]}"
+                                            :id="'inv_param_' + paramDef.name"
+                                            v-model="investmentStrategyParams[paramDef.name]"
+                                            rows="1" :placeholder="paramDef.default?.join(',') || '例如: 10,20,40,80'">
+                                        </textarea>
+                                       <div v-else-if="paramDef.type === 'boolean'" class="form-check form-switch">
+                                           <input class="form-check-input" type="checkbox" role="switch"
+                                                  :id="'inv_param_' + paramDef.name"
+                                                  v-model="investmentStrategyParams[paramDef.name]">
+                                           <label class="form-check-label small" :for="'inv_param_' + paramDef.name">
+                                               {{ investmentStrategyParams[paramDef.name] ? '已启用' : '已禁用' }}
+                                           </label>
+                                       </div>
+                                        <div v-if="fieldErrors['investmentStrategyParams.' + paramDef.name]" class="invalid-feedback">
+                                            {{ fieldErrors['investmentStrategyParams.' + paramDef.name] }}
+                                        </div>
+                                    </div>
+                                    <div v-if="!selectedInvestmentStrategy.parameters.filter(p => !p.advanced && !p.readonly).length" class="text-muted small fst-italic">
+                                        此投资策略无用户可配置的特定参数。
+                                    </div>
+                                </div>
+                                <!-- 错误信息现在通过Toast通知显示，无需在此处显示 -->
+
+                                <button type="button" class="btn btn-outline-secondary w-100 mb-3" @click="saveStrategyParameters" :disabled="!selectedPredictionStrategy && !selectedInvestmentStrategy">
+                                    保存选定策略的参数
+                                </button>
+                                <button type="submit" class="btn btn-primary w-100" :disabled="loading || !selectedPredictionStrategy || !selectedInvestmentStrategy" v-if="!loading">
+                                    运行回测
+                                </button>
+                                <div v-if="loading" class="d-grid gap-2">
+                                    <button type="button" class="btn btn-warning w-100" @click="cancelBacktest" :disabled="cancelling">
+                                        <span v-if="cancelling" class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
+                                        {{ cancelling ? '取消中...' : '取消回测' }}
+                                    </button>
+                                    <div class="text-center text-muted small">
+                                        <span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
+                                        正在运行回测...
+                                    </div>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="col-lg-8">
+                    <div v-if="loading" class="backtest-progress-container">
+                        <!-- 进度头部 -->
+                        <div class="progress-header">
+                            <h3 class="progress-title">
+                                <div class="progress-icon">
+                                    <i class="bi bi-graph-up"></i>
+                                </div>
+                                回测进行中
+                            </h3>
+                            <p class="progress-subtitle">正在分析您的交易策略，请稍候...</p>
+                        </div>
+
+                        <!-- 主进度条 -->
+                        <div class="progress-main">
+                            <div class="progress-bar-container">
+                                <div class="progress-bar" :style="{ width: progressData.percentage + '%' }"></div>
+                            </div>
+                            <div class="progress-percentage">{{ Math.round(progressData.percentage) }}%</div>
+                        </div>
+
+                        <!-- 阶段指示器 -->
+                        <div class="progress-stages">
+                            <div
+                                v-for="(stage, index) in progressData.stages"
+                                :key="stage.id"
+                                class="progress-stage"
+                            >
+                                <div
+                                    class="stage-indicator"
+                                    :class="{
+                                        'active': index === progressData.currentStage,
+                                        'completed': index < progressData.currentStage
+                                    }"
+                                >
+                                    <i v-if="index < progressData.currentStage" class="bi bi-check"></i>
+                                    <span v-else-if="index === progressData.currentStage" class="spinner-border spinner-border-sm"></span>
+                                    <span v-else>{{ index + 1 }}</span>
+                                </div>
+                                <div
+                                    class="stage-label"
+                                    :class="{
+                                        'active': index === progressData.currentStage,
+                                        'completed': index < progressData.currentStage
+                                    }"
+                                >
+                                    {{ stage.label }}
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 当前阶段详情 -->
+                        <div class="progress-details">
+                            <div class="current-stage-info">
+                                <h4 class="current-stage-title">
+                                    {{ progressData.stages[progressData.currentStage]?.label }}
+                                </h4>
+                                <p class="current-stage-description">
+                                    {{ progressData.stages[progressData.currentStage]?.description }}
+                                </p>
+
+                                <!-- 统计信息 -->
+                                <div class="progress-stats">
+                                    <div class="progress-stat">
+                                        <span class="progress-stat-value">{{ progressData.stats.processedKlines }}</span>
+                                        <div class="progress-stat-label">已处理K线</div>
+                                    </div>
+                                    <div class="progress-stat">
+                                        <span class="progress-stat-value">{{ progressData.stats.generatedSignals }}</span>
+                                        <div class="progress-stat-label">生成信号</div>
+                                    </div>
+                                    <div class="progress-stat">
+                                        <span class="progress-stat-value">{{ progressData.stats.executedTrades }}</span>
+                                        <div class="progress-stat-label">执行交易</div>
+                                    </div>
+                                    <div class="progress-stat">
+                                        <span class="progress-stat-value">{{ progressData.stats.elapsedTime }}s</span>
+                                        <div class="progress-stat-label">已用时间</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- 错误信息已移至左侧参数卡片中，就近显示在回测按钮附近 -->
+
+
+                    <div v-if="filteredData && !loading && !error && !validationError" class="card result-card">
+                        <div class="card-header bg-success text-white d-flex justify-content-between align-items-center">
+                            <h5 class="mb-0">回测结果</h5>
+                            <span class="badge bg-light text-dark">{{ filteredData.predictions.length }} / {{ backtestResults.predictions.length }} 条记录</span>
+                        </div>
+                        <div class="card-body">
+                            <!-- Filter Section -->
+                            <div class="filter-section card mb-4">
+                                <div class="card-body" style="background-color: #ffffff; border: 1px solid var(--border-color);">
+                                    <h6 class="card-title text-primary">结果筛选器</h6>
+                                    <div class="row align-items-end">
+                                        <div class="col-md-10">
+                                            <div class="time-filter-group">
+                                                <div class="time-input-wrapper">
+                                                    <label for="filterStartTime" class="form-label small">开始时间</label>
+                                                    <input type="time" id="filterStartTime" class="form-control form-control-sm" v-model="filterStartTime">
+                                                </div>
+                                                <div class="time-input-separator">→</div>
+                                                <div class="time-input-wrapper">
+                                                    <label for="filterEndTime" class="form-label small">结束时间</label>
+                                                    <input type="time" id="filterEndTime" class="form-control form-control-sm" v-model="filterEndTime">
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-2">
+                                            <button class="btn btn-sm btn-secondary w-100" @click="resetFilters">重置</button>
+                                        </div>
+                                    </div>
+                                    <div class="row align-items-center mt-2">
+                                        <div class="col-md-12">
+                                            <label for="minConfidence" class="form-label small">最低置信度: <span class="fw-bold">{{ minConfidence }}</span></label>
+                                            <input type="range" id="minConfidence" class="form-range" v-model.number="minConfidence" min="0" max="100" step="1">
+                                        </div>
+                                    </div>
+                                    <div class="row mt-2">
+                                        <div class="col-md-12">
+                                            <label class="form-label small">按星期排除</label>
+                                            <div class="weekday-selector">
+                                                <button v-for="day in weekdays" :key="day.value"
+                                                        type="button"
+                                                        class="weekday-btn"
+                                                        :class="{ 'active': excludedWeekdays.includes(String(day.value)) }"
+                                                        @click="toggleWeekday(String(day.value))">
+                                                    {{ day.label }}
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="alert alert-warning x-small mt-3 mb-0 p-2" role="alert">
+                                       <i class="bi bi-info-circle-fill me-1"></i>
+                                       <strong>注意:</strong> 筛选器会重新计算统计数据，但对于**复利或百分比**投资策略，筛选后的总回报率(ROI)和余额曲线将**不准确**，因为它们依赖于完整的交易历史。只有**固定金额**投资策略的筛选结果是完全准确的。
+                                   </div>
+                                </div>
+                            </div>
+
+                            <div v-if="filteredData">
+                                <div class="row">
+                                    <div class="col-md-4 mb-3">
+                                        <div class="card shadow-sm">
+                                            <div class="card-header bg-light">总体预测统计</div>
+                                            <div class="card-body">
+                                                <p class="mb-1">总信号数: {{ filteredData.total_predictions }}</p>
+                                                <p class="mb-1">胜利次数: {{ filteredData.total_wins }}</p>
+                                                <p class="mb-0">胜率: <span :class="getWinRateClass(filteredData.win_rate)">{{ filteredData.win_rate?.toFixed(2) }}%</span></p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-4 mb-3">
+                                        <div class="card shadow-sm">
+                                            <div class="card-header bg-light">做多统计</div>
+                                            <div class="card-body">
+                                                <p class="mb-1">做多信号数: {{ filteredData.long_predictions }}</p>
+                                                <p class="mb-0">胜率: <span :class="getWinRateClass(filteredData.long_win_rate)">{{ filteredData.long_win_rate?.toFixed(2) }}%</span></p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-4 mb-3">
+                                        <div class="card shadow-sm">
+                                            <div class="card-header bg-light">做空统计</div>
+                                            <div class="card-body">
+                                                <p class="mb-1">做空信号数: {{ filteredData.short_predictions }}</p>
+                                                <p class="mb-0">胜率: <span :class="getWinRateClass(filteredData.short_win_rate)">{{ filteredData.short_win_rate?.toFixed(2) }}%</span></p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <h6 class="mt-3 text-primary">资金表现</h6>
+                                <div class="row">
+                                    <div class="col-md-3 col-6 mb-2"> <div class="card bg-info bg-opacity-10 text-center h-100"> <div class="card-body p-2"> <small class="text-muted d-block">初始资金</small> <h6 class="mb-0">{{ filteredData.initial_balance?.toFixed(2) }}</h6> </div> </div> </div>
+                                    <div class="col-md-3 col-6 mb-2"> <div class="card text-center h-100" :class="filteredData.final_balance >= filteredData.initial_balance ? 'bg-success bg-opacity-10' : 'bg-danger bg-opacity-10'"> <div class="card-body p-2"> <small class="text-muted d-block">最终资金</small> <h6 class="mb-0">{{ filteredData.final_balance?.toFixed(2) }}</h6> </div> </div> </div>
+                                    <div class="col-md-3 col-6 mb-2">  <div class="card text-center h-100" :class="filteredData.total_pnl_amount >= 0 ? 'bg-success bg-opacity-10' : 'bg-danger bg-opacity-10'"> <div class="card-body p-2"> <small class="text-muted d-block">总盈亏金额</small> <h6 class="mb-0">{{ filteredData.total_pnl_amount?.toFixed(2) }}</h6> </div> </div> </div>
+                                    <div class="col-md-3 col-6 mb-2"> <div class="card text-center h-100" :class="filteredData.roi_percentage >= 0 ? 'bg-success bg-opacity-10' : 'bg-danger bg-opacity-10'"> <div class="card-body p-2"> <small class="text-muted d-block">回报率 (ROI)</small> <h6 class="mb-0">{{ filteredData.roi_percentage?.toFixed(2) }}%</h6> </div> </div> </div>
+                                    <div class="col-md-3 col-6 mb-2"> <div class="card bg-light text-center h-100"> <div class="card-body p-2"> <small class="text-muted d-block">最大回撤</small> <h6 class="mb-0">{{ filteredData.max_drawdown_percentage?.toFixed(2) }}%</h6> </div> </div> </div>
+                                    <div class="col-md-3 col-6 mb-2"> <div class="card bg-light text-center h-100"> <div class="card-body p-2"> <small class="text-muted d-block">盈利因子</small> <h6 class="mb-0">{{ filteredData.profit_factor }}</h6> </div> </div> </div>
+                                    <div class="col-md-3 col-6 mb-2"> <div class="card bg-light text-center h-100"> <div class="card-body p-2"> <small class="text-muted d-block">最大连胜</small> <h6 class="mb-0">{{ filteredData.max_consecutive_wins }}</h6> </div> </div> </div>
+                                    <div class="col-md-3 col-6 mb-2"> <div class="card bg-light text-center h-100"> <div class="card-body p-2"> <small class="text-muted d-block">最大连败</small> <h6 class="mb-0">{{ filteredData.max_consecutive_losses }}</h6> </div> </div> </div>
+                                </div>
+
+                                <div v-if="calendarView.weeks.length > 0" class="calendar-container">
+                                    <div class="calendar-header">
+                                        <button class="btn btn-sm btn-outline-primary" @click="changeMonth(-1)">< 上一月</button>
+                                        <h5 class="mb-0">{{ currentMonthYearDisplay }} 每日盈亏</h5>
+                                        <button class="btn btn-sm btn-outline-primary" @click="changeMonth(1)">下一月 ></button>
+                                    </div>
+                                    <div class="calendar-grid">
+                                        <div class="calendar-day-header">一</div> <div class="calendar-day-header">二</div> <div class="calendar-day-header">三</div>
+                                        <div class="calendar-day-header">四</div> <div class="calendar-day-header">五</div> <div class="calendar-day-header">六</div> <div class="calendar-day-header">日</div>
+                                        
+                                        <template v-for="(week, weekIndex) in calendarView.weeks" :key="'week-' + weekIndex">
+                                            <div v-for="(dayObj, dayIndex) in week" :key="'day-' + weekIndex + '-' + dayIndex"
+                                                :class="['calendar-day',
+                                                        { 'not-current-month': !dayObj.isCurrentMonth },
+                                                        { 'has-financial-data': dayObj.isCurrentMonth && (dayObj.pnl !== undefined || (dayObj.trades !== undefined && dayObj.trades > 0) || dayObj.balance !== undefined) }]">
+                                                
+                                                <template v-if="dayObj.isCurrentMonth">
+                                                    <span :class="['day-number', {'today': dayObj.isToday}]">{{ dayObj.day }}</span>
+                                                    <div v-if="(dayObj.pnl !== undefined || (dayObj.trades !== undefined && dayObj.trades > 0) || dayObj.balance !== undefined)" class="day-financial-details">
+                                                        <div v-if="dayObj.pnl !== undefined" :class="['pnl-value', getPnlClass(dayObj.pnl)]">
+                                                            {{ dayObj.pnl?.toFixed(2) }}
+                                                        </div>
+                                                        <div v-if="dayObj.daily_return_pct !== undefined" :class="['daily-return-pct', getPnlClass(dayObj.daily_return_pct)]">
+                                                            {{ dayObj.daily_return_pct > 0 ? '+' : '' }}{{ dayObj.daily_return_pct?.toFixed(2) }}%
+                                                        </div>
+                                                        <div v-if="dayObj.trades !== undefined && dayObj.trades > 0" class="trades-count">
+                                                            {{ dayObj.trades }} 笔
+                                                        </div>
+                                                        <div v-if="dayObj.balance !== undefined" class="day-balance">
+                                                            余额: {{ dayObj.balance?.toFixed(2) }}
+                                                        </div>
+                                                    </div>
+                                                </template>
+                                                <div v-else></div>
+                                            </div>
+                                        </template>
+                                    </div>
+                                    <small class="text-muted mt-2 d-block">注意：日历显示的是筛选后结果的每日盈亏。</small>
+                                </div>
+                                <div v-else-if="filteredData.predictions && filteredData.predictions.length > 0" class="alert alert-light mt-3">
+                                    筛选后的时间范围内没有发生实际交易，或未能生成每日盈亏数据。
+                                </div>
+
+                                <div class="mt-4">
+                                    <h5>交易记录详情</h5>
+                                    <recycle-scroller
+                                      class="scroller"
+                                      :items="filteredData.predictions"
+                                      :item-size="210"
+                                      key-field="signal_time"
+                                      v-slot="{ item }">
+                                      <div class="card trade-card mb-3" :class="item.result === null ? 'border-secondary' : (item.result ? 'border-success' : 'border-danger')">
+                                        <div class="card-header d-flex justify-content-between align-items-center" :class="item.result === null ? 'bg-secondary-subtle' : (item.result ? 'bg-success-subtle' : 'bg-danger-subtle')">
+                                            <span class="fw-bold">{{ formatDateTime(item.signal_time) }}</span>
+                                            <div>
+                                                <span class="badge bg-danger me-2" v-if="item.signal === -1">做空</span>
+                                                <span class="badge bg-success me-2" v-else-if="item.signal === 1">做多</span>
+                                                <span v-if="item.result === null" class="badge bg-secondary">未验证</span>
+                                                <span v-else class="badge" :class="item.result ? 'bg-success' : 'bg-danger'">{{ item.result ? '胜利' : '失败' }}</span>
+                                            </div>
+                                        </div>
+                                        <div class="card-body">
+                                            <div class="row">
+                                                <div class="col-md-4 col-sm-6">
+                                                    <div class="trade-detail-item">
+                                                        <span class="trade-detail-label">盈亏</span>
+                                                        <span class="trade-detail-value" :class="item.result === null ? '' : (item.pnl_amount > 0 ? 'pnl-positive' : 'pnl-negative')">
+                                                            {{ item.result === null ? '--' : item.pnl_amount?.toFixed(2) }}
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                                <div class="col-md-4 col-sm-6">
+                                                    <div class="trade-detail-item">
+                                                        <span class="trade-detail-label">最终余额</span>
+                                                        <span class="trade-detail-value">{{ item.final_balance?.toFixed(2) }}</span>
+                                                    </div>
+                                                </div>
+                                                <div class="col-md-4 col-sm-6">
+                                                    <div class="trade-detail-item">
+                                                        <span class="trade-detail-label">投资额</span>
+                                                        <span class="trade-detail-value">
+                                                            {{ (item.investment_amount == null || item.investment_amount == 0) ? '--' : item.investment_amount?.toFixed(2) }}
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                                <div class="col-md-4 col-sm-6">
+                                                    <div class="trade-detail-item">
+                                                        <span class="trade-detail-label">入场/出场价</span>
+                                                        <span class="trade-detail-value">
+                                                            {{ item.signal_price?.toFixed(4) }} / {{ item.result === null ? '--' : item.end_price?.toFixed(4) }}
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                                <div class="col-md-4 col-sm-6">
+                                                    <div class="trade-detail-item">
+                                                        <span class="trade-detail-label">价格变化</span>
+                                                        <span class="trade-detail-value" :class="item.result === null ? '' : (item.price_change_pct > 0 ? 'pnl-positive' : 'pnl-negative')">
+                                                            {{ item.result === null ? '--' : (item.price_change_pct > 0 ? '+' : '') + item.price_change_pct?.toFixed(2) + '%' }}
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                                <div class="col-md-4 col-sm-6">
+                                                    <div class="trade-detail-item">
+                                                        <span class="trade-detail-label">置信度</span>
+                                                        <span class="trade-detail-value">{{ (item.confidence * 100).toFixed(2) }}</span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                      </div>
+                                    </recycle-scroller>
+                                </div>
+                            </div>
+                            <div v-else class="text-center text-muted mt-5">
+                                <p>正在加载筛选数据...</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div v-else-if="!loading && !error && !validationError" class="card backtest-placeholder">
+                        <div class="card-body text-center py-5">
+                            <div class="placeholder-content">
+                                <div class="placeholder-icon mb-4">
+                                    <i class="bi bi-graph-up-arrow"></i>
+                                </div>
+                                <h4 class="placeholder-title mb-3">开始您的回测分析</h4>
+                                <p class="placeholder-description text-muted mb-4">
+                                    配置左侧参数，运行回测来分析您的交易策略表现
+                                </p>
+                                <div class="placeholder-features">
+                                    <div class="row justify-content-center">
+                                        <div class="col-md-4 mb-3">
+                                            <div class="feature-item">
+                                                <i class="bi bi-speedometer2 feature-icon"></i>
+                                                <h6 class="feature-title">性能分析</h6>
+                                                <p class="feature-desc">详细的盈亏统计和风险指标</p>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-4 mb-3">
+                                            <div class="feature-item">
+                                                <i class="bi bi-calendar3 feature-icon"></i>
+                                                <h6 class="feature-title">日历视图</h6>
+                                                <p class="feature-desc">直观的每日盈亏日历展示</p>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-4 mb-3">
+                                            <div class="feature-item">
+                                                <i class="bi bi-funnel feature-icon"></i>
+                                                <h6 class="feature-title">智能筛选</h6>
+                                                <p class="feature-desc">多维度数据筛选和分析</p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="placeholder-action mt-4">
+                                    <i class="bi bi-arrow-left-circle text-primary me-2"></i>
+                                    <span class="text-primary">请在左侧设置回测参数</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+    <script src="https://cdn.jsdelivr.net/npm/flatpickr/dist/l10n/zh.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+    <!-- Custom Utils JS -->
+    <script src="/static/js/utils.js"></script>
+    <!-- 全局Toast通知工具 -->
+    <script src="/static/js/toast-utils.js"></script>
+    <!-- Load Navbar Script -->
+    <script src="/static/js/load-navbar.js"></script>
+    <!-- Vue and App Scripts -->
+    <script src="https://cdn.jsdelivr.net/npm/vue@3.2.45/dist/vue.global.js"></script>
+    <script src="https://unpkg.com/vue-virtual-scroller@next"></script>
+    <script src="/static/js/index-scripts.js?v=1.4"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            loadNavbar('navbar-container', '/templates/navbar.html');
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,585 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>币安事件合约实时信号监控</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
+    <!-- Shared Custom CSS -->
+    <link rel="stylesheet" href="/static/css/shared-styles.css"> <!-- 新增：引入共享CSS -->
+    <!-- Custom CSS for this page -->
+    <link rel="stylesheet" href="/static/css/live-test-styles.css?v=1.1">
+    <!-- 移除：内联 <style> 标签内容已迁移到 shared-styles.css -->
+    <link rel="stylesheet" href="https://font.sec.miui.com/font/css?family=MiSans:400,700:MiSans" />
+<link rel="icon" href="/static/favicon.ico" type="image/x-icon">
+    <link rel="stylesheet" href="https://unpkg.com/vue-virtual-scroller@next/dist/vue-virtual-scroller.css">
+</head>
+<body>
+    <div id="app">
+        <div id="navbar-container"></div>
+
+        <div class="container-fluid mt-4 px-3">
+            <div class="row">
+                <div class="col-lg-3 col-md-4 mb-3"> <!-- 添加 mb-3 以在小屏幕上与下方内容有间隔 -->
+                    <div class="card"> <!-- 应用共享卡片样式 -->
+                        <div class="card-header bg-primary text-white">
+                            <h5 class="mb-0">监控运行时配置</h5>
+                        </div>
+                        <div class="card-body">
+                            <!-- WebSocket 连接控制 -->
+                            <div class="d-grid gap-2 mb-2">
+                                <button type="button" class="btn btn-success" @click="startLiveTestService" 
+                                        :disabled="socketStatus === 'connected' || socketStatus === 'connecting'">
+                                    <span v-if="socketStatus === 'connecting'" class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
+                                    {{ socketStatus === 'connected' ? '服务已连接' : (socketStatus === 'connecting' ? '连接中...' : '连接服务') }}
+                                </button>
+                                <button type="button" class="btn btn-warning" @click="stopLiveTestService" 
+                                        :disabled="socketStatus === 'disconnected' || socketStatus === 'error'">
+                                    断开WebSocket连接
+                                </button>
+                            </div>
+                            <small class="text-muted d-block mb-3 x-small">提示: "断开WebSocket连接" 不会停止后台已运行的监控任务。</small>
+
+                            <!-- 后台测试任务控制 -->
+                            <div class="d-grid gap-2 mb-2">
+                                <button type="button" class="btn btn-info" @click="sendRuntimeConfig"
+                                        :disabled="socketStatus !== 'connected' || !selectedPredictionStrategy || !selectedInvestmentStrategy || applyingConfig">
+                                    <span v-if="applyingConfig" class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
+                                    {{ applyingConfig ? '应用中...' : (currentConfigId ? '更新后台配置' : '启动新后台监控') }}
+                                </button>
+                                <button type="button" class="btn btn-danger" @click="stopCurrentTest"
+                                        :disabled="socketStatus !== 'connected' || !currentConfigId || stoppingTest">
+                                     <span v-if="stoppingTest" class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
+                                    {{ stoppingTest ? '停止中...' : '停止当前后台监控' }}
+                                </button>
+                            </div>
+                             <small class="text-muted d-block mb-3 x-small">提示: 该按钮会启动或更新一个后台监控任务。使用"停止当前后台监控"来结束它。</small>
+                            
+                            <!-- 参数保存 -->
+                             <div class="d-grid">
+                                <button type="button" class="btn btn-outline-secondary" @click="saveStrategyParameters" 
+                                        :disabled="(!selectedPredictionStrategy && !selectedInvestmentStrategy)">
+                                    保存选定策略的参数 (设为默认)
+                                </button>
+                            </div>
+
+                            <!-- 状态和消息显示 -->
+                            <div v-if="serverMessage" :class="['alert', error ? 'alert-danger' : 'alert-success', 'mt-2 p-2 small']" role="alert">
+                                {{ serverMessage }}
+                            </div>
+                             <div v-if="currentConfigId" class="mt-2 p-1 bg-light border rounded-1 text-center small">
+                                当前活动配置ID: <strong class="text-primary">{{ currentConfigId.substring(0,8) }}...</strong>
+                            </div>
+
+
+                            <hr> <h6 class="text-primary">监控范围 (用于新信号生成)</h6> <!-- 添加 text-primary -->
+                            <div class="mb-2">
+                                <label class="form-label small" for="monitorSymbol">监控交易对</label>
+                                <div class="input-group"> <!-- 使用 input-group -->
+                                    <select id="monitorSymbol" class="form-select form-select-sm"
+                                            v-model="monitorSettings.symbol"
+                                            :class="{'is-invalid': getValidationError(['symbol'])}">
+                                        <option v-for="s in sortedSymbols" :key="s" :value="s">
+                                            {{ s }} <span v-if="isFavorite(s)">⭐</span>
+                                        </option>
+                                    </select>
+                                    <div v-if="getValidationError(['symbol'])" class="invalid-feedback">
+                                        {{ getValidationError(['symbol']) }}
+                                    </div>
+                                    <button type="button" @click="toggleFavorite(monitorSettings.symbol)"
+                                            v-if="monitorSettings.symbol && monitorSettings.symbol !== 'all'"
+                                            class="btn btn-outline-secondary favorite-btn btn-sm" :title="isFavorite(monitorSettings.symbol) ? '取消收藏' : '收藏'"> <!-- 增加 btn-sm -->
+                                        <i :class="isFavorite(monitorSettings.symbol) ? 'bi bi-star-fill' : 'bi bi-star'"></i>
+                                    </button>
+                                </div>
+                                <small v-if="monitorSettings.symbol !== 'all'" class="text-muted x-small d-block mt-1">选择特定交易对和周期，"应用配置"时会尝试启动或复用对应K线流。</small>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label small" for="monitorInterval">K线周期</label>
+                                <select id="monitorInterval" class="form-select form-select-sm"
+                                        v-model="monitorSettings.interval"
+                                        :class="{'is-invalid': getValidationError(['interval'])}">
+                                    <option value="1m">1分钟</option> <option value="3m">3分钟</option> <option value="5m">5分钟</option>
+                                    <option value="15m">15分钟</option><option value="30m">30分钟</option>
+                                    <option value="1h">1小时</option> <option value="4h">4小时</option> <option value="1d">1天</option>
+                                </select>
+                                <div v-if="getValidationError(['interval'])" class="invalid-feedback">
+                                    {{ getValidationError(['interval']) }}
+                                </div>
+                            </div>
+
+                            <hr> <h6 class="text-primary">预测策略配置</h6> <!-- 添加 text-primary -->
+                            <div class="mb-2">
+                                <label class="form-label small" for="predictionStrategySelectLive">预测策略</label>
+                                <select id="predictionStrategySelectLive" class="form-select form-select-sm" v-model="selectedPredictionStrategy">
+                                    <option :value="null" disabled>选择预测策略</option>
+                                    <option v-for="strategy in predictionStrategies" :key="strategy.id" :value="strategy">{{ strategy.name }}</option>
+                                </select>
+                            </div>
+                            <div v-if="selectedPredictionStrategy && selectedPredictionStrategy.parameters && Object.keys(predictionStrategyParams).length > 0" class="mb-2 border p-2 rounded-1 bg-light"> <!-- 添加 bg-light -->
+                                <label class="form-label small text-muted">预测策略参数 ({{selectedPredictionStrategy.name}}):</label>
+                                <div v-for="paramDef in selectedPredictionStrategy.parameters.filter(p => !p.advanced)" :key="paramDef.name" class="mb-1">
+                                    <label :for="'pred_param_live_' + paramDef.name" class="form-label x-small">{{ paramDef.description || paramDef.name }}</label>
+                                    <input
+                                        v-if="paramDef.type !== 'select' && paramDef.type !== 'boolean'"
+                                        :type="paramDef.type === 'int' || paramDef.type === 'float' ? 'number' : 'text'"
+                                        class="form-control form-control-sm"
+                                        :class="{'is-invalid': getValidationError(['prediction_strategy_params', paramDef.name])}"
+                                        :id="'pred_param_live_' + paramDef.name"
+                                        v-model="predictionStrategyParams[paramDef.name]"
+                                        :step="paramDef.type === 'float' ? (paramDef.step || 0.01) : (paramDef.type === 'int' ? 1 : null)"
+                                        :min="paramDef.min" :max="paramDef.max" :placeholder="paramDef.default">
+                                    <select v-else-if="paramDef.type === 'select'" class="form-select form-select-sm"
+                                            :class="{'is-invalid': getValidationError(['prediction_strategy_params', paramDef.name])}"
+                                            v-model="predictionStrategyParams[paramDef.name]">
+                                        <option v-for="opt in paramDef.options" :key="opt" :value="opt">{{opt}}</option>
+                                    </select>
+                                    <div v-else-if="paramDef.type === 'boolean'" class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" role="switch"
+                                               :id="'pred_param_live_' + paramDef.name"
+                                               v-model="predictionStrategyParams[paramDef.name]">
+                                        <label class="form-check-label x-small" :for="'pred_param_live_' + paramDef.name">
+                                            {{ predictionStrategyParams[paramDef.name] ? '已启用' : '已禁用' }}
+                                        </label>
+                                    </div>
+                                    <div v-if="getValidationError(['prediction_strategy_params', paramDef.name])" class="invalid-feedback">
+                                        {{ getValidationError(['prediction_strategy_params', paramDef.name]) }}
+                                    </div>
+                                </div>
+                                 <div v-if="selectedPredictionStrategy && selectedPredictionStrategy.parameters && !selectedPredictionStrategy.parameters.filter(p => !p.advanced).length" class="text-muted x-small fst-italic">
+                                    此预测策略无用户可配置参数。
+                                </div>
+                            </div>
+
+                            <div class="mb-2">
+                                <label class="form-label small" for="eventPeriodMonitor">事件合约周期</label>
+                                <select id="eventPeriodMonitor" class="form-select form-select-sm"
+                                        v-model="monitorSettings.event_period"
+                                        :class="{'is-invalid': getValidationError(['event_period'])}">
+                                    <option value="5m">5分钟</option> <option value="10m">10分钟</option>
+                                    <option value="30m">30分钟</option> <option value="1h">1小时</option>
+                                    <option value="1d">1天</option>
+                                </select>
+                                <div v-if="getValidationError(['event_period'])" class="invalid-feedback">
+                                    {{ getValidationError(['event_period']) }}
+                                </div>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label small">最低置信度 ({{ monitorSettings.confidence_threshold }})</label>
+                                <input type="range" class="form-range" min="0" max="100" step="1"
+                                       v-model.number="monitorSettings.confidence_threshold"
+                                       :class="{'is-invalid': getValidationError(['confidence_threshold'])}">
+                                <div v-if="getValidationError(['confidence_threshold'])" class="invalid-feedback">
+                                    {{ getValidationError(['confidence_threshold']) }}
+                                </div>
+                            </div>
+
+                            <hr> <h6 class="text-primary">投资策略配置</h6> <!-- 添加 text-primary -->
+                            <div class="mb-2">
+                                <label class="form-label small" for="investmentStrategySelectLive">投资策略</label>
+                                <select id="investmentStrategySelectLive" class="form-select form-select-sm" v-model="selectedInvestmentStrategy">
+                                    <option :value="null" disabled>选择投资策略</option>
+                                    <option v-for="strategy in investmentStrategies" :key="strategy.id" :value="strategy"> {{ strategy.name }} </option>
+                                </select>
+                            </div>
+                            <div v-if="selectedInvestmentStrategy && selectedInvestmentStrategy.parameters && Object.keys(investmentStrategyParams).length > 0" class="mb-2 border p-2 rounded-1 bg-light"> <!-- 添加 bg-light -->
+                                <label class="form-label small text-muted">投资策略特定参数 ({{selectedInvestmentStrategy.name}}):</label>
+                                 <div v-for="paramDef in selectedInvestmentStrategy.parameters.filter(p => !p.advanced && !p.readonly && p.name !== 'minAmount' && p.name !== 'maxAmount')" :key="paramDef.name" class="mb-1">
+                                    <label :for="'inv_param_live_' + paramDef.name" class="form-label x-small">{{ paramDef.description || paramDef.name }}</label>
+                                     <input
+                                        v-if="paramDef.type !== 'boolean' && paramDef.editor !== 'text_list' && paramDef.type !== 'list_float'"
+                                        :type="paramDef.type === 'int' || paramDef.type === 'float' ? 'number' : 'text'"
+                                        class="form-control form-control-sm"
+                                        :class="{'is-invalid': getValidationError(['investment_settings', 'investment_strategy_specific_params', paramDef.name])}"
+                                        :id="'inv_param_live_' + paramDef.name"
+                                        v-model="investmentStrategyParams[paramDef.name]"
+                                        :step="paramDef.type === 'float' ? (paramDef.step || 0.01) : (paramDef.type === 'int' ? 1 : null)"
+                                        :min="paramDef.min" :max="paramDef.max" :placeholder="paramDef.default">
+                                    <textarea v-else-if="paramDef.editor === 'text_list'"
+                                        class="form-control form-control-sm"
+                                        :class="{'is-invalid': getValidationError(['investment_settings', 'investment_strategy_specific_params', paramDef.name])}"
+                                        :id="'inv_param_live_' + paramDef.name"
+                                        v-model="investmentStrategyParams[paramDef.name]"
+                                        rows="1" :placeholder="paramDef.placeholder || paramDef.default?.join(',') || '例如: 10,20,40'"> <!-- 更好的 placeholder -->
+                                    </textarea>
+                                    <select v-else-if="paramDef.type === 'boolean'" class="form-select form-select-sm"
+                                            :class="{'is-invalid': getValidationError(['investment_settings', 'investment_strategy_specific_params', paramDef.name])}"
+                                            v-model="investmentStrategyParams[paramDef.name]">
+                                        <option :value="true">是</option>
+                                        <option :value="false">否</option>
+                                    </select>
+                                    <div v-else-if="paramDef.type === 'list_float' && paramDef.readonly" class="form-control form-control-sm bg-body-secondary" readonly> <!-- 使用 bg-body-secondary -->
+                                       序列 (只读): {{ Array.isArray(investmentStrategyParams[paramDef.name]) ? investmentStrategyParams[paramDef.name].join(', ') : investmentStrategyParams[paramDef.name] }}
+                                    </div>
+                                    <div v-if="getValidationError(['investment_settings', 'investment_strategy_specific_params', paramDef.name])" class="invalid-feedback">
+                                        {{ getValidationError(['investment_settings', 'investment_strategy_specific_params', paramDef.name]) }}
+                                    </div>
+                                </div>
+                                <div v-if="selectedInvestmentStrategy && selectedInvestmentStrategy.parameters && !selectedInvestmentStrategy.parameters.filter(p => !p.advanced && !p.readonly).length" class="text-muted x-small fst-italic">
+                                    此投资策略无特定用户可配置参数。
+                                </div>
+                            </div>
+                            <!-- 全局投资设置 -->
+                             <div class="row mb-2">
+                                <div class="col-6">
+                                    <label class="form-label small" for="invProfitRateLive">盈利(%)</label>
+                                    <input type="number" class="form-control form-control-sm" id="invProfitRateLive"
+                                           v-model.number="monitorSettings.investment.profitRate" min="1" max="500" step="0.1"
+                                           :class="{'is-invalid': getValidationError(['investment_settings', 'profitRate'])}">
+                                    <div v-if="getValidationError(['investment_settings', 'profitRate'])" class="invalid-feedback">
+                                        {{ getValidationError(['investment_settings', 'profitRate']) }}
+                                    </div>
+                                </div>
+                                <div class="col-6">
+                                    <label class="form-label small" for="invLossRateLive">亏损(%)</label>
+                                    <input type="number" class="form-control form-control-sm" id="invLossRateLive"
+                                           v-model.number="monitorSettings.investment.lossRate" min="1" max="100" step="0.1"
+                                           :class="{'is-invalid': getValidationError(['investment_settings', 'lossRate'])}">
+                                    <div v-if="getValidationError(['investment_settings', 'lossRate'])" class="invalid-feedback">
+                                        {{ getValidationError(['investment_settings', 'lossRate']) }}
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="row mb-3">
+                                <div class="col-6">
+                                    <label class="form-label small" for="invMinAmountLive">最小投资</label>
+                                    <input type="number" class="form-control form-control-sm" id="invMinAmountLive"
+                                           v-model.number="monitorSettings.investment.minAmount" min="1" step="0.01"
+                                           :class="{'is-invalid': getValidationError(['investment_settings', 'minAmount'])}">
+                                    <div v-if="getValidationError(['investment_settings', 'minAmount'])" class="invalid-feedback">
+                                        {{ getValidationError(['investment_settings', 'minAmount']) }}
+                                    </div>
+                                </div>
+                                <div class="col-6">
+                                    <label class="form-label small" for="invMaxAmountLive">最大投资</label>
+                                    <input type="number" class="form-control form-control-sm" id="invMaxAmountLive"
+                                           v-model.number="monitorSettings.investment.maxAmount" min="1" step="0.01"
+                                           :class="{'is-invalid': getValidationError(['investment_settings', 'maxAmount'])}">
+                                    <div v-if="getValidationError(['investment_settings', 'maxAmount'])" class="invalid-feedback">
+                                        {{ getValidationError(['investment_settings', 'maxAmount']) }}
+                                    </div>
+                                </div>
+                            </div>
+
+                            <hr>
+                            <h6 class="text-primary">信号过滤规则</h6>
+                            <!-- 交易时间段 -->
+                            <div class="mb-2">
+                                <label class="form-label small">交易时间段</label>
+                                <div class="row gx-2">
+                                    <div class="col">
+                                        <input type="time" class="form-control form-control-sm" v-model="monitorSettings.trade_start_time">
+                                    </div>
+                                    <div class="col">
+                                        <input type="time" class="form-control form-control-sm" v-model="monitorSettings.trade_end_time">
+                                    </div>
+                                </div>
+                                <small class="text-muted x-small">仅在此时间段内执行交易。留空则不限制。</small>
+                            </div>
+
+                            <!-- 排除星期几 -->
+                            <div class="mb-3">
+                                <label class="form-label small">排除星期几</label>
+                                <div class="btn-group d-flex" role="group">
+                                    <template v-for="(day, index) in weekdays" :key="index">
+                                        <input type="checkbox" class="btn-check" :id="'exclude_weekday_' + index" :value="index + 1" v-model="monitorSettings.excluded_weekdays">
+                                        <label class="btn btn-outline-secondary btn-sm flex-grow-1" :for="'exclude_weekday_' + index">{{ day }}</label>
+                                    </template>
+                                </div>
+                                <small class="text-muted x-small">选中的星期将不会执行交易。</small>
+                            </div>
+
+                            <div class="mb-3">
+                                <label for="min_trade_interval_minutes_live" class="form-label small">最小开单间隔 (分钟)</label>
+                                <input type="number" class="form-control form-control-sm" id="min_trade_interval_minutes_live" v-model.number="monitorSettings.investment.min_trade_interval_minutes" min="0" step="1">
+                                <small class="text-muted x-small">0 表示不限制。如果新信号与上一笔实际交易的间隔小于此值，则跳过该信号。</small>
+                            </div>
+                             <div v-if="selectedInvestmentStrategy" class="mb-2">
+                                <label class="form-label small" for="simulatedBalance">总本金 (USDT)</label>
+                                <input type="number" class="form-control form-control-sm" id="simulatedBalance"
+                                       v-model.number="monitorSettings.investment.simulatedBalance" min="1" step="0.01"
+                                       :class="{'is-invalid': getValidationError(['investment_settings', 'simulatedBalance'])}">
+                                <div v-if="getValidationError(['investment_settings', 'simulatedBalance'])" class="invalid-feedback">
+                                    {{ getValidationError(['investment_settings', 'simulatedBalance']) }}
+                                </div>
+                             </div>
+
+                            <div class="form-check mb-3">
+                                <input class="form-check-input" type="checkbox" id="enableSound" v-model="monitorSettings.enableSound">
+                                <label class="form-check-label small" for="enableSound">新信号声音提醒</label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="col-lg-9 col-md-8 mb-3"> <!-- 添加 mb-3 -->
+                    <div class="card mb-4"> <!-- 应用共享卡片样式 -->
+                        <div class="card-header bg-success text-white d-flex justify-content-between align-items-center">
+                            <h5 class="mb-0">信号列表与统计</h5>
+                            <div>
+                                <span v-if="socketStatus === 'connected'" class="badge bg-light text-success status-indicator">服务已连接</span>
+                                <span v-else-if="socketStatus === 'connecting'" class="badge bg-warning text-dark status-indicator">连接中...</span>
+                                <span v-else class="badge bg-secondary status-indicator">服务已断开/错误</span>
+                                
+                                <span v-if="currentConfigId" class="badge bg-info text-dark status-indicator ms-1">后台任务运行中</span>
+                                <span v-else-if="socketStatus === 'connected'" class="badge bg-light text-dark status-indicator ms-1">无后台任务</span>
+                            </div>
+                        </div>
+                        <div class="card-body">
+                            <div class="mb-3">
+                                <h6 class="text-primary">信号统计</h6>
+                                <div class="row mt-2 text-center small">
+                                    <div class="col-md-3 col-6 mb-2"><div class="card bg-light p-1 h-100"><small class="d-block">总信号</small><h6 class="mb-0">{{ filteredWinRateStats.total_signals }}</h6></div></div>
+                                    <div class="col-md-3 col-6 mb-2"><div class="card bg-light p-1 h-100"><small class="d-block">已验证</small><h6 class="mb-0">{{ filteredWinRateStats.total_verified }}</h6></div></div>
+                                    <div class="col-md-3 col-6 mb-2"><div class="card bg-light p-1 h-100"><small class="d-block">正确数</small><h6 class="mb-0">{{ filteredWinRateStats.total_correct }}</h6></div></div>
+                                    <div class="col-md-3 col-6 mb-2"><div class="card bg-light p-1 h-100"><small class="d-block">胜率</small><h6 class="mb-0" :class="getWinRateClass(filteredWinRateStats.win_rate)">{{ filteredWinRateStats.win_rate?.toFixed(2) }}%</h6></div></div>
+                                    <div class="col-md-4 col-6 mb-2"><div class="card bg-light p-1 h-100"><small class="d-block">总参考PnL(%)</small><h6 class="mb-0" :class="getPnlClass(filteredWinRateStats.total_pnl_pct)">{{ filteredWinRateStats.total_pnl_pct?.toFixed(2) }}%</h6></div></div>
+                                    <div class="col-md-4 col-6 mb-2"><div class="card bg-light p-1 h-100"><small class="d-block">平均参考PnL(%)</small><h6 class="mb-0" :class="getPnlClass(filteredWinRateStats.average_pnl_pct)">{{ filteredWinRateStats.average_pnl_pct?.toFixed(2) }}%</h6></div></div>
+                                    <div class="col-md-4 col-12 mb-2"> <!-- 调整 col-md-X 以适应布局 -->
+                                        <div class="card p-1 h-100" :class="filteredTotalProfitLossAmount >= 0 ? 'bg-success bg-opacity-10' : 'bg-danger bg-opacity-10'"> <!-- 使用不同背景强调 -->
+                                            <small class="d-block">总盈亏(USDT)</small>
+                                            <h6 class="mb-0" :class="getPnlClass(filteredTotalProfitLossAmount)">{{ filteredTotalProfitLossAmount?.toFixed(2) || '0.00' }}</h6>
+                                        </div>
+                                    </div>
+                                     <div v-if="currentConfigId && activeTestConfigDetails" class="col-md-4 col-6 mb-2"> <!-- 调整 col-md-X 以适应布局 -->
+                                        <div class="card bg-success bg-opacity-10 p-1 h-100"> <!-- 使用不同背景强调 -->
+                                            <small class="d-block">余额(USDT)</small>
+                                            <h6 class="mb-0 text-success">{{ dynamicFilteredBalance }}</h6>
+                                        </div>
+                                    </div>
+                                     <div v-if="currentConfigId && activeTestConfigDetails && nextInvestmentAmount !== null" class="col-md-4 col-6 mb-2">
+                                        <div class="card bg-info bg-opacity-10 p-1 h-100">
+                                            <small class="d-block">下一单预计投资额</small>
+                                            <h6 class="mb-0 text-info">{{ nextInvestmentAmount.toFixed(2) }} USDT</h6>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- START: 信号管理替换区域 -->
+                            <div class="mt-4">
+                                <div class="d-flex justify-content-between align-items-center mb-2">
+                                    <h6 class="text-success mb-0">信号管理</h6>
+                                    <div class="d-flex align-items-center">
+                                        <div>
+                                            <button class="btn btn-danger btn-sm" @click="deleteSelectedSignals"
+                                                    :disabled="selectedSignalIds.length === 0 || deletingSignals">
+                                                <span v-if="deletingSignals" class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
+                                                删除选中 ({{ selectedSignalIds.length }})
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                               <!-- 信号筛选 -->
+                               <div class="row gx-2 gy-1 mb-2 small align-items-end">
+                                   <div class="col-md-3 col-6">
+                                       <label for="filterSymbolLive" class="form-label x-small">交易对</label>
+                                       <select id="filterSymbolLive" class="form-select form-select-sm" v-model="signalManagementFilter.symbol">
+                                          <option v-for="s in sortedSymbols" :key="s" :value="s">{{ s }} <span v-if="isFavorite(s)">⭐</span></option>
+                                       </select>
+                                   </div>
+                                   <div class="col-md-3 col-6">
+                                       <label for="filterIntervalLive" class="form-label x-small">周期</label>
+                                       <select id="filterIntervalLive" class="form-select form-select-sm" v-model="signalManagementFilter.interval">
+                                           <option value="1m">1m</option><option value="3m">3m</option><option value="5m">5m</option><option value="15m">15m</option>
+                                           <option value="30m">30m</option><option value="1h">1h</option><option value="4h">4h</option><option value="1d">1d</option>
+                                       </select>
+                                   </div>
+                                   <div class="col-md-3 col-6">
+                                       <label for="filterDirectionLive" class="form-label x-small">方向</label>
+                                       <select id="filterDirectionLive" class="form-select form-select-sm" v-model="signalManagementFilter.direction">
+                                           <option value="all">全部</option><option value="long">做多</option><option value="short">做空</option>
+                                       </select>
+                                   </div>
+                                    <div class="col-md-3 col-6">
+                                       <label for="filterVerifiedLive" class="form-label x-small">状态</label>
+                                       <select id="filterVerifiedLive" class="form-select form-select-sm" v-model="signalManagementFilter.verifiedStatus">
+                                           <option value="all">全部</option><option value="verified">已验证</option><option value="unverified">未验证</option>
+                                       </select>
+                                   </div>
+                               </div>
+                               <!-- 信号显示模式按钮和置信度范围 -->
+                               <div class="row gx-2 gy-2 mb-3 small">
+                                   <!-- 信号显示模式按钮 -->
+                                   <div class="col-md-6 col-12">
+                                       <label class="form-label x-small mb-1">信号显示模式</label>
+                                       <div class="btn-group w-100 signal-mode-buttons" role="group" aria-label="信号显示模式">
+                                           <button type="button" class="btn btn-sm flex-fill"
+                                                   :class="{'btn-primary': signalDisplayMode === 'current', 'btn-outline-primary': signalDisplayMode !== 'current'}"
+                                                   @click="signalDisplayMode = 'current'">
+                                               <i class="bi bi-broadcast me-1"></i>
+                                               <span class="d-none d-sm-inline">当前配置</span>
+                                               <span class="d-sm-none">当前</span>
+                                           </button>
+                                           <button type="button" class="btn btn-sm flex-fill"
+                                                   :class="{'btn-primary': signalDisplayMode === 'historical', 'btn-outline-primary': signalDisplayMode !== 'historical'}"
+                                                   @click="signalDisplayMode = 'historical'">
+                                               <i class="bi bi-clock-history me-1"></i>
+                                               <span class="d-none d-sm-inline">历史信号</span>
+                                               <span class="d-sm-none">历史</span>
+                                           </button>
+                                       </div>
+                                   </div>
+                                   <!-- 置信度范围 -->
+                                   <div class="col-md-6 col-12">
+                                       <label class="form-label x-small mb-1">最低置信度 ({{ signalManagementFilter.minConfidence }}%)</label>
+                                       <input type="range" class="form-range" min="0" max="100" step="1"
+                                              v-model.number="signalManagementFilter.minConfidence">
+                                   </div>
+                               </div>
+                               <!-- 开始时间, 结束时间 -->
+                               <div class="row gx-2 gy-1 mb-2 small align-items-end">
+                                  <div class="col-md-6 col-6">
+                                      <label for="filterStartDateLive" class="form-label x-small">开始时间</label>
+                                      <input type="datetime-local" id="filterStartDateLive" class="form-control form-control-sm" v-model="signalManagementFilter.startDate">
+                                  </div>
+                                  <div class="col-md-6 col-6">
+                                      <label for="filterEndDateLive" class="form-label x-small">结束时间</label>
+                                      <input type="datetime-local" id="filterEndDateLive" class="form-control form-control-sm" v-model="signalManagementFilter.endDate">
+                                  </div>
+                               </div>
+                             <div class="form-check mb-2 small">
+                                 <input class="form-check-input" type="checkbox" id="selectAllDisplayedSignalsCheckbox"
+                                        v-model="areAllDisplayedManagedSignalsSelected">
+                                 <label class="form-check-label" for="selectAllDisplayedSignalsCheckbox">
+                                     全选/取消全选当前显示 ({{ displayedManagedSignals.length }} 条)
+                                 </label>
+                             </div>
+
+                                <div v-if="loadingInitialData && socketStatus === 'connecting'" class="text-center py-3"> <div class="spinner-border spinner-border-sm"></div> 正在连接并加载初始配置...</div>
+                                <div v-else-if="liveSignals.length === 0 && !currentConfigId && socketStatus === 'connected'" class="text-center text-muted py-3">请应用配置以启动后监控并接收相关信号。</div>
+                                <div v-else-if="liveSignals.length === 0 && socketStatus !== 'connected'" class="text-center text-muted py-3">请先连接服务。</div>
+                                <div v-else-if="displayedManagedSignals.length === 0 && liveSignals.length > 0" class="text-center text-muted py-3">无信号符合当前筛选条件。</div>
+                                <div v-else-if="liveSignals.length === 0" class="text-center text-muted py-3">暂无实时信号。</div>
+
+                                <dynamic-scroller
+                                    class="signal-cards-container scroller"
+                                    style="max-height: 600px;"
+                                    :items="displayedManagedSignals"
+                                    :min-item-size="130"
+                                    key-field="id"
+                                    v-slot="{ item: signal, index, active }">
+                                    <dynamic-scroller-item
+                                        :item="signal"
+                                        :active="active"
+                                        :data-index="index">
+                                        <div class="card signal-card mb-3" :class="getSignalStatusClass(signal)">
+                                            <div class="card-header d-flex justify-content-between align-items-center" :class="signal.verified ? (signal.result ? 'bg-success-subtle' : 'bg-danger-subtle') : ''">
+                                                <div>
+                                                    <input type="checkbox" class="form-check-input me-2" :value="signal.id" v-model="selectedSignalIds">
+                                                    <span class="fw-bold">{{ formatDateTime(signal.signal_time) }}</span>
+                                                    <span :class="['badge', signal.signal === 1 ? 'bg-success' : 'bg-danger', 'ms-2']">{{ signal.signal === 1 ? '做多' : '做空' }}</span>
+                                                </div>
+                                                <span v-if="signal.verification_status === 'failed_retrying'" class="badge bg-warning text-dark">重试中</span>
+                                                <span v-else-if="signal.result === null" class="badge bg-secondary">待验证</span>
+                                                <span v-else :class="['badge', signal.result ? 'bg-success' : 'bg-danger']">
+                                                    {{ signal.result ? '胜利' : '失败' }}
+                                                </span>
+                                            </div>
+                                            <div class="card-body" @click="toggleSignalDetails(signal)" style="cursor: pointer;">
+                                                <div class="row gx-2 gy-2">
+                                                    <div class="col-6 col-md-3"><div class="trade-detail-item"><span class="trade-detail-label">信号价格</span><span class="trade-detail-value">{{ signal.signal_price?.toFixed(signal.symbol && signal.symbol.includes('BTC') ? 2 : 4) }}</span></div></div>
+                                                    <div class="col-6 col-md-3"><div class="trade-detail-item"><span class="trade-detail-label">置信度</span><span class="trade-detail-value">{{ signal.confidence?.toFixed(2) }}</span></div></div>
+                                                    <div class="col-6 col-md-3"><div class="trade-detail-item"><span class="trade-detail-label">投资额</span><span class="trade-detail-value">{{ signal.investment_amount?.toFixed(2) }}</span></div></div>
+                                                    <!-- 根据验证状态显示潜在盈亏或实际盈亏 -->
+                                                    <div class="col-6 col-md-3" v-if="!signal.verified">
+                                                        <div class="trade-detail-item">
+                                                            <span class="trade-detail-label">潜在盈亏</span>
+                                                            <span class="trade-detail-value">
+                                                                <span class="text-success">+{{ signal.potential_profit?.toFixed(2) }}</span> /
+                                                                <span class="text-danger">-{{ signal.potential_loss?.toFixed(2) }}</span>
+                                                            </span>
+                                                        </div>
+                                                    </div>
+                                                    <div class="col-6 col-md-3" v-else>
+                                                        <div class="trade-detail-item">
+                                                            <span class="trade-detail-label">实际盈亏</span>
+                                                            <span class="trade-detail-value">
+                                                                <span v-if="signal.verification_status === 'failed_retrying'" class="text-warning">验证重试中...</span>
+                                                                <span v-else-if="signal.actual_profit_loss_amount === null || signal.actual_profit_loss_amount === undefined">-</span>
+                                                                <span v-else :class="getPnlClass(signal.actual_profit_loss_amount)">
+                                                                    {{ signal.actual_profit_loss_amount >= 0 ? '+' : '' }}{{ signal.actual_profit_loss_amount?.toFixed(2) }} USDT
+                                                                </span>
+                                                            </span>
+                                                        </div>
+                                                    </div>
+                                                    <div class="col-6 col-md-3" v-if="signal.verified">
+                                                        <div class="trade-detail-item">
+                                                            <span class="trade-detail-label">验证价格</span>
+                                                            <span class="trade-detail-value">
+                                                                <span v-if="signal.verification_status === 'failed_retrying'" class="text-warning">验证重试中...</span>
+                                                                <span v-else-if="signal.actual_end_price === null">-</span>
+                                                                <span v-else>{{ signal.actual_end_price?.toFixed(signal.symbol && signal.symbol.includes('BTC') ? 2 : 4) }}</span>
+                                                            </span>
+                                                        </div>
+                                                    </div>
+                                                    <div class="col-6 col-md-3" v-if="signal.verified">
+                                                        <div class="trade-detail-item">
+                                                            <span class="trade-detail-label">价格变化</span>
+                                                            <span class="trade-detail-value">
+                                                                <span v-if="signal.verification_status === 'failed_retrying'">--</span>
+                                                                <span v-else-if="signal.price_change_pct === null">-</span>
+                                                                <span v-else :class="getPnlClass(signal.price_change_pct)">{{ signal.price_change_pct?.toFixed(2) }}%</span>
+                                                            </span>
+                                                        </div>
+                                                    </div>
+                                                    <!-- 倒计时显示（仅未验证信号） -->
+                                                    <div class="col-12" v-if="!signal.verified">
+                                                        <div class="trade-detail-item text-center justify-content-center">
+                                                            <span class="trade-detail-label me-2">验证倒计时</span>
+                                                            <span class="trade-detail-value countdown">{{ getTimeRemaining(signal) }}</span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <div v-if="signal.isDetailsVisible" class="mt-2 pt-2 border-top">
+                                                    <div class="row gx-2 gy-2">
+                                                        <div class="col-6 col-md-4"><div class="trade-detail-item"><span class="trade-detail-label">交易对</span><span class="trade-detail-value">{{ signal.symbol }} ({{signal.interval}})</span></div></div>
+                                                        <div class="col-6 col-md-4"><div class="trade-detail-item"><span class="trade-detail-label">事件周期</span><span class="trade-detail-value">{{ signal.event_period }}</span></div></div>
+                                                        <div class="col-6 col-md-4"><div class="trade-detail-item"><span class="trade-detail-label">预测策略</span><span class="trade-detail-value">{{ getStrategyName(signal.prediction_strategy_id, 'prediction') }} <i class="bi bi-info-circle-fill text-primary" @click.stop data-bs-toggle="popover" :data-bs-title="getStrategyName(signal.prediction_strategy_id, 'prediction')" :data-bs-content="formatParams(signal.prediction_strategy_params)"></i></span></div></div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div class="card-footer text-center text-muted" @click="toggleSignalDetails(signal)" style="cursor: pointer;">
+                                                {{ signal.isDetailsVisible ? '收起' : '详情' }} <i :class="['bi', signal.isDetailsVisible ? 'bi-chevron-up' : 'bi-chevron-down']"></i>
+                                            </div>
+                                        </div>
+                                    </dynamic-scroller-item>
+                                </dynamic-scroller>
+                                <!-- 分页控件可以后续添加在这里 -->
+                            </div>
+                            <!-- END: 信号管理替换区域 -->
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+        <div v-if="loadingInitialData" class="loading-overlay"> <!-- 使用共享的 loading-overlay -->
+            <div class="spinner-border text-light" role="status"><span class="visually-hidden">加载中...</span></div>
+            <span class="ms-2">正在加载初始配置...</span> <!-- 移除 text-light, loading-overlay 已是白色文字 -->
+        </div>
+    </div>
+
+    <!-- ... 其他 body 内容 ... -->
+    <script src="https://cdn.jsdelivr.net/npm/vue@3.2.45/dist/vue.global.js"></script>
+    <script src="https://unpkg.com/vue-virtual-scroller@next"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+    <!-- Custom Utils JS -->
+    <script src="/static/js/utils.js"></script>
+    <!-- 全局Toast通知工具 -->
+    <script src="/static/js/toast-utils.js"></script>
+    <!-- Load Navbar Script -->
+    <script src="/static/js/load-navbar.js"></script>
+    <!-- Custom JS for this page -->
+    <script src="/static/js/live-test-scripts.js?v=1.2"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            loadNavbar('navbar-container', '/templates/navbar.html');
+        });
+    </script>
+</body>
+</html>

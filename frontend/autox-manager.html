@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AutoX 管理</title>
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css">
+    <!-- Shared Custom CSS -->
+    <link rel="stylesheet" href="/static/css/shared-styles.css">
+    <!-- Custom CSS for this page -->
+    <link rel="stylesheet" href="/static/css/autox-manager-styles.css">
+    <link rel="stylesheet" href="https://font.sec.miui.com/font/css?family=MiSans:400,700:MiSans" />
+<link rel="icon" href="/static/favicon.ico" type="image/x-icon">
+</head>
+<body>
+    <div id="app" v-cloak>
+        <div id="navbar-container"></div>
+
+        <div class="container-fluid mt-4">
+            <!-- AutoX Clients Card -->
+            <div class="card shadow-sm mb-4">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0"><i class="bi bi-phone-vibrate me-2"></i>AutoX 客户端列表</h5>
+                    <button class="btn btn-sm btn-outline-secondary" @click="refreshClientsManually" :disabled="loadingClients" title="刷新客户端列表">
+                        <i class="bi bi-arrow-clockwise"></i> <span class="d-none d-sm-inline">刷新</span>
+                    </button>
+                </div>
+                <div class="card-body"> <!-- Removed p-0 to restore default padding -->
+                    <table class="table table-hover align-middle modern-table autox-clients-table mb-0"> <!-- Added modern-table, mb-0 -->
+                        <thead>
+                            <tr>
+                                <th scope="col">客户端 ID</th>
+                                <th scope="col">状态</th>
+                                <th scope="col">支持交易对</th>
+                                <th scope="col" style="min-width: 140px;">连接时间</th>
+                                <th scope="col" style="min-width: 140px;">最后心跳</th>
+                                <th scope="col" style="min-width: 200px;">备注</th>
+                                <th scope="col" style="min-width: 120px;">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-if="loadingClients">
+                                <td colspan="7" class="text-center">
+                                    <div class="d-flex align-items-center justify-content-center text-body-secondary py-5">
+                                        <div class="spinner-border spinner-border-sm me-2" role="status">
+                                            <span class="visually-hidden">加载中...</span>
+                                        </div>
+                                        等待 WebSocket 连接并加载客户端列表中...
+                                    </div>
+                                </td>
+                            </tr>
+                            <tr v-for="client in clients" :key="client.client_id">
+                                <td class="client-id-cell" :title="client.client_id">{{ truncateId(client.client_id, 12) }}</td>
+                                <td>
+                                    <span :class="['badge', getClientStatusClass(client.status)]" :title="client.status">
+                                        {{ getClientStatusText(client.status) }}
+                                    </span>
+                                    <i v-if="client.is_explicitly_online === false && client.status !== 'offline'"
+                                       class="bi bi-exclamation-triangle-fill text-warning ms-1"
+                                       title="客户端数据来自持久化存储，但WebSocket未连接 (可能已断开)"></i>
+                                </td>
+                                <td>
+                                    <ul v-if="client.supported_symbols && client.supported_symbols.length" class="list-unstyled d-flex flex-wrap gap-1 mb-0 supported-symbols-list">
+                                        <li v-for="symbol in client.supported_symbols.slice(0, 3)" :key="symbol" class="badge fw-normal" :class="getSymbolBadgeClass(symbol)" :style="{'--symbol-hue': calculateSymbolHue(symbol)}">{{ symbol }}</li>
+                                        <li v-if="client.supported_symbols.length > 3" class="badge bg-secondary-subtle text-secondary-emphasis fw-normal" :title="client.supported_symbols.slice(3).join(', ')">+{{ client.supported_symbols.length - 3 }}</li>
+                                    </ul>
+                                    <span v-else class="text-body-secondary small">未知</span>
+                                </td>
+                                <td>{{ formatDateTime(client.connected_at) }}</td>
+                                <td>{{ formatDateTime(client.last_seen) }}</td>
+                                <td>
+                                    <input type="text" class="form-control form-control-sm notes-input"
+                                           v-model.lazy="client.notes_edit"
+                                           @change="saveClientNotes(client.client_id, client.notes_edit)"
+                                           @keyup.enter="saveClientNotes(client.client_id, client.notes_edit)"
+                                           :placeholder="client.notes ? '' : '添加备注...'"
+                                           :title="client.notes || '添加备注'">
+                                </td>
+                                <td>
+                                    <div class="btn-group btn-group-sm" role="group">
+                                        <button class="btn btn-outline-info" title="发送测试指令" @click="openTestCommandModal(client)">
+                                            <i class="bi bi-send-exclamation"></i>
+                                        </button>
+                                        <button class="btn btn-outline-success" title="手动触发交易" @click="openTriggerTradeModal(client)" :disabled="client.status !== 'idle'">
+                                            <i class="bi bi-play-circle"></i>
+                                        </button>
+                                        <button class="btn btn-outline-danger" title="删除客户端" @click="confirmDeleteClient(client)">
+                                            <i class="bi bi-trash"></i>
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                            <tr v-if="!loadingClients && clients.length === 0">
+                                <td colspan="7" class="text-center">
+                                    <div class="d-flex align-items-center justify-content-center text-body-secondary py-5">
+                                        <i class="bi bi-x-circle me-2 fs-5"></i> 没有连接的客户端
+                                    </div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Trade Logs Card -->
+            <div class="card shadow-sm mt-4">
+                 <div class="card-header d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0"><i class="bi bi-list-check me-2"></i>AutoX 交易日志</h5>
+                    <div class="d-flex align-items-center">
+                        <label for="logLimit" class="form-label me-2 mb-0 small text-body-secondary">显示:</label>
+                        <select id="logLimit" v-model.number="tradeLogLimit" @change="fetchTradeLogs(true, true)" class="form-select form-select-sm me-2" style="width: auto;">
+                            <option value="25">25 条</option>
+                            <option value="50">50 条</option>
+                            <option value="100">100 条</option>
+                            <option value="200">200 条 (最大)</option>
+                        </select>
+                        <button class="btn btn-sm btn-outline-secondary" @click="fetchTradeLogs(true, true)" :disabled="loadingLogs" title="刷新交易日志">
+                            <i class="bi bi-arrow-clockwise"></i> <span class="d-none d-sm-inline">刷新</span>
+                        </button>
+                    </div>
+                </div>
+                <div class="card-body"> <!-- Removed p-0 -->
+                    <table class="table table-hover table-sm align-middle modern-table mb-0"> <!-- Added modern-table, mb-0 -->
+                        <thead>
+                            <tr>
+                                <th scope="col" style="min-width: 145px;">时间</th>
+                                <th scope="col">客户端 ID</th>
+                                <th scope="col">信号 ID</th>
+                                <th scope="col">指令类型</th>
+                                <th scope="col">状态</th>
+                                <th scope="col" style="min-width: 300px;">详情 / Payload / 错误</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-if="loadingLogs">
+                                 <td colspan="6" class="text-center">
+                                     <div class="d-flex align-items-center justify-content-center text-body-secondary py-5">
+                                        <div class="spinner-border spinner-border-sm me-2" role="status">
+                                            <span class="visually-hidden">加载中...</span>
+                                        </div>
+                                        加载日志中...
+                                    </div>
+                                </td>
+                            </tr>
+                            <tr v-for="log in tradeLogs" :key="log.log_id" :class="getTradeLogRowClass(log.status, log.error_message)">
+                                <td>{{ formatDateTime(log.timestamp) }}</td>
+                                <td class="id-cell" :title="log.client_id">{{ truncateId(log.client_id, 12) }}</td>
+                                <td class="id-cell" :title="log.signal_id">{{ truncateId(log.signal_id, 12) || '-' }}</td>
+                                <td><span class="badge bg-light text-dark border fw-normal">{{ log.command_type }}</span></td>
+                                <td>
+                                    <span :class="['badge', getTradeStatusClass(log.status, log.error_message)]" :title="log.status">
+                                        {{ getTradeStatusText(log.status, log.error_message, log.command_payload) }}
+                                    </span>
+                                </td>
+                                <td class="log-details-cell">
+                                    <div v-if="log.details" class="mb-1 small"><strong>详情:</strong> {{ log.details }}</div>
+                                    <div v-if="log.error_message" class="text-danger mb-1 small"><strong>错误:</strong> {{ log.error_message }}</div>
+                                    <div v-if="log.command_payload && Object.keys(log.command_payload).length">
+                                        <a href="#" @click.prevent="togglePayloadVisibility(log)" class="text-decoration-none small">
+                                            <i :class="['bi', log.showPayload ? 'bi-eye-slash' : 'bi-eye']"></i>
+                                            {{ log.showPayload ? '隐藏' : '显示' }} Payload
+                                        </a>
+                                        <pre v-if="log.showPayload" class="mt-1">{{ JSON.stringify(log.command_payload, null, 2) }}</pre>
+                                    </div>
+                                </td>
+                            </tr>
+                            <tr v-if="!loadingLogs && tradeLogs.length === 0">
+                                <td colspan="6" class="text-center">
+                                    <div class="d-flex align-items-center justify-content-center text-body-secondary py-5">
+                                        <i class="bi bi-journal-x me-2 fs-5"></i> 没有交易日志
+                                    </div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Test Command Modal -->
+        <div class="modal fade" id="testCommandModal" tabindex="-1" aria-labelledby="testCommandModalLabel" aria-hidden="true">
+            <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="testCommandModalLabel">
+                            <i class="bi bi-send-exclamation me-2"></i>发送测试指令
+                        </h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <p class="mb-3">给客户端: <strong class="text-primary" :title="currentClientForModal?.client_id">{{ truncateId(currentClientForModal?.client_id, 16) }}</strong></p>
+                        <div class="mb-3">
+                            <label for="testCommandType" class="form-label">指令类型</label>
+                            <input type="text" class="form-control" id="testCommandType" v-model.trim="testCommand.type">
+                            <div class="form-text">例如: test_echo, get_status, unsupported_command</div>
+                        </div>
+                        <div class="mb-3">
+                            <label for="testCommandPayload" class="form-label">Payload (JSON, 可选)</label>
+                            <textarea class="form-control" id="testCommandPayload" rows="3" v-model="testCommand.payload_str" placeholder='例如: {"key": "value"}'></textarea>
+                            <div v-if="testCommand.payload_error" class="form-text text-danger small mt-1">{{ testCommand.payload_error }}</div>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">取消</button>
+                        <button type="button" class="btn btn-primary" @click="sendTestCommand" :disabled="!!testCommand.payload_error">
+                            <i class="bi bi-send me-1"></i>发送
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Trigger Trade Modal -->
+        <div class="modal fade" id="triggerTradeModal" tabindex="-1" aria-labelledby="triggerTradeModalLabel" aria-hidden="true">
+            <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="triggerTradeModalLabel">
+                            <i class="bi bi-play-circle me-2"></i>手动触发交易
+                        </h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <p class="mb-3">给客户端: <strong class="text-primary" :title="currentClientForModal?.client_id">{{ truncateId(currentClientForModal?.client_id, 16) }}</strong></p>
+                        <div class="mb-3">
+                            <label for="tradeSymbol" class="form-label">交易对 (Symbol)</label>
+                            <input type="text" class="form-control" id="tradeSymbol" v-model.trim="manualTrade.symbol" placeholder="例如 ETHUSDT">
+                        </div>
+                        <div class="mb-3">
+                            <label for="tradeDirection" class="form-label">方向 (Direction)</label>
+                            <select class="form-select" id="tradeDirection" v-model="manualTrade.direction">
+                                <option value="up">看涨 (up)</option>
+                                <option value="down">看跌 (down)</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label for="tradeAmount" class="form-label">金额 (Amount)</label>
+                            <input type="text" class="form-control" id="tradeAmount" v-model.trim="manualTrade.amount" placeholder="例如 5 或 10.5">
+                            <div class="form-text">AutoX脚本通常期望金额为字符串格式。请输入数字。</div>
+                        </div>
+                         <div class="mb-3">
+                            <label for="tradeSignalId" class="form-label">信号ID (可选)</label>
+                            <input type="text" class="form-control" id="tradeSignalId" v-model.trim="manualTrade.signal_id" placeholder="可选, 例如 manual_trade_001">
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">取消</button>
+                        <button type="button" class="btn btn-success" @click="triggerManualTrade">
+                            <i class="bi bi-play-fill me-1"></i>发送交易指令
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+
+
+    </div>
+
+    <!-- Bootstrap Bundle with Popper -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <!-- Vue 3 -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <!-- Custom Utils JS (must be loaded before scripts that use its functions globally) -->
+    <script src="/static/js/utils.js"></script>
+    <!-- 全局Toast通知工具 -->
+    <script src="/static/js/toast-utils.js"></script>
+    <!-- Load Navbar Script -->
+    <script src="/static/js/load-navbar.js"></script>
+    <!-- Custom JS for this page -->
+    <script src="/static/js/autox-manager-scripts.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            loadNavbar('navbar-container', '/templates/navbar.html');
+        });
+    </script>
+</body>
+</html>

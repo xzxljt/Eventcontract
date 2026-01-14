@@ -1,0 +1,452 @@
+/* frontend/static/css/live-test-styles.css */
+
+/* Countdown specific styling */
+.countdown {
+    font-weight: 500; /* MiSans medium */
+    color: var(--primary-color);
+}
+
+/* Signal card adjustments (shared-styles.css has base .signal-card styles) */
+.signal-card {
+    border-radius: var(--border-radius-lg); /* Ensure it uses the larger radius */
+    transition: all 0.3s ease-in-out;
+    /* 增强边框和阴影效果 */
+    border: 2px solid var(--border-color);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08), 0 2px 6px rgba(0, 0, 0, 0.04);
+    /* 减少卡片间距，使布局更紧凑 */
+    margin-bottom: 0.875rem !important;
+    /* 增强背景对比 */
+    background-color: var(--card-bg-color);
+    position: relative;
+    /* 确保卡片不会超出容器 */
+    max-width: 100%;
+    overflow: hidden;
+    /* 增强边缘可见性 */
+    border-left: 4px solid var(--primary-color);
+}
+
+.signal-card:hover {
+    transform: translateY(-2px);
+    /* 悬停时增强阴影和边框 */
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15), 0 3px 8px rgba(0, 0, 0, 0.1);
+    border-color: var(--primary-color);
+    border-left-color: var(--primary-color-dark);
+}
+
+.signal-card .card-header, .signal-card .card-body {
+    padding: 0.875rem; /* 减少内边距，使卡片更紧凑 */
+}
+
+.signal-card .card-header {
+    background-color: #FAFBFC; /* 轻微的背景色区分 */
+    border-bottom: 1px solid var(--border-color);
+    font-size: 0.9rem; /* 稍微减小字体 */
+}
+
+.signal-card .card-body {
+    font-size: 0.85rem; /* 减小正文字体 */
+}
+
+.signal-card .card-footer {
+    background-color: #F8F9FA;
+    border-top: 1px solid var(--border-color);
+    padding: 0.5rem 0.875rem; /* 减少footer的内边距 */
+    font-size: 0.8rem; /* 减小footer字体 */
+}
+.signal-card p {
+    margin-bottom: 0.4rem;
+    font-size: 0.9rem;
+    color: var(--text-secondary-color); /* Default p color in card */
+}
+.signal-card p strong, .signal-card p .text-primary { /* Example specific highlight */
+    color: var(--text-primary-color); /* Or a more specific highlight color */
+    font-weight: 600;
+}
+/* badge 样式已在下面统一定义 */
+
+/* Live test specific card headers */
+.card-header.bg-primary.text-white { /* From HTML config card */
+    background-color: var(--primary-color) !important;
+    color: white !important;
+}
+.card-header.bg-success.text-white { /* From HTML signal list card */
+    background-color: var(--success-color) !important;
+    color: white !important;
+}
+
+/* Statistic item cards within live-test page */
+.live-stats-item .card { /* If you have small cards for individual stats */
+    box-shadow: var(--shadow-sm);
+    border-radius: var(--border-radius-base);
+    text-align: center;
+}
+.live-stats-item .card-body {
+    padding: 0.75rem;
+}
+.live-stats-item .card small {
+    font-size: 0.75rem;
+    color: var(--text-secondary-color);
+    text-transform: uppercase;
+    display: block;
+    margin-bottom: 0.25rem;
+}
+.live-stats-item .card h6 {
+    font-size: 1.2rem;
+    font-weight: 600;
+    margin-bottom: 0;
+    color: var(--text-primary-color);
+}
+
+/* Filter rows styling */
+.row.gx-2.gy-1.mb-2.small.align-items-end { /* Selectors from live-test.html */
+    font-size: 0.9rem; /* Ensure "small" here applies as expected */
+}
+.row.gx-2.gy-1.mb-2.small.align-items-end .form-label.x-small {
+    font-size: 0.8rem; /* Ensure "x-small" for labels is applied */
+    margin-bottom: 0.25rem;
+    font-weight: 400;
+}
+
+/* Status indicators in header */
+.status-indicator {
+    margin-left: 0.5rem;
+}
+.status-indicator.bg-light.text-success { /* Live-test HTML uses this for 'Service Connected' */
+    background-color: var(--primary-color-light) !important;
+    color: var(--primary-color) !important;
+    border: 1px solid var(--primary-color);
+}
+.status-indicator.bg-info.text-dark { /* Live-test HTML uses this for 'Backend Task Running' */
+    background-color: #E0F2FE !important; /* Light cyan/blue for info */
+    color: #075985 !important;
+    border: 1px solid #7DD3FC;
+}
+.status-indicator.bg-warning.text-dark { /* Connecting */
+    background-color: #FEFCE8 !important;
+    color: #A16207 !important;
+    border: 1px solid #FEF08A;
+}
+.status-indicator.bg-secondary { /* Disconnected */
+    background-color: #F3F4F6 !important;
+    color: #4B5563 !important;
+    border: 1px solid #D1D5DB;
+}
+
+/* For the "current test session balance/pnl" cards specifically in live-test */
+.col-md-4 .card.bg-success.bg-opacity-10,
+.col-md-4 .card.bg-danger.bg-opacity-10 {
+    border-radius: var(--border-radius-base);
+    padding: 0.75rem;
+}
+.col-md-4 .card.bg-success.bg-opacity-10 {
+    background-color: rgba(16, 185, 129, 0.1) !important;
+    border: 1px solid rgba(16, 185, 129, 0.2);
+}
+.col-md-4 .card.bg-danger.bg-opacity-10 {
+    background-color: rgba(239, 68, 68, 0.1) !important;
+    border: 1px solid rgba(239, 68, 68, 0.2);
+}
+.col-md-4 .card small {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    color: var(--text-secondary-color);
+}
+.col-md-4 .card h6 {
+    font-size: 1.1rem;
+    margin-top: 0.2rem;
+}
+
+/* Config section within card body */
+.border.p-2.rounded-1.bg-light { /* Used for strategy params */
+    background-color: #F8F9FC !important; /* Consistent very light bg */
+    border-color: var(--border-color) !important;
+    border-radius: var(--border-radius-base) !important;
+    padding: 0.75rem !important;
+}
+/* 移除重复的 card-footer 样式，已在上面统一定义 */
+/* 移除重复的样式定义，已在上面统一定义 */
+
+.trade-detail-label {
+    font-size: 0.75em;
+    color: #6c757d;
+    margin-bottom: 0.15rem;
+}
+
+.trade-detail-value {
+    font-size: 1em;
+    font-weight: 600;
+    line-height: 1.2;
+}
+
+.countdown {
+    font-weight: bold;
+    color: var(--bs-primary);
+}
+/* Popover Custom Styles */
+.popover {
+    max-width: 400px; /* Adjust popover width */
+}
+
+.popover-body {
+    font-size: 0.8rem; /* Smaller font for popover content */
+    white-space: pre-wrap; /* Allow line breaks */
+}
+.bg-success-subtle {
+    background-color: rgba(var(--bs-success-rgb), 0.15) !important;
+}
+
+.bg-danger-subtle {
+    background-color: rgba(var(--bs-danger-rgb), 0.15) !important;
+}
+
+/* 信号过滤规则UI样式 */
+/* 排除星期几的按钮组 */
+.btn-group .btn-check:checked + .btn-outline-secondary {
+    background-color: var(--bs-danger);
+    color: white;
+    border-color: var(--bs-danger);
+    box-shadow: none; /* 移除选中时的默认阴影，使其更平坦 */
+}
+
+.btn-group .btn-outline-secondary {
+    /* 确保按钮在 flex 容器中均匀分布 */
+    flex-basis: 0;
+    flex-grow: 1;
+    /* 调整内边距和字体大小以适应小空间 */
+    padding: 0.25rem 0.5rem;
+    font-size: 0.8rem;
+    transition: background-color 0.15s ease-in-out, color 0.15s ease-in-out;
+}
+
+.btn-group .btn-outline-secondary:hover {
+    background-color: #e9ecef; /* 轻微的悬停效果 */
+    color: #212529;
+}
+
+/* 信号显示模式按钮组样式优化 - 防止切换时大小变化 */
+.signal-mode-buttons .btn {
+    /* 确保所有按钮状态下都有相同的边框宽度 */
+    border-width: 1px !important;
+    /* 固定内边距，减少横向空白 */
+    padding: 0.375rem 0.4rem !important;
+    /* 确保字体粗细一致 */
+    font-weight: 500 !important;
+    /* 平滑过渡效果 */
+    transition: all 0.15s ease-in-out;
+    /* 确保按钮高度一致 */
+    min-height: 38px;
+    /* 文字居中对齐 */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* 激活状态的按钮 */
+.signal-mode-buttons .btn.btn-primary {
+    background-color: var(--primary-color) !important;
+    border-color: var(--primary-color) !important;
+    color: white !important;
+    box-shadow: none !important;
+}
+
+/* 非激活状态的按钮 */
+.signal-mode-buttons .btn.btn-outline-primary {
+    background-color: transparent !important;
+    border-color: var(--primary-color) !important;
+    color: var(--primary-color) !important;
+    box-shadow: none !important;
+}
+
+/* 悬停效果 */
+.signal-mode-buttons .btn.btn-outline-primary:hover {
+    background-color: rgba(var(--primary-color-rgb, 58, 134, 255), 0.1) !important;
+    border-color: var(--primary-color) !important;
+    color: var(--primary-color) !important;
+}
+
+.signal-mode-buttons .btn.btn-primary:hover {
+    background-color: var(--primary-color-dark, #2563eb) !important;
+    border-color: var(--primary-color-dark, #2563eb) !important;
+    color: white !important;
+}
+
+/* 确保按钮组内的按钮无间隙 */
+.signal-mode-buttons {
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    border-radius: 0.375rem;
+    overflow: hidden;
+}
+
+.signal-mode-buttons .btn:first-child {
+    border-top-right-radius: 0 !important;
+    border-bottom-right-radius: 0 !important;
+}
+
+.signal-mode-buttons .btn:last-child {
+    border-top-left-radius: 0 !important;
+    border-bottom-left-radius: 0 !important;
+    border-left: none !important;
+}
+
+/* 图标样式 */
+.signal-mode-buttons .btn i {
+    font-size: 0.875rem;
+}
+
+/* 虚拟滚动容器优化 */
+.signal-cards-container {
+    padding: 0.5rem;
+    /* 确保容器内容不会溢出 */
+    overflow-x: hidden;
+    overflow-y: auto;
+    /* 添加内边距防止卡片贴边 */
+    box-sizing: border-box;
+}
+
+.signal-cards-container .vue-recycle-scroller__item-wrapper {
+    /* 确保每个项目都有适当的间距 */
+    padding: 0 0.25rem;
+    box-sizing: border-box;
+}
+
+/* 根据信号状态调整左边框颜色 */
+.signal-card.status-verified-correct {
+    border-left-color: var(--success-color) !important;
+}
+
+.signal-card.status-verified-incorrect {
+    border-left-color: var(--error-color) !important;
+}
+
+.signal-card.status-pending {
+    border-left-color: var(--warning-color) !important;
+}
+
+/* 优化交易详情项的显示 */
+.trade-detail-item {
+    background-color: #F8F9FA;
+    border-radius: 0.375rem;
+    padding: 0.5rem 0.625rem; /* 减少内边距 */
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    border: 1px solid #E9ECEF;
+    transition: background-color 0.2s ease;
+}
+
+.trade-detail-item:hover {
+    background-color: #F1F3F4;
+}
+
+.trade-detail-label {
+    font-size: 0.65rem; /* 进一步减小标签字体 */
+    color: #6C757D;
+    margin-bottom: 0.2rem; /* 减少间距 */
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+
+.trade-detail-value {
+    font-size: 0.8rem; /* 减小数值字体 */
+    font-weight: 600;
+    line-height: 1.2;
+    color: var(--text-primary-color);
+}
+
+/* 响应式优化 */
+@media (max-width: 768px) {
+    .signal-card {
+        margin-bottom: 0.75rem !important; /* 移动端进一步减少间距 */
+        border-left-width: 3px;
+    }
+
+    .signal-card .card-header,
+    .signal-card .card-body {
+        padding: 0.75rem; /* 移动端减少内边距 */
+    }
+
+    .signal-card .card-footer {
+        padding: 0.4rem 0.75rem;
+    }
+
+    .trade-detail-item {
+        padding: 0.4rem 0.5rem; /* 移动端进一步减少内边距 */
+    }
+
+    .signal-cards-container {
+        padding: 0.25rem;
+    }
+}
+
+/* 增强卡片的视觉层次 */
+.signal-card .badge {
+    font-size: 0.7rem; /* 减小徽章字体 */
+    padding: 0.25em 0.5em; /* 减小徽章内边距 */
+    border-radius: 0.25rem;
+    font-weight: 600;
+}
+
+/* 优化倒计时显示 */
+.countdown {
+    font-weight: 700;
+    color: var(--primary-color);
+    font-size: 1em; /* 减小倒计时字体 */
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+/* 改善复选框的视觉效果 */
+.signal-card .form-check-input {
+    transform: scale(1.0); /* 保持正常大小 */
+    margin-right: 0.5rem; /* 减少右边距 */
+}
+
+/* 优化详情展开/收起的过渡效果 */
+.signal-card .card-footer {
+    transition: all 0.3s ease;
+    cursor: pointer;
+}
+
+.signal-card .card-footer:hover {
+    background-color: #E9ECEF;
+}
+
+/* 确保信号卡片在容器中的对齐 */
+.signal-cards-container .vue-recycle-scroller__item-view {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+}
+
+/* 验证状态相关的样式优化 */
+.signal-card.status-verified-correct .trade-detail-item {
+    background-color: rgba(16, 185, 129, 0.05); /* 成功信号的淡绿背景 */
+    border-color: rgba(16, 185, 129, 0.2);
+}
+
+.signal-card.status-verified-incorrect .trade-detail-item {
+    background-color: rgba(239, 68, 68, 0.05); /* 失败信号的淡红背景 */
+    border-color: rgba(239, 68, 68, 0.2);
+}
+
+.signal-card.status-pending .trade-detail-item {
+    background-color: rgba(245, 158, 11, 0.05); /* 待验证信号的淡黄背景 */
+    border-color: rgba(245, 158, 11, 0.2);
+}
+
+/* 实际盈亏金额的特殊样式 */
+.trade-detail-value .pnl-positive {
+    font-weight: 700;
+    color: var(--success-color) !important;
+}
+
+.trade-detail-value .pnl-negative {
+    font-weight: 700;
+    color: var(--error-color) !important;
+}
+
+/* 验证重试状态的样式 */
+.trade-detail-value .text-warning {
+    font-style: italic;
+    font-weight: 500;
+}

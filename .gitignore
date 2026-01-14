@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.pyc
+*.pyd
+*.pyo
+
+# Virtual Environment
+venv/
+.venv/
+
+# Editors and IDEs
+.vscode/
+.idea/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+
+# Environment variables
+.env
+
+# Other common ignored files
+dist/
+build/
+*.swp
+# Kline cache
+kline_cache/
+*.kline
+data_cache/
+test.py
+
+.kline_cache/
+live_signals.json
+GRACEFUL_SHUTDOWN_README.md
+service.log.2025-05-17
+config/
+
+eventcontract.service.example
+logs/
+
+# Ignored config and data files
+config/active_test_config.json
+config/autox_clients_data.json
+live_signals.json
+bot.bat
+get_eth_price.py
+
+strstrategy_design.md
+optimizer.py
+SignalConfluence.md
+
+venv-py311/
+
+# Database files
+*.db
+data/*.db
