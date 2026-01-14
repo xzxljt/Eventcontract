@@ -108,6 +108,9 @@ from backtester import Backtester
 from timezone_utils import to_china_timezone, to_utc, now_china, now_utc, format_for_display, parse_frontend_datetime, CHINA_TIMEZONE
 from market_client import get_market_client
 
+# 导入模型预测模块
+from model_prediction import Predictor, ResultProcessor
+
 # --- 全局变量和配置 ---
 # 存储策略参数的配置字典
 strategy_parameters_config: Dict[str, Any] = {
@@ -124,6 +127,44 @@ AUTOX_CLIENTS_FILE = "config/autox_clients_data.json" # AutoX 客户端数据文
 # 用于存储从文件加载的持久化AutoX客户端数据
 # 这个字典将以 client_id 为键，存储客户端的注册信息和最新状态
 persistent_autox_clients_data: Dict[str, Dict[str, Any]] = {}
+
+# --- 模型预测相关全局变量 ---# 模型预测器实例
+model_predictor: Optional[Predictor] = None
+result_processor: Optional[ResultProcessor] = None
+
+# 训练任务管理
+active_training_tasks: Dict[str, Dict[str, Any]] = {}  # task_id -> task_info
+training_cancellation_flags: Dict[str, bool] = {}  # task_id -> should_cancel
+
+# 模型预测WebSocket连接管理器
+class TrainingConnectionManager:
+    def __init__(self):
+        self.active_connections: Dict[WebSocket, str] = {}  # WebSocket -> task_id
+
+    async def connect(self, websocket: WebSocket, task_id: str):
+        await websocket.accept()
+        self.active_connections[websocket] = task_id
+        logger.info(f"新的训练WebSocket连接，任务ID: {task_id}")
+
+    def disconnect(self, websocket: WebSocket):
+        if websocket in self.active_connections:
+            task_id = self.active_connections.pop(websocket)
+            logger.info(f"训练WebSocket连接断开，任务ID: {task_id}")
+
+    async def send_update(self, task_id: str, data: dict):
+        """向指定任务的所有WebSocket连接发送更新"""
+        connections_to_send = [ws for ws, tid in self.active_connections.items() if tid == task_id]
+        if connections_to_send:
+            tasks = [connection.send_json(data) for connection in connections_to_send]
+            if tasks:
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                for i, result in enumerate(results):
+                    if isinstance(result, Exception):
+                        logger.error(f"向训练WebSocket连接发送更新失败: {result}")
+                        self.disconnect(connections_to_send[i])
+
+# 全局训练连接管理器实例
+training_manager = TrainingConnectionManager()
 
 
 
@@ -2295,6 +2336,223 @@ async def websocket_endpoint(websocket: WebSocket):
         # 配置将保留在running_live_test_configs中，直到用户显式停止测试
         # 或者通过API/UI操作清理
         websocket_to_config_id_map.pop(websocket, None)
+
+# --- 模型预测相关路由 ---
+
+# 模型预测页面
+@app.get("/model_prediction", response_class=HTMLResponse)
+async def model_prediction_page():
+    """模型预测页面"""
+    try:
+        with open("frontend/model_prediction.html", "r", encoding="utf-8") as f:
+            content = f.read()
+        return HTMLResponse(content=content)
+    except Exception as e:
+        logger.error(f"加载模型预测页面失败: {e}")
+        return HTMLResponse(content="<h1>模型预测页面加载失败</h1>", status_code=500)
+
+# 训练任务WebSocket端点
+@app.websocket("/ws/training")
+async def training_websocket_endpoint(websocket: WebSocket):
+    """训练任务WebSocket端点"""
+    task_id = websocket.query_params.get("task_id", str(uuid.uuid4()))
+    await training_manager.connect(websocket, task_id)
+    
+    try:
+        while True:
+            data = await websocket.receive_json()
+            action = data.get("action")
+            
+            if action == "start_training":
+                params = data.get("params", {})
+                await start_training_task(task_id, params, websocket)
+            elif action == "stop_training":
+                await stop_training_task(task_id)
+            elif action == "heartbeat":
+                await websocket.send_json({"type": "heartbeat_response", "timestamp": time.time()})
+    except WebSocketDisconnect:
+        training_manager.disconnect(websocket)
+    except Exception as e:
+        logger.error(f"训练WebSocket端点错误: {e}", exc_info=True)
+        training_manager.disconnect(websocket)
+
+# 启动训练任务
+async def start_training_task(task_id: str, params: Dict[str, Any], websocket: WebSocket):
+    """启动训练任务"""
+    try:
+        # 初始化预测器
+        global model_predictor, result_processor
+        if not model_predictor:
+            model_predictor = Predictor(params.get("predictor_params", {}))
+        if not result_processor:
+            result_processor = ResultProcessor(params.get("result_processor_params", {}))
+        
+        # 创建训练任务信息
+        training_task = {
+            "task_id": task_id,
+            "status": "running",
+            "progress": 0,
+            "stage": "准备数据",
+            "start_time": time.time(),
+            "params": params
+        }
+        active_training_tasks[task_id] = training_task
+        training_cancellation_flags[task_id] = False
+        
+        # 模拟训练过程
+        async def training_process():
+            stages = [
+                "准备数据",
+                "数据预处理",
+                "模型训练",
+                "模型评估",
+                "保存模型"
+            ]
+            
+            for i, stage in enumerate(stages):
+                if training_cancellation_flags[task_id]:
+                    break
+                
+                training_task["stage"] = stage
+                
+                # 模拟每个阶段的进度
+                for progress in range(i * 20, (i + 1) * 20):
+                    if training_cancellation_flags[task_id]:
+                        break
+                    
+                    training_task["progress"] = progress
+                    elapsed_time = time.time() - training_task["start_time"]
+                    estimated_total_time = elapsed_time * (100 / max(1, progress)) if progress > 0 else 60
+                    remaining_time = estimated_total_time - elapsed_time
+                    
+                    # 发送训练进度
+                    await training_manager.send_update(task_id, {
+                        "progress": progress,
+                        "stage": stage,
+                        "status": "训练中",
+                        "time_remaining": f"{int(remaining_time // 60)}:{int(remaining_time % 60):02d}",
+                        "log": f"{stage} - {progress}%"
+                    })
+                    
+                    await asyncio.sleep(0.5)
+            
+            if training_cancellation_flags[task_id]:
+                training_task["status"] = "已停止"
+                await training_manager.send_update(task_id, {
+                    "progress": training_task["progress"],
+                    "stage": training_task["stage"],
+                    "status": "已停止",
+                    "log": "训练已停止"
+                })
+            else:
+                training_task["status"] = "训练完成"
+                training_task["progress"] = 100
+                await training_manager.send_update(task_id, {
+                    "progress": 100,
+                    "stage": "训练完成",
+                    "status": "训练完成",
+                    "log": "训练完成"
+                })
+        
+        # 启动训练过程
+        asyncio.create_task(training_process())
+    except Exception as e:
+        logger.error(f"启动训练任务失败: {e}", exc_info=True)
+        await training_manager.send_update(task_id, {
+            "status": "训练失败",
+            "error": str(e)
+        })
+
+# 停止训练任务
+async def stop_training_task(task_id: str):
+    """停止训练任务"""
+    if task_id in training_cancellation_flags:
+        training_cancellation_flags[task_id] = True
+        if task_id in active_training_tasks:
+            active_training_tasks[task_id]["status"] = "stopping"
+
+# 获取训练任务状态
+@app.get("/api/training/status/{task_id}")
+async def get_training_status(task_id: str):
+    """获取训练任务状态"""
+    if task_id in active_training_tasks:
+        task = active_training_tasks[task_id]
+        return {"success": True, "data": task}
+    else:
+        return {"success": False, "message": "训练任务不存在"}
+
+# 运行模型预测
+@app.post("/api/prediction/run")
+async def run_prediction(request: Dict[str, Any]):
+    """运行模型预测"""
+    try:
+        global model_predictor
+        if not model_predictor:
+            model_predictor = Predictor()
+        
+        # 模拟预测数据
+        import pandas as pd
+        df = pd.DataFrame({
+            "open": [10000, 10100, 10200],
+            "high": [10100, 10200, 10300],
+            "low": [9900, 10000, 10100],
+            "close": [10050, 10150, 10250],
+            "volume": [1000, 1200, 1500]
+        })
+        
+        # 训练模型
+        try:
+            # 尝试预测，如果模型未训练会抛出异常
+            result = model_predictor.predict(df)
+        except ValueError as e:
+            if "Model not trained or loaded" in str(e) or "No models trained or loaded" in str(e) or "No model trained or loaded" in str(e):
+                # 模型未训练，先训练模型
+                logger.info("模型未训练，开始训练模型...")
+                model_predictor.train(df)
+                # 训练后再次尝试预测
+                result = model_predictor.predict(df)
+            else:
+                # 其他ValueError，继续抛出
+                raise
+        
+        # 处理结果
+        global result_processor
+        if not result_processor:
+            result_processor = ResultProcessor()
+        processed_result = result_processor.process_prediction_result(result, df)
+        
+        return {"success": True, "data": processed_result}
+    except Exception as e:
+        logger.error(f"运行模型预测失败: {e}", exc_info=True)
+        return {"success": False, "message": str(e)}
+
+# 清除预测缓存
+@app.post("/api/prediction/clear-cache")
+async def clear_prediction_cache():
+    """清除预测缓存"""
+    try:
+        global model_predictor
+        if model_predictor:
+            model_predictor.clear_cache()
+        return {"success": True, "message": "缓存已清除"}
+    except Exception as e:
+        logger.error(f"清除预测缓存失败: {e}", exc_info=True)
+        return {"success": False, "message": str(e)}
+
+# 获取预测结果列表
+@app.get("/api/prediction/results")
+async def get_prediction_results():
+    """获取预测结果列表"""
+    try:
+        global result_processor
+        if not result_processor:
+            result_processor = ResultProcessor()
+        
+        results = result_processor.get_result_files()
+        return {"success": True, "data": results}
+    except Exception as e:
+        logger.error(f"获取预测结果列表失败: {e}", exc_info=True)
+        return {"success": False, "message": str(e)}
 
 # --- WebSocket 端点 for AutoX Clients (/ws/autox_control) (确保保存操作是异步的) ---
 @app.websocket("/ws/autox_control")

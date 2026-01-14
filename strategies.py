@@ -54,7 +54,7 @@ class Strategy:
         # print(f"({self.name}) 基类 generate_signals_from_indicators_on_window 调用。")
         df_out = df_window_with_indicators.copy()
         if 'signal' not in df_out.columns: df_out['signal'] = 0
-        if 'confidence' not in df_out.columns: df_out['confidence'] = 0
+        if 'confidence' not in df_out.columns: df_out['confidence'] = 0.0
         # 子类会在这里基于窗口内的指标为最后一行判断信号
         return df_out
 
@@ -167,7 +167,7 @@ class SimpleRSIStrategy(Strategy):
     def generate_signals_from_indicators_on_window(self, df_window_with_indicators: pd.DataFrame) -> pd.DataFrame:
         df_out = df_window_with_indicators.copy()
         if 'signal' not in df_out.columns: df_out['signal'] = 0
-        if 'confidence' not in df_out.columns: df_out['confidence'] = 0
+        if 'confidence' not in df_out.columns: df_out['confidence'] = 0.0
 
         if len(df_out) < 2 or 'rsi' not in df_out.columns:
             return df_out
@@ -410,6 +410,306 @@ class RsiDivergenceStrategy(Strategy):
             
         return df_signaled
 
+# --- MACDStrategy ---
+class MACDStrategy(Strategy):
+    """基于MACD指标的策略"""
+    def __init__(self, params: Dict[str, Any] = None):
+        default_params = {
+            'macd_fast': 12,
+            'macd_slow': 26,
+            'macd_signal': 9
+        }
+        if params: default_params.update(params)
+        super().__init__(default_params)
+        self.name = "MACD策略"
+        self.min_history_periods = max(self.params['macd_slow'], self.params['macd_signal']) + 1
+
+    def calculate_all_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
+        df = super().calculate_all_indicators(df)
+        
+        try:
+            # 计算MACD指标
+            fast_period = self.params['macd_fast']
+            slow_period = self.params['macd_slow']
+            signal_period = self.params['macd_signal']
+            
+            # 计算EMA
+            ema_fast = df['close'].ewm(span=fast_period, adjust=False).mean()
+            ema_slow = df['close'].ewm(span=slow_period, adjust=False).mean()
+            
+            # 计算MACD线
+            macd_line = ema_fast - ema_slow
+            
+            # 计算信号线
+            signal_line = macd_line.ewm(span=signal_period, adjust=False).mean()
+            
+            # 计算柱状图
+            macd_hist = macd_line - signal_line
+            
+            df['macd_line'] = macd_line
+            df['macd_signal'] = signal_line
+            df['macd_hist'] = macd_hist
+            
+        except Exception as e:
+            logger.error(f"({self.name}) 计算MACD时发生错误: {e}", exc_info=True)
+            df['macd_line'] = 0
+            df['macd_signal'] = 0
+            df['macd_hist'] = 0
+        
+        return df
+
+    def generate_signals_from_indicators_on_window(self, df_window_with_indicators: pd.DataFrame) -> pd.DataFrame:
+        df_out = df_window_with_indicators.copy()
+        if 'signal' not in df_out.columns: df_out['signal'] = 0
+        if 'confidence' not in df_out.columns: df_out['confidence'] = 0
+
+        if len(df_out) < 2 or 'macd_hist' not in df_out.columns:
+            return df_out
+
+        curr_idx = -1
+        prev_idx = -2
+        
+        curr_hist = df_out.iloc[curr_idx]['macd_hist']
+        prev_hist = df_out.iloc[prev_idx]['macd_hist']
+        
+        signal = 0
+        confidence_score = 0
+        
+        # MACD柱状图金叉
+        if curr_hist > 0 and prev_hist <= 0:
+            signal = 1
+            confidence_score = 50 + min(50, abs(curr_hist) * 100)
+        # MACD柱状图死叉
+        elif curr_hist < 0 and prev_hist >= 0:
+            signal = -1
+            confidence_score = 50 + min(50, abs(curr_hist) * 100)
+        
+        df_out.iloc[curr_idx, df_out.columns.get_loc('signal')] = signal
+        df_out.iloc[curr_idx, df_out.columns.get_loc('confidence')] = int(max(0, min(100, confidence_score)))
+        return df_out
+
+    def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
+        df_with_indicators = self.calculate_all_indicators(df.copy())
+        df_signaled = df_with_indicators.copy()
+        if 'signal' not in df_signaled.columns: df_signaled['signal'] = 0
+        if 'confidence' not in df_signaled.columns: df_signaled['confidence'] = 0
+        
+        if 'macd_hist' not in df_signaled.columns:
+            return df_signaled
+        
+        for i in range(1, len(df_signaled)):
+            curr_hist = df_signaled.iloc[i]['macd_hist']
+            prev_hist = df_signaled.iloc[i-1]['macd_hist']
+            
+            signal = 0
+            confidence_score = 0
+            
+            if curr_hist > 0 and prev_hist <= 0:
+                signal = 1
+                confidence_score = 50 + min(50, abs(curr_hist) * 100)
+            elif curr_hist < 0 and prev_hist >= 0:
+                signal = -1
+                confidence_score = 50 + min(50, abs(curr_hist) * 100)
+            
+            df_signaled.iloc[i, df_signaled.columns.get_loc('signal')] = signal
+            df_signaled.iloc[i, df_signaled.columns.get_loc('confidence')] = int(max(0, min(100, confidence_score)))
+        
+        return df_signaled
+
+# --- BollingerBandsStrategy ---
+class BollingerBandsStrategy(Strategy):
+    """基于布林带指标的策略"""
+    def __init__(self, params: Dict[str, Any] = None):
+        default_params = {
+            'bb_period': 20,
+            'bb_std': 2.0
+        }
+        if params: default_params.update(params)
+        super().__init__(default_params)
+        self.name = "布林带策略"
+        self.min_history_periods = self.params['bb_period'] + 1
+
+    def calculate_all_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
+        df = super().calculate_all_indicators(df)
+        
+        try:
+            # 计算布林带指标
+            period = self.params['bb_period']
+            std_dev = self.params['bb_std']
+            
+            # 计算移动平均线
+            df['bb_mid'] = df['close'].rolling(window=period).mean()
+            
+            # 计算标准差
+            df['bb_std'] = df['close'].rolling(window=period).std()
+            
+            # 计算上轨和下轨
+            df['bb_upper'] = df['bb_mid'] + (df['bb_std'] * std_dev)
+            df['bb_lower'] = df['bb_mid'] - (df['bb_std'] * std_dev)
+            
+            # 计算价格相对于布林带的位置
+            df['bb_position'] = (df['close'] - df['bb_mid']) / (df['bb_std'] * std_dev) if 'bb_std' in df.columns else 0
+            
+        except Exception as e:
+            logger.error(f"({self.name}) 计算布林带时发生错误: {e}", exc_info=True)
+            df['bb_mid'] = df['close']
+            df['bb_upper'] = df['close']
+            df['bb_lower'] = df['close']
+            df['bb_position'] = 0
+        
+        return df
+
+    def generate_signals_from_indicators_on_window(self, df_window_with_indicators: pd.DataFrame) -> pd.DataFrame:
+        df_out = df_window_with_indicators.copy()
+        if 'signal' not in df_out.columns: df_out['signal'] = 0
+        if 'confidence' not in df_out.columns: df_out['confidence'] = 0
+
+        if len(df_out) < 2 or 'bb_position' not in df_out.columns:
+            return df_out
+
+        curr_idx = -1
+        prev_idx = -2
+        
+        curr_position = df_out.iloc[curr_idx]['bb_position']
+        prev_position = df_out.iloc[prev_idx]['bb_position']
+        
+        signal = 0
+        confidence_score = 0
+        
+        # 价格从下轨上方穿越下轨 -> 买入信号
+        if curr_position < -1 and prev_position >= -1:
+            signal = 1
+            confidence_score = 50 + min(50, abs(curr_position) * 25)
+        # 价格从上轨下方穿越上轨 -> 卖出信号
+        elif curr_position > 1 and prev_position <= 1:
+            signal = -1
+            confidence_score = 50 + min(50, abs(curr_position) * 25)
+        
+        df_out.iloc[curr_idx, df_out.columns.get_loc('signal')] = signal
+        df_out.iloc[curr_idx, df_out.columns.get_loc('confidence')] = int(max(0, min(100, confidence_score)))
+        return df_out
+
+    def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
+        df_with_indicators = self.calculate_all_indicators(df.copy())
+        df_signaled = df_with_indicators.copy()
+        if 'signal' not in df_signaled.columns: df_signaled['signal'] = 0
+        if 'confidence' not in df_signaled.columns: df_signaled['confidence'] = 0
+        
+        if 'bb_position' not in df_signaled.columns:
+            return df_signaled
+        
+        for i in range(1, len(df_signaled)):
+            curr_position = df_signaled.iloc[i]['bb_position']
+            prev_position = df_signaled.iloc[i-1]['bb_position']
+            
+            signal = 0
+            confidence_score = 0
+            
+            if curr_position < -1 and prev_position >= -1:
+                signal = 1
+                confidence_score = 50 + min(50, abs(curr_position) * 25)
+            elif curr_position > 1 and prev_position <= 1:
+                signal = -1
+                confidence_score = 50 + min(50, abs(curr_position) * 25)
+            
+            df_signaled.iloc[i, df_signaled.columns.get_loc('signal')] = signal
+            df_signaled.iloc[i, df_signaled.columns.get_loc('confidence')] = int(max(0, min(100, confidence_score)))
+        
+        return df_signaled
+
+# --- MAStrategy (Moving Average Crossover) ---
+class MAStrategy(Strategy):
+    """基于移动平均线交叉的策略"""
+    def __init__(self, params: Dict[str, Any] = None):
+        default_params = {
+            'ma_fast': 5,
+            'ma_slow': 20
+        }
+        if params: default_params.update(params)
+        super().__init__(default_params)
+        self.name = "移动平均线策略"
+        self.min_history_periods = self.params['ma_slow'] + 1
+
+    def calculate_all_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
+        df = super().calculate_all_indicators(df)
+        
+        try:
+            # 计算移动平均线
+            fast_period = self.params['ma_fast']
+            slow_period = self.params['ma_slow']
+            
+            df['ma_fast'] = df['close'].rolling(window=fast_period).mean()
+            df['ma_slow'] = df['close'].rolling(window=slow_period).mean()
+            
+            # 计算均线差
+            df['ma_diff'] = df['ma_fast'] - df['ma_slow']
+            
+        except Exception as e:
+            logger.error(f"({self.name}) 计算移动平均线时发生错误: {e}", exc_info=True)
+            df['ma_fast'] = df['close']
+            df['ma_slow'] = df['close']
+            df['ma_diff'] = 0
+        
+        return df
+
+    def generate_signals_from_indicators_on_window(self, df_window_with_indicators: pd.DataFrame) -> pd.DataFrame:
+        df_out = df_window_with_indicators.copy()
+        if 'signal' not in df_out.columns: df_out['signal'] = 0
+        if 'confidence' not in df_out.columns: df_out['confidence'] = 0
+
+        if len(df_out) < 2 or 'ma_diff' not in df_out.columns:
+            return df_out
+
+        curr_idx = -1
+        prev_idx = -2
+        
+        curr_diff = df_out.iloc[curr_idx]['ma_diff']
+        prev_diff = df_out.iloc[prev_idx]['ma_diff']
+        
+        signal = 0
+        confidence_score = 0
+        
+        # 金叉：短期均线上穿长期均线
+        if curr_diff > 0 and prev_diff <= 0:
+            signal = 1
+            confidence_score = 50 + min(50, abs(curr_diff) * 1000)
+        # 死叉：短期均线下穿长期均线
+        elif curr_diff < 0 and prev_diff >= 0:
+            signal = -1
+            confidence_score = 50 + min(50, abs(curr_diff) * 1000)
+        
+        df_out.iloc[curr_idx, df_out.columns.get_loc('signal')] = signal
+        df_out.iloc[curr_idx, df_out.columns.get_loc('confidence')] = int(max(0, min(100, confidence_score)))
+        return df_out
+
+    def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
+        df_with_indicators = self.calculate_all_indicators(df.copy())
+        df_signaled = df_with_indicators.copy()
+        if 'signal' not in df_signaled.columns: df_signaled['signal'] = 0
+        if 'confidence' not in df_signaled.columns: df_signaled['confidence'] = 0
+        
+        if 'ma_diff' not in df_signaled.columns:
+            return df_signaled
+        
+        for i in range(1, len(df_signaled)):
+            curr_diff = df_signaled.iloc[i]['ma_diff']
+            prev_diff = df_signaled.iloc[i-1]['ma_diff']
+            
+            signal = 0
+            confidence_score = 0
+            
+            if curr_diff > 0 and prev_diff <= 0:
+                signal = 1
+                confidence_score = 50 + min(50, abs(curr_diff) * 1000)
+            elif curr_diff < 0 and prev_diff >= 0:
+                signal = -1
+                confidence_score = 50 + min(50, abs(curr_diff) * 1000)
+            
+            df_signaled.iloc[i, df_signaled.columns.get_loc('signal')] = signal
+            df_signaled.iloc[i, df_signaled.columns.get_loc('confidence')] = int(max(0, min(100, confidence_score)))
+        
+        return df_signaled
+
 # --- get_available_strategies ---
 def get_available_strategies() -> List[Dict[str, Any]]:
     """获取所有可用策略的列表"""
@@ -433,8 +733,163 @@ def get_available_strategies() -> List[Dict[str, Any]]:
                 {'name': 'divergence_lookback', 'type': 'int', 'default': 50, 'min': 1, 'max': 100, 'step': 1, 'description': '进入观察状态后，等待背离形成的最大K线数'},
             ]
         },
+        {
+            'id': 'macd', 'name': 'MACD策略', 'class': MACDStrategy,
+            'description': '使用MACD指标判断趋势变化',
+            'parameters': [
+                {'name': 'macd_fast', 'type': 'int', 'default': 12, 'min': 5, 'max': 20, 'step': 1, 'description': '快速EMA周期'},
+                {'name': 'macd_slow', 'type': 'int', 'default': 26, 'min': 20, 'max': 40, 'step': 1, 'description': '慢速EMA周期'},
+                {'name': 'macd_signal', 'type': 'int', 'default': 9, 'min': 5, 'max': 15, 'step': 1, 'description': '信号线周期'},
+            ]
+        },
+        {
+            'id': 'bollinger_bands', 'name': '布林带策略', 'class': BollingerBandsStrategy,
+            'description': '使用布林带指标判断价格波动范围',
+            'parameters': [
+                {'name': 'bb_period', 'type': 'int', 'default': 20, 'min': 10, 'max': 50, 'step': 1, 'description': '移动平均线周期'},
+                {'name': 'bb_std', 'type': 'float', 'default': 2.0, 'min': 1.0, 'max': 3.0, 'step': 0.1, 'description': '标准差倍数'},
+            ]
+        },
+        {
+            'id': 'ma_crossover', 'name': '移动平均线策略', 'class': MAStrategy,
+            'description': '使用移动平均线交叉判断趋势变化',
+            'parameters': [
+                {'name': 'ma_fast', 'type': 'int', 'default': 5, 'min': 2, 'max': 20, 'step': 1, 'description': '短期移动平均线周期'},
+                {'name': 'ma_slow', 'type': 'int', 'default': 20, 'min': 10, 'max': 50, 'step': 1, 'description': '长期移动平均线周期'},
+            ]
+        },
+        {
+            'id': 'model_prediction', 'name': '模型预测策略', 'class': ModelPredictionStrategy,
+            'description': '使用机器学习模型进行价格预测',
+            'parameters': [
+                {'name': 'model_count', 'type': 'int', 'default': 5, 'min': 1, 'max': 28, 'step': 1, 'description': '使用的模型数量'},
+                {'name': 'model_types', 'type': 'string', 'default': 'random_forest,xgboost', 'description': '模型类型，多个类型用逗号分隔'},
+                {'name': 'preprocessor_params', 'type': 'object', 'default': {}, 'description': '数据预处理器参数'},
+                {'name': 'model_params', 'type': 'object', 'default': {}, 'description': '模型参数'},
+            ]
+        },
     ]
     ids = [s['id'] for s in strategies]
     if len(ids) != len(set(ids)):
         raise ValueError("策略ID不唯一！请检查 get_available_strategies 函数。")
     return strategies
+
+# --- ModelPredictionStrategy --- 新增模型预测策略
+class ModelPredictionStrategy(Strategy):
+    def __init__(self, params: Dict[str, Any] = None):
+        default_params = {
+            'model_count': 5,
+            'model_types': 'random_forest,xgboost',
+            'preprocessor_params': {},
+            'model_params': {}
+        }
+        if params: 
+            # 处理字符串形式的模型类型
+            if isinstance(params.get('model_types'), str):
+                default_params['model_types'] = params['model_types']
+            elif isinstance(params.get('model_types'), list):
+                default_params['model_types'] = ','.join(params['model_types'])
+            default_params.update(params)
+        super().__init__(default_params)
+        self.name = "模型预测策略"
+        self.min_history_periods = 30  # 需要足够的历史数据进行预测
+        
+        # 延迟导入以避免循环依赖
+        from model_prediction.predictor import Predictor
+        self.predictor = Predictor({
+            'model_count': self.params['model_count'],
+            'model_types': self.params['model_types'],
+            'preprocessor_params': self.params['preprocessor_params'],
+            'model_params': self.params['model_params']
+        })
+
+    def calculate_all_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
+        df = super().calculate_all_indicators(df)
+        return df
+
+    def generate_signals_from_indicators_on_window(self, df_window_with_indicators: pd.DataFrame) -> pd.DataFrame:
+        df_out = df_window_with_indicators.copy()
+        if 'signal' not in df_out.columns: df_out['signal'] = 0
+        if 'confidence' not in df_out.columns: df_out['confidence'] = 0.0
+        
+        # 确保有足够的数据进行预测
+        if len(df_out) < self.min_history_periods:
+            return df_out
+        
+        try:
+            # 尝试使用模型进行预测
+            try:
+                prediction_result = self.predictor.predict(df_out)
+                predictions = prediction_result['predictions']
+                
+                if predictions:
+                    # 基于预测结果生成信号
+                    last_prediction = predictions[-1]
+                    last_close = df_out['close'].iloc[-1]
+                    
+                    # 计算价格变化百分比
+                    price_change_pct = (last_prediction - last_close) / last_close
+                    
+                    # 生成信号
+                    if price_change_pct > 0.001:  # 上涨超过0.1%
+                        df_out.loc[df_out.index[-1], 'signal'] = 1
+                        df_out.loc[df_out.index[-1], 'confidence'] = min(abs(price_change_pct) * 100, 1.0)
+                    elif price_change_pct < -0.001:  # 下跌超过0.1%
+                        df_out.loc[df_out.index[-1], 'signal'] = -1
+                        df_out.loc[df_out.index[-1], 'confidence'] = min(abs(price_change_pct) * 100, 1.0)
+                    else:
+                        df_out.loc[df_out.index[-1], 'signal'] = 0
+                        df_out.loc[df_out.index[-1], 'confidence'] = 0
+            except ValueError as e:
+                if "Model not trained or loaded" in str(e) or "No models trained or loaded" in str(e):
+                    # 模型未训练或加载，尝试训练模型
+                    logger.info(f"({self.name}) 模型未训练或加载，开始训练模型...")
+                    # 使用当前数据训练模型
+                    self.predictor.train(df_window_with_indicators)
+                    # 训练后再次尝试预测
+                    prediction_result = self.predictor.predict(df_window_with_indicators)
+                    predictions = prediction_result['predictions']
+                    
+                    if predictions:
+                        # 基于预测结果生成信号
+                        last_prediction = predictions[-1]
+                        last_close = df_window_with_indicators['close'].iloc[-1]
+                        
+                        # 计算价格变化百分比
+                        price_change_pct = (last_prediction - last_close) / last_close
+                        
+                        # 生成信号
+                        if price_change_pct > 0.001:  # 上涨超过0.1%
+                            df_out.loc[df_out.index[-1], 'signal'] = 1
+                            df_out.loc[df_out.index[-1], 'confidence'] = min(abs(price_change_pct) * 100, 1.0)
+                        elif price_change_pct < -0.001:  # 下跌超过0.1%
+                            df_out.loc[df_out.index[-1], 'signal'] = -1
+                            df_out.loc[df_out.index[-1], 'confidence'] = min(abs(price_change_pct) * 100, 1.0)
+                        else:
+                            df_out.loc[df_out.index[-1], 'signal'] = 0
+                            df_out.loc[df_out.index[-1], 'confidence'] = 0
+                else:
+                    # 其他ValueError，继续抛出
+                    raise
+        except Exception as e:
+            logger.error(f"({self.name}) 预测过程出错: {str(e)}")
+            # 出错时使用默认信号
+            df_out.loc[df_out.index[-1], 'signal'] = 0
+            df_out.loc[df_out.index[-1], 'confidence'] = 0
+        
+        return df_out
+
+    def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
+        df_with_indicators = self.calculate_all_indicators(df.copy())
+        df_signaled = df_with_indicators.copy()
+        if 'signal' not in df_signaled.columns: df_signaled['signal'] = 0
+        if 'confidence' not in df_signaled.columns: df_signaled['confidence'] = 0
+        
+        # 为每一行生成信号
+        for i in range(self.min_history_periods, len(df_signaled)):
+            window_df = df_signaled.iloc[:i+1].copy()
+            window_result = self.generate_signals_from_indicators_on_window(window_df)
+            df_signaled.loc[window_result.index[-1], 'signal'] = window_result['signal'].iloc[-1]
+            df_signaled.loc[window_result.index[-1], 'confidence'] = window_result['confidence'].iloc[-1]
+        
+        return df_signaled

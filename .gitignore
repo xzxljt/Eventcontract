@@ -55,3 +55,6 @@ venv-py311/
 # Database files
 *.db
 data/*.db
+
+# Backup files
+备份文件/

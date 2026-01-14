@@ -26,6 +26,17 @@
     --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
     --shadow-base: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
     --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+    
+    /* 字体大小变量 */
+    --font-size-xs: 0.75rem;    /* 12px */
+    --font-size-sm: 0.875rem;   /* 14px */
+    --font-size-base: 1rem;     /* 16px */
+    --font-size-lg: 1.125rem;   /* 18px */
+    --font-size-xl: 1.25rem;    /* 20px */
+    --font-size-2xl: 1.5rem;    /* 24px */
+    --font-size-3xl: 1.875rem;  /* 30px */
+    --font-size-4xl: 2.25rem;   /* 36px */
+    --font-size-5xl: 3rem;      /* 48px */
 }
 
 body {
@@ -36,6 +47,90 @@ body {
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     font-weight: 400; /* MiSans 默认字重 */
+    font-size: var(--font-size-base);
+}
+
+/* 标题字体大小调整 */
+h1 { font-size: var(--font-size-4xl); }
+h2 { font-size: var(--font-size-3xl); }
+h3 { font-size: var(--font-size-2xl); }
+h4 { font-size: var(--font-size-xl); }
+h5 { font-size: var(--font-size-lg); }
+h6 { font-size: var(--font-size-base); }
+
+/* 文本元素字体大小调整 */
+p { font-size: var(--font-size-base); }
+small { font-size: var(--font-size-sm); }
+.text-xs { font-size: var(--font-size-xs); }
+.text-sm { font-size: var(--font-size-sm); }
+.text-base { font-size: var(--font-size-base); }
+.text-lg { font-size: var(--font-size-lg); }
+.text-xl { font-size: var(--font-size-xl); }
+
+/* 响应式字体大小调整 */
+@media (max-width: 1199.98px) {
+    :root {
+        --font-size-xs: 0.725rem;    /* 11.6px */
+        --font-size-sm: 0.85rem;     /* 13.6px */
+        --font-size-base: 0.975rem;  /* 15.6px */
+        --font-size-lg: 1.1rem;      /* 17.6px */
+        --font-size-xl: 1.225rem;    /* 19.6px */
+        --font-size-2xl: 1.45rem;    /* 23.2px */
+        --font-size-3xl: 1.8rem;     /* 28.8px */
+        --font-size-4xl: 2.15rem;    /* 34.4px */
+        --font-size-5xl: 2.85rem;    /* 45.6px */
+    }
+}
+
+@media (max-width: 991.98px) {
+    :root {
+        --font-size-xs: 0.7rem;      /* 11.2px */
+        --font-size-sm: 0.825rem;    /* 13.2px */
+        --font-size-base: 0.95rem;    /* 15.2px */
+        --font-size-lg: 1.075rem;     /* 17.2px */
+        --font-size-xl: 1.2rem;       /* 19.2px */
+        --font-size-2xl: 1.4rem;      /* 22.4px */
+        --font-size-3xl: 1.75rem;     /* 28px */
+        --font-size-4xl: 2.1rem;      /* 33.6px */
+        --font-size-5xl: 2.8rem;      /* 44.8px */
+    }
+}
+
+@media (max-width: 767.98px) {
+    :root {
+        --font-size-xs: 0.675rem;     /* 10.8px */
+        --font-size-sm: 0.8rem;       /* 12.8px */
+        --font-size-base: 0.925rem;    /* 14.8px */
+        --font-size-lg: 1.05rem;      /* 16.8px */
+        --font-size-xl: 1.175rem;     /* 18.8px */
+        --font-size-2xl: 1.35rem;     /* 21.6px */
+        --font-size-3xl: 1.65rem;     /* 26.4px */
+        --font-size-4xl: 1.95rem;     /* 31.2px */
+        --font-size-5xl: 2.6rem;      /* 41.6px */
+    }
+}
+
+@media (max-width: 575.98px) {
+    :root {
+        --font-size-xs: 0.65rem;      /* 10.4px */
+        --font-size-sm: 0.775rem;     /* 12.4px */
+        --font-size-base: 0.9rem;     /* 14.4px */
+        --font-size-lg: 1.025rem;     /* 16.4px */
+        --font-size-xl: 1.15rem;      /* 18.4px */
+        --font-size-2xl: 1.3rem;      /* 20.8px */
+        --font-size-3xl: 1.55rem;     /* 24.8px */
+        --font-size-4xl: 1.85rem;     /* 29.6px */
+        --font-size-5xl: 2.4rem;      /* 38.4px */
+    }
+    
+    /* 进一步调整小屏幕上的行高，提高可读性 */
+    body {
+        line-height: 1.5;
+    }
+    
+    h1, h2, h3, h4, h5, h6 {
+        line-height: 1.3;
+    }
 }
 
 .container, .container-fluid {
@@ -63,6 +158,10 @@ h6 { font-size: 1rem; }
     font-weight: 600; /* 品牌文字加粗 */
     font-size: 1.25rem;
     color: #ffffff !important;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 70%;
 }
 .navbar-dark .navbar-nav .nav-link {
     color: rgba(255, 255, 255, 0.85);
@@ -83,9 +182,62 @@ h6 { font-size: 1rem; }
 }
 .navbar-toggler {
     border-color: rgba(255, 255, 255, 0.2);
+    padding: 0.75rem;
+    min-height: 48px;
+    min-width: 48px;
 }
 .navbar-toggler-icon {
     background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 30 30'%3e%3cpath stroke='rgba%28255, 255, 255, 0.85%29' stroke-linecap='round' stroke-miterlimit='10' stroke-width='2' d='M4 7h22M4 15h22M4 23h22'/%3e%3c/svg%3e");
+}
+
+/* 移动导航菜单优化 */
+@media (max-width: 991.98px) {
+    .navbar-brand {
+        font-size: 1.1rem;
+        max-width: 60%;
+    }
+    
+    .navbar-collapse {
+        margin-top: 0.5rem;
+        background-color: rgba(58, 134, 255, 0.95);
+        border-radius: var(--border-radius-base);
+        padding: 0.5rem;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    }
+    
+    .navbar-dark .navbar-nav .nav-link {
+        padding: 0.75rem 1rem;
+        margin-bottom: 0.25rem;
+        border-radius: var(--border-radius-base);
+        display: block;
+    }
+    
+    .navbar-dark .navbar-nav .nav-link:last-child {
+        margin-bottom: 0;
+    }
+}
+
+/* 小屏幕导航菜单进一步优化 */
+@media (max-width: 575.98px) {
+    .navbar-brand {
+        font-size: 1rem;
+        max-width: 55%;
+    }
+    
+    .navbar {
+        padding-top: 0.5rem;
+        padding-bottom: 0.5rem;
+    }
+    
+    .navbar-collapse {
+        margin-top: 0.25rem;
+        padding: 0.25rem;
+    }
+    
+    .navbar-dark .navbar-nav .nav-link {
+        padding: 0.6rem 0.8rem;
+        font-size: 0.95rem;
+    }
 }
 
 /* --- Cards --- */
@@ -417,4 +569,420 @@ h6 { font-size: 1rem; }
     background-color: #FFFBEB;
     color: #B45309;
     border-color: #FEF3C7;
+}
+
+
+/* --- 触摸目标大小调整 --- */
+
+/* 确保所有可点击元素符合无障碍标准 (至少 48x48 像素) */
+.btn,
+.nav-link,
+.form-control,
+.form-select,
+.favorite-btn,
+.badge,
+.calendar-day,
+.weekday-btn,
+.trade-detail-item,
+.feature-item,
+.placeholder-action,
+.progress-stage,
+.status-indicator {
+    min-height: 44px;
+    min-width: 44px;
+    padding: 0.5rem;
+}
+
+/* 调整按钮触摸目标 */
+.btn {
+    min-height: 44px;
+    min-width: 44px;
+    padding: 0.5rem 1rem;
+}
+
+/* 调整导航链接触摸目标 */
+.nav-link {
+    min-height: 44px;
+    min-width: 44px;
+    padding: 0.5rem 1rem;
+    display: inline-flex;
+    align-items: center;
+}
+
+/* 调整表单控件触摸目标 */
+.form-control,
+.form-select {
+    min-height: 44px;
+    padding: 0.5rem 0.75rem;
+}
+
+/* 调整收藏按钮触摸目标 */
+.favorite-btn {
+    min-height: 44px;
+    min-width: 44px;
+    padding: 0.5rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* 调整徽章触摸目标 */
+.badge {
+    min-height: 32px;
+    min-width: 32px;
+    padding: 0.4em 0.7em;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* 调整日历天触摸目标 */
+.calendar-day {
+    min-height: 60px;
+    min-width: 60px;
+    padding: 0.5rem;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+
+/* 调整星期按钮触摸目标 */
+.weekday-btn {
+    min-height: 44px;
+    min-width: 44px;
+    padding: 0.5rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* 调整交易详情项触摸目标 */
+.trade-detail-item {
+    min-height: 44px;
+    padding: 0.5rem;
+    display: flex;
+    align-items: center;
+}
+
+/* 调整功能项触摸目标 */
+.feature-item {
+    min-height: 44px;
+    padding: 0.5rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+}
+
+/* 调整占位符操作触摸目标 */
+.placeholder-action {
+    min-height: 44px;
+    padding: 0.5rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* 调整进度阶段触摸目标 */
+.progress-stage {
+    min-height: 44px;
+    min-width: 44px;
+    padding: 0.5rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+}
+
+/* 调整状态指示器触摸目标 */
+.status-indicator {
+    min-height: 44px;
+    min-width: 44px;
+    padding: 0.5rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* --- 响应式数据显示优化 --- */
+
+/* 表格响应式优化 */
+.table-responsive {
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    margin-bottom: 1rem;
+}
+
+/* 确保表格在小屏幕上可以水平滚动 */
+@media (max-width: 767.98px) {
+    .table-responsive {
+        border: 1px solid var(--border-color);
+        border-radius: var(--border-radius-base);
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    }
+    
+    /* 调整表格字体大小 */
+    .table {
+        font-size: 0.85rem;
+    }
+    
+    /* 调整表格单元格填充 */
+    .table thead th,
+    .table tbody td {
+        padding: 0.5rem 0.75rem;
+    }
+}
+
+/* 小屏幕表格进一步优化 */
+@media (max-width: 575.98px) {
+    .table {
+        font-size: 0.8rem;
+    }
+    
+    .table thead th,
+    .table tbody td {
+        padding: 0.4rem 0.6rem;
+    }
+    
+    /* 隐藏某些不重要的列 */
+    .table .d-none-sm {
+        display: none;
+    }
+}
+
+/* 图表响应式优化 */
+.chart-container {
+    position: relative;
+    height: 300px;
+    width: 100%;
+    max-width: 100%;
+}
+
+@media (max-width: 767.98px) {
+    .chart-container {
+        height: 250px;
+    }
+}
+
+@media (max-width: 575.98px) {
+    .chart-container {
+        height: 200px;
+    }
+    
+    /* 调整图表标题大小 */
+    .chart-title {
+        font-size: 1rem;
+        margin-bottom: 0.5rem;
+    }
+}
+
+/* 交易卡片响应式优化 */
+.trade-card {
+    transition: all 0.3s ease;
+}
+
+@media (max-width: 767.98px) {
+    .trade-card {
+        margin-bottom: 16px;
+    }
+    
+    .trade-card .card-header {
+        padding: 0.75rem 1rem;
+    }
+    
+    .trade-card .card-body {
+        padding: 1rem;
+    }
+    
+    .trade-detail-item {
+        flex-direction: column;
+        align-items: flex-start;
+        text-align: left;
+        margin-bottom: 0.5rem;
+    }
+    
+    .trade-detail-label {
+        margin-bottom: 0.25rem;
+    }
+}
+
+/* 统计卡片响应式优化 */
+@media (max-width: 767.98px) {
+    .stat-card {
+        margin-bottom: 16px;
+    }
+    
+    .stat-card .card-body {
+        padding: 1rem;
+    }
+    
+    .stat-value {
+        font-size: 1.5rem;
+    }
+    
+    .stat-label {
+        font-size: 0.9rem;
+    }
+}
+
+/* --- 响应式设计媒体查询 --- */
+
+/* 小屏幕设备 (手机, 小于 576px) */
+@media (max-width: 575.98px) {
+    /* 基础样式调整 */
+    body {
+        font-size: 0.9rem;
+    }
+    
+    h1 { font-size: 1.8rem; }
+    h2 { font-size: 1.6rem; }
+    h3 { font-size: 1.4rem; }
+    h4 { font-size: 1.2rem; }
+    h5 { font-size: 1.1rem; }
+    h6 { font-size: 1rem; }
+    
+    /* 容器调整 */
+    .container {
+        padding-left: 10px;
+        padding-right: 10px;
+    }
+    
+    /* 卡片调整 */
+    .card {
+        margin-bottom: 16px;
+    }
+    
+    .card-header {
+        padding: 0.75rem 1rem;
+    }
+    
+    .card-body {
+        padding: 1rem;
+    }
+    
+    /* 按钮调整 */
+    .btn {
+        padding: 0.6rem 1rem;
+        font-size: 0.9rem;
+    }
+    
+    /* 表单调整 */
+    .form-control, .form-select {
+        padding: 0.6rem 0.85rem;
+    }
+    
+    /* 导航调整 */
+    .navbar {
+        padding-top: 0.5rem;
+        padding-bottom: 0.5rem;
+    }
+    
+    .navbar-brand {
+        font-size: 1.1rem;
+    }
+    
+    /* 表格调整 */
+    .table {
+        font-size: 0.8rem;
+    }
+    
+    .table thead th {
+        padding: 0.6rem 0.8rem;
+    }
+    
+    .table tbody td {
+        padding: 0.6rem 0.8rem;
+    }
+    
+    /* 数据卡片调整 */
+    .trade-card {
+        margin-bottom: 16px;
+    }
+    
+    /* 触摸目标调整 */
+    .btn, .nav-link, .form-control, .form-select, .favorite-btn {
+        min-height: 44px;
+    }
+    
+    /* 筛选器调整 */
+    .time-filter-group {
+        flex-direction: column;
+        gap: 8px;
+    }
+    
+    .time-input-wrapper {
+        width: 100%;
+    }
+    
+    /* 日历调整 */
+    .calendar-grid {
+        font-size: 0.8rem;
+    }
+    
+    .calendar-day {
+        min-height: 60px;
+        padding: 4px;
+    }
+}
+
+/* 中等屏幕设备 (平板, 576px 到 767.98px) */
+@media (min-width: 576px) and (max-width: 767.98px) {
+    /* 基础样式调整 */
+    body {
+        font-size: 0.95rem;
+    }
+    
+    /* 容器调整 */
+    .container {
+        padding-left: 15px;
+        padding-right: 15px;
+    }
+    
+    /* 卡片调整 */
+    .card {
+        margin-bottom: 20px;
+    }
+    
+    /* 表格调整 */
+    .table {
+        font-size: 0.85rem;
+    }
+    
+    /* 数据卡片调整 */
+    .trade-card {
+        margin-bottom: 20px;
+    }
+}
+
+/* 大屏幕设备 (桌面, 768px 及以上) */
+@media (min-width: 768px) {
+    /* 基础样式调整 */
+    body {
+        font-size: 1rem;
+    }
+    
+    /* 导航调整 */
+    .navbar {
+        padding-top: 0.75rem;
+        padding-bottom: 0.75rem;
+    }
+    
+    /* 数据卡片调整 */
+    .trade-card {
+        margin-bottom: 24px;
+    }
+}
+
+/* 超大屏幕设备 (大屏桌面, 1200px 及以上) */
+@media (min-width: 1200px) {
+    /* 容器最大宽度调整 */
+    .container {
+        max-width: 1140px;
+    }
+    
+    /* 字体大小调整 */
+    body {
+        font-size: 1.05rem;
+    }
 }

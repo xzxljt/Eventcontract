@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>模型预测系统</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
+    <link rel="stylesheet" href="/static/css/shared-styles.css">
+    <link rel="stylesheet" href="/static/css/model-prediction-styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        .model-card {
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+        .model-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 20px rgba(0,0,0,0.1);
+        }
+        .stat-card {
+            border-radius: 8px;
+            padding: 15px;
+            margin: 10px 0;
+            background: #f8f9fa;
+            border-left: 4px solid #0d6efd;
+        }
+        .stat-value {
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: #0d6efd;
+        }
+        .stat-label {
+            font-size: 0.9rem;
+            color: #6c757d;
+        }
+        .chart-container {
+            position: relative;
+            height: 300px;
+            width: 100%;
+        }
+        .feature-importance-bar {
+            height: 20px;
+            margin: 5px 0;
+            border-radius: 10px;
+            background: linear-gradient(90deg, #0d6efd, #60a5fa);
+            transition: width 1s ease-in-out;
+        }
+        .model-status-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 5px;
+        }
+        .status-ready {
+            background-color: #28a745;
+        }
+        .status-training {
+            background-color: #ffc107;
+        }
+        .status-error {
+            background-color: #dc3545;
+        }
+    </style>
+</head>
+<body>
+    <div id="navbar-container"></div>
+    
+    <div class="container mt-4">
+        <h1 class="mb-4">模型预测系统</h1>
+        
+        <!-- 模型状态概览 -->
+        <div class="row mb-4">
+            <div class="col-md-4">
+                <div class="card model-card">
+                    <div class="card-header bg-info text-white">
+                        <h5 class="mb-0">模型状态</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="mb-3">
+                            <span class="fw-bold">当前状态:</span>
+                            <span id="model-status" class="ms-2">
+                                <span class="model-status-indicator status-ready"></span>就绪
+                            </span>
+                        </div>
+                        <div class="mb-3">
+                            <span class="fw-bold">模型类型:</span>
+                            <span id="current-model-type" class="ms-2">-</span>
+                        </div>
+                        <div class="mb-3">
+                            <span class="fw-bold">最后训练时间:</span>
+                            <span id="last-training-time" class="ms-2">-</span>
+                        </div>
+                        <div class="mb-3">
+                            <span class="fw-bold">模型性能:</span>
+                            <span id="model-performance" class="ms-2">-</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="col-md-4">
+                <div class="card model-card">
+                    <div class="card-header bg-success text-white">
+                        <h5 class="mb-0">市场状态</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="mb-3">
+                            <span class="fw-bold">市场趋势:</span>
+                            <span id="market-trend" class="ms-2">-</span>
+                        </div>
+                        <div class="mb-3">
+                            <span class="fw-bold">波动性:</span>
+                            <span id="market-volatility" class="ms-2">-</span>
+                        </div>
+                        <div class="mb-3">
+                            <span class="fw-bold">交易量:</span>
+                            <span id="market-volume" class="ms-2">-</span>
+                        </div>
+                        <div class="mb-3">
+                            <span class="fw-bold">市场信号:</span>
+                            <span id="market-signal" class="ms-2">-</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="col-md-4">
+                <div class="card model-card">
+                    <div class="card-header bg-warning text-white">
+                        <h5 class="mb-0">策略状态</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="mb-3">
+                            <span class="fw-bold">当前策略:</span>
+                            <span id="current-strategy" class="ms-2">-</span>
+                        </div>
+                        <div class="mb-3">
+                            <span class="fw-bold">策略调整:</span>
+                            <span id="strategy-adjustment" class="ms-2">-</span>
+                        </div>
+                        <div class="mb-3">
+                            <span class="fw-bold">模型一致性:</span>
+                            <span id="model-consistency" class="ms-2">-</span>
+                        </div>
+                        <div class="mb-3">
+                            <span class="fw-bold">预测置信度:</span>
+                            <span id="prediction-confidence" class="ms-2">-</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="row">
+            <!-- 左侧配置区域 -->
+            <div class="col-lg-4 col-md-12">
+                <!-- 模型配置 -->
+                <div class="card model-card">
+                    <div class="card-header bg-primary text-white">
+                        <h5 class="mb-0">模型配置</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="mb-3">
+                            <label for="model-system" class="form-label">模型系统</label>
+                            <select id="model-system" class="form-select">
+                                <option value="single">单个模型</option>
+                                <option value="ensemble" selected>集成模型</option>
+                            </select>
+                        </div>
+                        
+                        <!-- 单个模型配置 -->
+                        <div id="single-model-config" class="mb-3">
+                            <label for="single-model-type" class="form-label">模型类型</label>
+                            <select id="single-model-type" class="form-select">
+                                <option value="random_forest">随机森林</option>
+                                <option value="linear_regression">线性回归</option>
+                                <option value="ridge">岭回归</option>
+                                <option value="svr">支持向量回归</option>
+                                <option value="xgboost">XGBoost</option>
+                            </select>
+                        </div>
+                        
+                        <!-- 集成模型配置 -->
+                        <div id="ensemble-model-config" class="mb-3">
+                            <label for="model-count" class="form-label">模型数量</label>
+                            <input type="number" id="model-count" class="form-control" value="2" min="1" max="5">
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label class="form-label">集成模型类型</label>
+                            <div class="row">
+                                <div class="col-6">
+                                    <div class="form-check">
+                                        <input type="checkbox" id="include-rf" class="form-check-input" checked>
+                                        <label for="include-rf" class="form-check-label">随机森林</label>
+                                    </div>
+                                </div>
+                                <div class="col-6">
+                                    <div class="form-check">
+                                        <input type="checkbox" id="include-xgb" class="form-check-input" checked>
+                                        <label for="include-xgb" class="form-check-label">XGBoost</label>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 数据预处理配置 -->
+                <div class="card model-card mt-4">
+                    <div class="card-header bg-primary text-white">
+                        <h5 class="mb-0">数据预处理</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="mb-3">
+                            <label for="scaler-type" class="form-label">数据缩放器</label>
+                            <select id="scaler-type" class="form-select">
+                                <option value="standard">StandardScaler</option>
+                                <option value="minmax">MinMaxScaler</option>
+                                <option value="robust">RobustScaler</option>
+                            </select>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <div class="form-check">
+                                <input type="checkbox" id="feature-selection" class="form-check-input">
+                                <label for="feature-selection" class="form-check-label">特征选择</label>
+                            </div>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="n-features" class="form-label">特征数量</label>
+                            <input type="number" id="n-features" class="form-control" value="10" min="1">
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 策略配置 -->
+                <div class="card model-card mt-4">
+                    <div class="card-header bg-primary text-white">
+                        <h5 class="mb-0">策略配置</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="mb-3">
+                            <label for="strategy-mode" class="form-label">策略模式</label>
+                            <select id="strategy-mode" class="form-select">
+                                <option value="conservative">保守型</option>
+                                <option value="balanced" selected>平衡型</option>
+                                <option value="aggressive">激进型</option>
+                            </select>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <div class="form-check">
+                                <input type="checkbox" id="adaptive-strategy" class="form-check-input" checked>
+                                <label for="adaptive-strategy" class="form-check-label">自适应策略调整</label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 操作按钮 -->
+                <div class="card model-card mt-4">
+                    <div class="card-body">
+                        <div class="d-grid gap-2">
+                            <button id="start-training" class="btn btn-primary btn-lg">
+                                <i class="bi bi-play-fill me-1"></i> 开始训练
+                            </button>
+                            <button id="stop-training" class="btn btn-danger">
+                                <i class="bi bi-stop-fill me-1"></i> 停止训练
+                            </button>
+                            <button id="run-prediction" class="btn btn-success btn-lg">
+                                <i class="bi bi-graph-up me-1"></i> 运行预测
+                            </button>
+                            <button id="clear-cache" class="btn btn-warning">
+                                <i class="bi bi-trash-fill me-1"></i> 清除缓存
+                            </button>
+                            <button id="load-model" class="btn btn-info">
+                                <i class="bi bi-download me-1"></i> 加载模型
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 右侧结果区域 -->
+            <div class="col-lg-8 col-md-12">
+                <!-- 训练状态 -->
+                <div class="card model-card">
+                    <div class="card-header bg-primary text-white">
+                        <h5 class="mb-0">训练状态</h5>
+                    </div>
+                    <div class="card-body">
+                        <div id="training-status">
+                            <div class="row mb-3">
+                                <div class="col-md-4 col-sm-12 mb-2">
+                                    <span class="fw-bold">状态:</span>
+                                    <span id="training-status-text" class="ms-2">就绪</span>
+                                </div>
+                                <div class="col-md-4 col-sm-12 mb-2">
+                                    <span class="fw-bold">当前阶段:</span>
+                                    <span id="current-stage" class="ms-2">-</span>
+                                </div>
+                                <div class="col-md-4 col-sm-12">
+                                    <span class="fw-bold">预计剩余时间:</span>
+                                    <span id="estimated-time" class="ms-2">-</span>
+                                </div>
+                            </div>
+                            <div class="mb-3">
+                                <span class="fw-bold">进度:</span>
+                                <div class="progress mt-2">
+                                    <div id="progress-fill" class="progress-bar bg-success" role="progressbar" style="width: 0%" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
+                                        <span id="progress-percent">0%</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="mt-3">
+                                <span class="fw-bold">训练日志:</span>
+                                <div id="training-log" class="mt-2 p-3 bg-light rounded border" style="max-height: 200px; overflow-y: auto;">
+                                    <p>训练日志将显示在这里...</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 预测结果 -->
+                <div class="card model-card mt-4">
+                    <div class="card-header bg-primary text-white">
+                        <h5 class="mb-0">预测结果</h5>
+                    </div>
+                    <div class="card-body">
+                        <div id="prediction-results">
+                            <div class="text-center text-muted py-5">
+                                <i class="bi bi-graph-up-arrow display-4 mb-3"></i>
+                                <h4>开始您的模型预测</h4>
+                                <p>点击"运行预测"按钮查看预测结果</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 可视化 -->
+                <div class="card model-card mt-4">
+                    <div class="card-header bg-primary text-white">
+                        <h5 class="mb-0">可视化分析</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-md-6">
+                                <h6>预测与实际对比</h6>
+                                <div class="chart-container">
+                                    <canvas id="prediction-chart"></canvas>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <h6>模型性能对比</h6>
+                                <div class="chart-container">
+                                    <canvas id="performance-chart"></canvas>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 特征重要性 -->
+                <div class="card model-card mt-4">
+                    <div class="card-header bg-primary text-white">
+                        <h5 class="mb-0">特征重要性</h5>
+                    </div>
+                    <div class="card-body">
+                        <div id="feature-importance" class="mt-2">
+                            <div class="text-center text-muted py-3">
+                                <p>特征重要性将显示在这里...</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script src="/static/js/load-navbar.js"></script>
+    <script src="/static/js/model-prediction-scripts.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            loadNavbar('navbar-container', '/templates/navbar.html');
+            
+            // 初始化模型状态
+            updateModelStatus();
+            
+            // 模型系统选择事件
+            document.getElementById('model-system').addEventListener('change', function() {
+                const system = this.value;
+                if (system === 'single') {
+                    document.getElementById('single-model-config').style.display = 'block';
+                    document.getElementById('ensemble-model-config').style.display = 'none';
+                } else {
+                    document.getElementById('single-model-config').style.display = 'none';
+                    document.getElementById('ensemble-model-config').style.display = 'block';
+                }
+            });
+        });
+        
+        function updateModelStatus() {
+            // 模拟获取模型状态
+            document.getElementById('current-model-type').textContent = '集成模型 (随机森林, XGBoost)';
+            document.getElementById('last-training-time').textContent = '2026-01-14 18:00:00';
+            document.getElementById('model-performance').textContent = 'MSE: 0.0012, R²: 0.985';
+            
+            // 模拟市场状态
+            document.getElementById('market-trend').textContent = '上升趋势';
+            document.getElementById('market-volatility').textContent = '低';
+            document.getElementById('market-volume').textContent = '正常';
+            document.getElementById('market-signal').textContent = '买入信号';
+            
+            // 模拟策略状态
+            document.getElementById('current-strategy').textContent = '平衡型';
+            document.getElementById('strategy-adjustment').textContent = '自适应开启';
+            document.getElementById('model-consistency').textContent = '高 (0.85)';
+            document.getElementById('prediction-confidence').textContent = '中等 (0.72)';
+        }
+    </script>
+</body>
+</html>

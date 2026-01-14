@@ -9,3 +9,6 @@ uvicorn[standard]
 pandas-ta
 websockets
 aiosqlite
+scikit-learn
+xgboost
+joblib
