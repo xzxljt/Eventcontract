@@ -72,7 +72,10 @@ class SmartEnsembleVoter:
         if not all_predictions:
             return None, 0.0, "无预测", {}, {}
         
-        weights = self.calculate_adaptive_weights(all_predictions, market_conditions)
+        if self.adaptive_weights:
+            weights = self.calculate_adaptive_weights(all_predictions, market_conditions)
+        else:
+            weights = {name: min(conf, 1.0) for name, _, conf in all_predictions}
         
         up_weight = 0.0
         down_weight = 0.0
