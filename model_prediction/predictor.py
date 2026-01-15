@@ -29,6 +29,7 @@ class Predictor:
         self.model_types = []
         self.model_count = 1
         self.model_path = self.params.get('model_path', 'model_prediction/models/model.joblib')
+        self.preprocessor_path = None
         self.metrics = {}
         self.last_trained = None
         
@@ -50,6 +51,8 @@ class Predictor:
             # 验证模型类型
             if self.model_type not in self.SUPPORTED_MODEL_TYPES:
                 raise ValueError(f"Unsupported model type: {self.model_type}. Supported types are: {self.SUPPORTED_MODEL_TYPES}")
+
+        self.preprocessor_path = self.params.get('preprocessor_path') or self._resolve_preprocessor_path(self.model_path)
         
         # 初始化智能投票系统
         self.smart_voter = SmartEnsembleVoter()
@@ -68,6 +71,16 @@ class Predictor:
         
         # 尝试自动加载已保存的模型
         self._auto_load_model()
+
+    def _resolve_preprocessor_path(self, model_path: str) -> str:
+        """解析预处理器保存路径"""
+        if model_path.endswith('.joblib'):
+            base_dir = os.path.dirname(model_path)
+        else:
+            base_dir = model_path
+        if not base_dir:
+            base_dir = '.'
+        return os.path.join(base_dir, 'preprocessor.joblib')
     
     def _validate_model_types(self):
         """验证模型类型是否支持"""
@@ -89,6 +102,34 @@ class Predictor:
         except Exception as e:
             # 加载失败不影响系统启动，只是记录错误
             pass
+
+    def _save_preprocessor(self):
+        """保存预处理器"""
+        if not self.preprocessor_path:
+            self.preprocessor_path = self._resolve_preprocessor_path(self.model_path)
+        dir_path = os.path.dirname(self.preprocessor_path)
+        if dir_path:
+            os.makedirs(dir_path, exist_ok=True)
+        self.data_preprocessor.save_preprocessor(self.preprocessor_path)
+
+    def _load_preprocessor(self):
+        """加载预处理器"""
+        if not self.preprocessor_path:
+            self.preprocessor_path = self._resolve_preprocessor_path(self.model_path)
+        if os.path.exists(self.preprocessor_path):
+            self.data_preprocessor.load_preprocessor(self.preprocessor_path)
+            self.feature_names = self.data_preprocessor.feature_names or []
+        else:
+            self._sync_feature_names_from_models()
+
+    def _sync_feature_names_from_models(self):
+        """从已加载模型同步特征名"""
+        if not self.models:
+            return
+        model_feature_names = self.models[0].feature_names
+        if model_feature_names:
+            self.feature_names = list(model_feature_names)
+            self.data_preprocessor.feature_names = list(model_feature_names)
     
     @classmethod
     def has_saved_models(cls):
@@ -117,6 +158,7 @@ class Predictor:
         
         X_preprocessed = self.data_preprocessor.preprocess_data(X, is_training=True, target_series=y)
         self.feature_names = list(X_preprocessed.columns)
+        self._save_preprocessor()
         
         if self.use_ensemble:
             # 集成模型训练
@@ -393,6 +435,7 @@ class Predictor:
             model.load_model(load_path)
             self.models = [model]
             self.metrics = model.metrics
+            self._load_preprocessor()
     
     def save_model(self, model_path: Optional[str] = None):
         """保存模型"""
@@ -402,6 +445,7 @@ class Predictor:
             save_path = model_path or self.model_path
             if self.models:
                 self.models[0].save_model(save_path)
+                self._save_preprocessor()
     
     def load_models(self, path: Optional[str] = None):
         """加载集成模型"""
@@ -420,6 +464,7 @@ class Predictor:
                 self.models.append(model)
             else:
                 break
+        self._load_preprocessor()
     
     def save_models(self, path: Optional[str] = None):
         """保存集成模型"""
@@ -430,6 +475,7 @@ class Predictor:
             model_type = self.model_types[i % len(self.model_types)]
             model_save_path = os.path.join(save_path, f'{model_type}_{i}.joblib')
             model.save_model(model_save_path)
+        self._save_preprocessor()
     
     def _generate_cache_key(self, df: pd.DataFrame) -> str:
         if df.empty:
@@ -500,6 +546,9 @@ class Predictor:
                 # 验证模型类型
                 if self.model_type not in self.SUPPORTED_MODEL_TYPES:
                     raise ValueError(f"Unsupported model type: {self.model_type}. Supported types are: {self.SUPPORTED_MODEL_TYPES}")
+
+        if 'preprocessor_path' in params or 'model_path' in params or 'model_count' in params or 'model_types' in params:
+            self.preprocessor_path = self.params.get('preprocessor_path') or self._resolve_preprocessor_path(self.model_path)
     
     def clear_cache(self):
         self.cache.clear()
