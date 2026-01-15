@@ -58,3 +58,6 @@ data/*.db
 
 # Backup files
 备份文件/
+
+# Push notification configuration
+push_notification/config.json
