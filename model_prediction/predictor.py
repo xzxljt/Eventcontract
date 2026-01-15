@@ -30,13 +30,18 @@ class Predictor:
         self.model_count = 1
         self.model_path = self.params.get('model_path', 'model_prediction/models/model.joblib')
         self.metrics = {}
+        self.last_trained = None
         
         if model_count > 1 or ',' in model_types:
             # 使用集成模型
             self.use_ensemble = True
             self.model_types = model_types.split(',') if model_types else ['random_forest', 'xgboost']
             self._validate_model_types()
-            self.model_count = min(model_count, len(self.model_types))
+            # 确保model_types不为空
+            if not self.model_types:
+                self.model_types = ['random_forest', 'xgboost']
+            # 使用用户设置的模型数量
+            self.model_count = model_count
             self.model_path = self.params.get('model_path', 'model_prediction/models/ensemble/')
         else:
             # 使用单个模型
@@ -58,6 +63,7 @@ class Predictor:
         self.cache_enabled = self.params.get('enable_cache', True)
         self.cache_expiry = self.params.get('cache_expiry', 3600)
         self.cache = {}
+        self.cache_size_limit = self.params.get('cache_size_limit', 1000)  # 缓存大小限制
         self.feature_names = []
         
         # 尝试自动加载已保存的模型
@@ -83,6 +89,25 @@ class Predictor:
         except Exception as e:
             # 加载失败不影响系统启动，只是记录错误
             pass
+    
+    @classmethod
+    def has_saved_models(cls):
+        """检查是否有已保存的模型"""
+        try:
+            # 检查默认的单个模型路径
+            single_model_path = 'model_prediction/models/model.joblib'
+            if os.path.exists(single_model_path):
+                return True
+            
+            # 检查默认的集成模型目录
+            ensemble_model_path = 'model_prediction/models/ensemble/'
+            if os.path.exists(ensemble_model_path) and os.listdir(ensemble_model_path):
+                return True
+            
+            return False
+        except Exception as e:
+            # 检查失败不影响系统运行，返回False
+            return False
     
     def train(self, df: pd.DataFrame, target_column: str = 'close') -> Dict[str, Any]:
         # 移除目标列和生成的列，保持特征一致性
@@ -118,6 +143,9 @@ class Predictor:
         
         self.models = [model]
         self.metrics = model.metrics
+        self.last_trained = time.time()
+        # 在单个模型模式下设置model_types
+        self.model_types = [self.model_type]
         
         return {
             'mse': mse,
@@ -130,7 +158,12 @@ class Predictor:
         self.models = []
         model_metrics = {}
         
+        # 确保有模型类型可用
+        if not self.model_types:
+            self.model_types = ['random_forest', 'xgboost']
+        
         for i in range(self.model_count):
+            # 循环使用可用的模型类型
             model_type = self.model_types[i % len(self.model_types)]
             model_params = self._get_model_params(model_type)
             
@@ -143,10 +176,18 @@ class Predictor:
             model.feature_names = self.feature_names
             mse = model.train(X, y)
             
-            model_metrics[model_type] = {
-                'mse': mse,
-                'metrics': model.metrics
-            }
+            # 累积模型指标
+            if model_type not in model_metrics:
+                model_metrics[model_type] = {
+                    'mse': mse,
+                    'metrics': model.metrics
+                }
+            else:
+                # 如果同一模型类型训练多次，使用最后一次的指标
+                model_metrics[model_type] = {
+                    'mse': mse,
+                    'metrics': model.metrics
+                }
             
             self.models.append(model)
         
@@ -158,6 +199,10 @@ class Predictor:
         
         # 获取特征重要性
         feature_importance = self.get_feature_importance()
+        
+        # 确保更新训练时间
+        self.last_trained = time.time()
+        print(f"DEBUG: 训练完成，更新last_trained为: {self.last_trained}")
         
         return {
             'ensemble_result': {
@@ -258,6 +303,12 @@ class Predictor:
         result = self.strategy_adjuster.adjust_prediction_based_on_strategy(result)
         
         if self.cache_enabled:
+            # 缓存大小管理
+            if len(self.cache) >= self.cache_size_limit:
+                # 删除最旧的缓存项
+                oldest_key = min(self.cache.keys(), key=lambda k: self.cache[k]['timestamp'])
+                del self.cache[oldest_key]
+            
             self.cache[cache_key] = {
                 'result': result,
                 'timestamp': time.time()

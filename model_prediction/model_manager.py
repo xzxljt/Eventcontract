@@ -27,9 +27,10 @@ class ModelManager:
     def _initialize_model(self):
         if self.model_type == 'random_forest':
             self.model = RandomForestRegressor(
-                n_estimators=self.params.get('n_estimators', 100),
-                max_depth=self.params.get('max_depth', None),
-                min_samples_split=self.params.get('min_samples_split', 2),
+                n_estimators=self.params.get('n_estimators', 50),  # 减少树的数量以提高速度
+                max_depth=self.params.get('max_depth', 10),  # 设置最大深度以避免过拟合
+                min_samples_split=self.params.get('min_samples_split', 5),  # 增加最小样本分割以提高速度
+                n_jobs=self.params.get('n_jobs', -1),  # 使用所有CPU核心
                 random_state=self.params.get('random_state', 42)
             )
         elif self.model_type == 'linear_regression':
@@ -44,10 +45,13 @@ class ModelManager:
             )
         elif self.model_type == 'xgboost':
             self.model = XGBRegressor(
-                n_estimators=self.params.get('n_estimators', 100),
-                max_depth=self.params.get('max_depth', 3),
+                n_estimators=self.params.get('n_estimators', 50),  # 减少树的数量以提高速度
+                max_depth=self.params.get('max_depth', 5),  # 设置适当的最大深度
                 learning_rate=self.params.get('learning_rate', 0.1),
-                random_state=self.params.get('random_state', 42)
+                n_jobs=self.params.get('n_jobs', -1),  # 使用所有CPU核心
+                random_state=self.params.get('random_state', 42),
+                tree_method='hist',  # 使用直方图方法提高速度
+                enable_categorical=False  # 禁用分类特征以提高速度
             )
     
     def train(self, X: pd.DataFrame, y: pd.Series) -> float:

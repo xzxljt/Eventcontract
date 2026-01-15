@@ -87,7 +87,7 @@ listener = logging.handlers.QueueListener(log_queue, file_handler, stream_handle
 
 # 5. 配置根 logger
 root_logger = logging.getLogger()
-root_logger.setLevel(logging.INFO)
+root_logger.setLevel(logging.WARNING)  # 修改为WARNING级别，只显示重要的日志
 # 移除所有现有的 handlers，以防万一
 for handler in root_logger.handlers[:]:
     root_logger.removeHandler(handler)
@@ -2488,7 +2488,13 @@ async def run_prediction(request: Dict[str, Any]):
     try:
         global model_predictor
         if not model_predictor:
-            model_predictor = Predictor()
+            # 构建predictor参数
+            predictor_params = {
+                'model_count': request.get('model_count', 1),
+                'model_types': request.get('model_types', ''),
+                'model_params': request.get('model_params', {})
+            }
+            model_predictor = Predictor(predictor_params)
         
         # 模拟预测数据
         import pandas as pd
@@ -2553,6 +2559,49 @@ async def get_prediction_results():
     except Exception as e:
         logger.error(f"获取预测结果列表失败: {e}", exc_info=True)
         return {"success": False, "message": str(e)}
+
+# 获取预测状态
+@app.get("/api/prediction/status")
+async def get_prediction_status():
+    """获取模型预测状态"""
+    try:
+        global model_predictor
+        
+        # 检查预测器是否初始化
+        if not model_predictor:
+            return {
+                "status": "success",
+                "model_count": 0,
+                "is_trained": False,
+                "last_trained": None,
+                "model_types": []
+            }
+        
+        # 获取模型信息
+        if hasattr(model_predictor, 'use_ensemble') and model_predictor.use_ensemble:
+            # 对于集成模型，使用配置的模型数量
+            model_count = getattr(model_predictor, 'model_count', 0)
+        else:
+            # 对于单个模型，使用实际模型数量
+            model_count = len(model_predictor.models) if hasattr(model_predictor, 'models') else 0
+        
+        is_trained = model_count > 0
+        last_trained = getattr(model_predictor, 'last_trained', None)
+        model_types = getattr(model_predictor, 'model_types', []) if hasattr(model_predictor, 'model_types') else []
+        
+        return {
+            "status": "success",
+            "model_count": model_count,
+            "is_trained": is_trained,
+            "last_trained": last_trained,
+            "model_types": model_types
+        }
+    except Exception as e:
+        logger.error(f"获取预测状态失败: {e}", exc_info=True)
+        return {
+            "status": "error",
+            "message": str(e)
+        }
 
 # --- WebSocket 端点 for AutoX Clients (/ws/autox_control) (确保保存操作是异步的) ---
 @app.websocket("/ws/autox_control")

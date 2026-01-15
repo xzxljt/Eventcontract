@@ -70,7 +70,13 @@ class Backtester:
         self.results = None
         self.period_minutes = self._convert_period_to_minutes(event_period)
         self.df_with_indicators = None # 将在此处存储带有全局指标的DataFrame
-        self.binance_client = get_market_client() # 初始化行情客户端
+        
+        # 尝试初始化行情客户端，但如果失败也不影响回测
+        try:
+            self.binance_client = get_market_client() # 初始化行情客户端
+        except Exception as e:
+            print(f"警告: 无法初始化行情客户端: {e}，将使用提供的数据进行回测")
+            self.binance_client = None
 
         # 任务管理相关
         self.task_id = task_id
@@ -116,17 +122,22 @@ class Backtester:
         if self.df_index_price is None:
             logger.info("No pre-loaded index price data found, fetching from client...")
             try:
-                # 假设self.df的索引是回测的完整时间范围
-                start_time_ms = int(self.df.index.min().timestamp() * 1000)
-                end_time_ms = int((self.df.index.max() + timedelta(minutes=self.period_minutes)).timestamp() * 1000)
-                df_index_price = self.binance_client.get_index_price_klines(
-                    symbol=self.symbol,
-                    interval=self.interval,
-                    start_time=start_time_ms,
-                    end_time=end_time_ms
-                )
-                if df_index_price.empty:
-                    raise ValueError("未能获取到回测时间范围内的指数价格数据。")
+                if self.binance_client is None:
+                    # 如果没有行情客户端，使用K线数据作为指数价格数据
+                    logger.info("No binance client available, using kline data as index price data")
+                    df_index_price = self.df.copy()
+                else:
+                    # 假设self.df的索引是回测的完整时间范围
+                    start_time_ms = int(self.df.index.min().timestamp() * 1000)
+                    end_time_ms = int((self.df.index.max() + timedelta(minutes=self.period_minutes)).timestamp() * 1000)
+                    df_index_price = self.binance_client.get_index_price_klines(
+                        symbol=self.symbol,
+                        interval=self.interval,
+                        start_time=start_time_ms,
+                        end_time=end_time_ms
+                    )
+                    if df_index_price.empty:
+                        raise ValueError("未能获取到回测时间范围内的指数价格数据。")
                 # logger.info(f"[DEBUG] Backtester: 成功获取 {len(df_index_price)} 条指数价格K线。")
                 # logger.info(f"[DEBUG]   指数价格数据范围: {df_index_price.index.min()} to {df_index_price.index.max()}")
             except Exception as e_idx_price:
@@ -643,6 +654,10 @@ def run_single_backtest(df_kline: pd.DataFrame,
     
     strategy_class = strategy_info['class']
     strategy = strategy_class(params=strategy_params)
+    
+    # 设置优化模式标志
+    if hasattr(strategy, 'is_optimizing'):
+        strategy.is_optimizing = True
 
     # 2. 准备 Backtester 的配置
     # 将 backtest_config 和 strategy_params 合并到 backtester 的初始化参数中

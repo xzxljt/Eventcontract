@@ -595,11 +595,25 @@
                 },
 
                 async startOptimization() {
-                    this.fieldErrors = {};
-
                     // 验证表单
                     if (!this.validateForm()) {
-                        showToast('警告', '请检查表单输入', 'warning');
+                        // 收集所有错误信息
+                        const errorMessages = [];
+                        for (const [field, message] of Object.entries(this.fieldErrors)) {
+                            errorMessages.push(message);
+                        }
+                        
+                        // 显示具体的错误信息
+                        if (errorMessages.length > 0) {
+                            // 显示第一个错误作为主要提示
+                            showToast('错误', errorMessages[0], 'danger');
+                            // 如果有多个错误，在控制台显示所有错误
+                            if (errorMessages.length > 1) {
+                                console.warn('表单验证错误:', errorMessages);
+                            }
+                        } else {
+                            showToast('警告', '请检查表单输入', 'warning');
+                        }
                         return;
                     }
 
@@ -722,41 +736,169 @@
                 },
 
                 validateForm() {
+                    // 重置错误信息
+                    this.fieldErrors = {};
                     let isValid = true;
 
+                    // 验证交易对
                     if (!this.optimizationParams.symbol) {
                         this.fieldErrors.symbol = '请选择交易对';
                         isValid = false;
                     }
 
+                    // 验证策略
                     if (!this.selectedStrategy) {
                         this.fieldErrors.strategy_id = '请选择策略';
                         isValid = false;
                     }
 
+                    // 验证投资策略
                     if (!this.selectedInvestmentStrategy) {
                         this.fieldErrors.investmentStrategy = '请选择投资策略';
                         isValid = false;
                     }
 
-                    if (new Date(this.optimizationParams.start_date) >= new Date(this.optimizationParams.end_date)) {
-                        this.fieldErrors.end_date = '结束日期必须晚于开始日期';
+                    // 验证日期范围
+                    if (!this.optimizationParams.start_date) {
+                        this.fieldErrors.start_date = '请选择开始日期';
                         isValid = false;
                     }
 
+                    if (!this.optimizationParams.end_date) {
+                        this.fieldErrors.end_date = '请选择结束日期';
+                        isValid = false;
+                    }
+
+                    if (this.optimizationParams.start_date && this.optimizationParams.end_date) {
+                        const startDate = new Date(this.optimizationParams.start_date);
+                        const endDate = new Date(this.optimizationParams.end_date);
+                        
+                        // 验证日期格式有效性
+                        if (isNaN(startDate.getTime())) {
+                            this.fieldErrors.start_date = '开始日期格式无效';
+                            isValid = false;
+                        }
+                        
+                        if (isNaN(endDate.getTime())) {
+                            this.fieldErrors.end_date = '结束日期格式无效';
+                            isValid = false;
+                        }
+                        
+                        // 验证日期顺序
+                        if (!isNaN(startDate.getTime()) && !isNaN(endDate.getTime())) {
+                            if (startDate >= endDate) {
+                                this.fieldErrors.end_date = '结束日期必须晚于开始日期';
+                                isValid = false;
+                            }
+                            
+                            // 验证日期范围合理性
+                            const dateDiff = Math.floor((endDate - startDate) / (1000 * 60 * 60 * 24));
+                            if (dateDiff > 365) {
+                                this.fieldErrors.end_date = '日期范围不能超过365天';
+                                isValid = false;
+                            }
+                            
+                            // 验证日期范围不能太小
+                            if (dateDiff < 1) {
+                                this.fieldErrors.end_date = '日期范围至少为1天';
+                                isValid = false;
+                            }
+                        }
+                    }
+
                     // 验证投资限制设置
-                    if (this.investmentSettings.min_investment_amount <= 0) {
+                    if (typeof this.investmentSettings.min_investment_amount !== 'number' || isNaN(this.investmentSettings.min_investment_amount)) {
+                        this.fieldErrors.min_investment_amount = '最小投资额必须是有效的数字';
+                        isValid = false;
+                    } else if (this.investmentSettings.min_investment_amount <= 0) {
                         this.fieldErrors.min_investment_amount = '最小投资额必须大于0';
                         isValid = false;
                     }
 
-                    if (this.investmentSettings.max_investment_amount <= this.investmentSettings.min_investment_amount) {
+                    if (typeof this.investmentSettings.max_investment_amount !== 'number' || isNaN(this.investmentSettings.max_investment_amount)) {
+                        this.fieldErrors.max_investment_amount = '最大投资额必须是有效的数字';
+                        isValid = false;
+                    } else if (this.investmentSettings.max_investment_amount <= this.investmentSettings.min_investment_amount) {
                         this.fieldErrors.max_investment_amount = '最大投资额必须大于最小投资额';
                         isValid = false;
                     }
 
+                    if (typeof this.investmentSettings.initial_balance !== 'number' || isNaN(this.investmentSettings.initial_balance)) {
+                        this.fieldErrors.initial_balance = '初始资金必须是有效的数字';
+                        isValid = false;
+                    } else if (this.investmentSettings.initial_balance <= 0) {
+                        this.fieldErrors.initial_balance = '初始资金必须大于0';
+                        isValid = false;
+                    } else if (this.investmentSettings.max_investment_amount > this.investmentSettings.initial_balance) {
+                        this.fieldErrors.max_investment_amount = '最大投资额不能超过初始资金';
+                        isValid = false;
+                    }
+
+                    // 验证投资策略参数
+                    if (this.selectedInvestmentStrategy && this.selectedInvestmentStrategy.id === 'martingale_user_defined') {
+                        if (this.investmentStrategyParams.sequence) {
+                            try {
+                                const sequence = this.investmentStrategyParams.sequence.split(',').map(s => parseFloat(s.trim())).filter(n => !isNaN(n) && n > 0);
+                                if (sequence.length === 0) {
+                                    this.fieldErrors.sequence = '马丁格尔序列必须包含至少一个大于0的数字';
+                                    isValid = false;
+                                }
+                            } catch (e) {
+                                this.fieldErrors.sequence = '马丁格尔序列格式无效，请使用逗号分隔的数字';
+                                isValid = false;
+                            }
+                        } else {
+                            this.fieldErrors.sequence = '请设置马丁格尔序列';
+                            isValid = false;
+                        }
+                    }
+
+                    // 验证参数优化配置
+                    if (this.selectedStrategy && Array.isArray(this.selectedStrategy.parameters)) {
+                        let hasEnabledParams = false;
+                        for (const param of this.selectedStrategy.parameters) {
+                            if (param && param.name) {
+                                const config = this.parameterOptimizationConfig[param.name];
+                                if (config && config.enabled) {
+                                    hasEnabledParams = true;
+                                    const range = this.parameterRanges[param.name];
+                                    if (range) {
+                                        // 验证参数范围设置
+                                        if (range.min >= range.max) {
+                                            this.fieldErrors[param.name] = `${this.getParameterDisplayName(param.name)}的最小值必须小于最大值`;
+                                            isValid = false;
+                                        }
+                                        if (range.step <= 0) {
+                                            this.fieldErrors[param.name] = `${this.getParameterDisplayName(param.name)}的步长必须大于0`;
+                                            isValid = false;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // 确保至少有一个参数启用了优化
+                        if (!hasEnabledParams) {
+                            this.fieldErrors.parameters = '请至少启用一个参数进行优化';
+                            isValid = false;
+                        }
+                    }
+
+                    // 验证参数组合数
                     if (this.estimatedCombinations > this.optimizationParams.max_combinations) {
-                        showToast('警告', `参数组合数(${this.estimatedCombinations})超过限制(${this.optimizationParams.max_combinations})`, 'warning');
+                        showToast('警告', `参数组合数(${this.estimatedCombinations})超过限制(${this.optimizationParams.max_combinations})，可能会导致优化时间较长`, 'warning');
+                        // 允许用户在组合数超过限制的情况下仍然可以启动优化
+                    }
+
+                    // 验证K线周期
+                    if (!this.optimizationParams.interval) {
+                        this.fieldErrors.interval = '请选择K线周期';
+                        isValid = false;
+                    }
+
+                    // 验证事件周期
+                    if (!this.optimizationParams.event_period) {
+                        this.fieldErrors.event_period = '请选择事件周期';
                         isValid = false;
                     }
 
@@ -1131,6 +1273,143 @@
                     }
                 },
 
+                // 实时验证方法
+                validateField(field, value) {
+                    const errors = {};
+                    let isValid = true;
+
+                    switch (field) {
+                        case 'symbol':
+                            if (!value) {
+                                errors.symbol = '请选择交易对';
+                                isValid = false;
+                            }
+                            break;
+                        
+                        case 'strategy_id':
+                            if (!this.selectedStrategy) {
+                                errors.strategy_id = '请选择策略';
+                                isValid = false;
+                            }
+                            break;
+                        
+                        case 'investmentStrategy':
+                            if (!this.selectedInvestmentStrategy) {
+                                errors.investmentStrategy = '请选择投资策略';
+                                isValid = false;
+                            }
+                            break;
+                        
+                        case 'start_date':
+                            if (!value) {
+                                errors.start_date = '请选择开始日期';
+                                isValid = false;
+                            } else {
+                                const date = new Date(value);
+                                if (isNaN(date.getTime())) {
+                                    errors.start_date = '开始日期格式无效';
+                                    isValid = false;
+                                } else if (this.optimizationParams.end_date) {
+                                    const endDate = new Date(this.optimizationParams.end_date);
+                                    if (!isNaN(endDate.getTime()) && date >= endDate) {
+                                        errors.start_date = '开始日期必须早于结束日期';
+                                        isValid = false;
+                                    }
+                                }
+                            }
+                            break;
+                        
+                        case 'end_date':
+                            if (!value) {
+                                errors.end_date = '请选择结束日期';
+                                isValid = false;
+                            } else {
+                                const date = new Date(value);
+                                if (isNaN(date.getTime())) {
+                                    errors.end_date = '结束日期格式无效';
+                                    isValid = false;
+                                } else if (this.optimizationParams.start_date) {
+                                    const startDate = new Date(this.optimizationParams.start_date);
+                                    if (!isNaN(startDate.getTime())) {
+                                        if (date <= startDate) {
+                                            errors.end_date = '结束日期必须晚于开始日期';
+                                            isValid = false;
+                                        }
+                                        
+                                        const dateDiff = Math.floor((date - startDate) / (1000 * 60 * 60 * 24));
+                                        if (dateDiff > 365) {
+                                            errors.end_date = '日期范围不能超过365天';
+                                            isValid = false;
+                                        }
+                                        
+                                        if (dateDiff < 1) {
+                                            errors.end_date = '日期范围至少为1天';
+                                            isValid = false;
+                                        }
+                                    }
+                                }
+                            }
+                            break;
+                        
+                        case 'min_investment_amount':
+                            if (typeof value !== 'number' || isNaN(value)) {
+                                errors.min_investment_amount = '最小投资额必须是有效的数字';
+                                isValid = false;
+                            } else if (value <= 0) {
+                                errors.min_investment_amount = '最小投资额必须大于0';
+                                isValid = false;
+                            } else if (this.investmentSettings.max_investment_amount && value >= this.investmentSettings.max_investment_amount) {
+                                errors.min_investment_amount = '最小投资额必须小于最大投资额';
+                                isValid = false;
+                            }
+                            break;
+                        
+                        case 'max_investment_amount':
+                            if (typeof value !== 'number' || isNaN(value)) {
+                                errors.max_investment_amount = '最大投资额必须是有效的数字';
+                                isValid = false;
+                            } else if (this.investmentSettings.min_investment_amount && value <= this.investmentSettings.min_investment_amount) {
+                                errors.max_investment_amount = '最大投资额必须大于最小投资额';
+                                isValid = false;
+                            } else if (this.investmentSettings.initial_balance && value > this.investmentSettings.initial_balance) {
+                                errors.max_investment_amount = '最大投资额不能超过初始资金';
+                                isValid = false;
+                            }
+                            break;
+                        
+                        case 'initial_balance':
+                            if (typeof value !== 'number' || isNaN(value)) {
+                                errors.initial_balance = '初始资金必须是有效的数字';
+                                isValid = false;
+                            } else if (value <= 0) {
+                                errors.initial_balance = '初始资金必须大于0';
+                                isValid = false;
+                            } else if (this.investmentSettings.max_investment_amount && value < this.investmentSettings.max_investment_amount) {
+                                errors.initial_balance = '初始资金必须大于或等于最大投资额';
+                                isValid = false;
+                            }
+                            break;
+                        
+                        case 'interval':
+                            if (!value) {
+                                errors.interval = '请选择K线周期';
+                                isValid = false;
+                            }
+                            break;
+                        
+                        case 'event_period':
+                            if (!value) {
+                                errors.event_period = '请选择事件周期';
+                                isValid = false;
+                            }
+                            break;
+                    }
+
+                    // 更新错误信息
+                    Object.assign(this.fieldErrors, errors);
+                    return isValid;
+                },
+
                 // 工具方法
                 formatTime(seconds) {
                     if (!seconds || seconds <= 0) return '0秒';
@@ -1202,6 +1481,8 @@
                         if (newStrategy?.id !== oldStrategy?.id) {
                             this.updateInvestmentStrategyParams(newStrategy);
                         }
+                        // 验证投资策略选择
+                        this.validateField('investmentStrategy', newStrategy);
                     },
                     immediate: true,
                     deep: true
@@ -1214,16 +1495,85 @@
                             if (typeof newParams.sequence === 'string') {
                                 try {
                                     // 验证序列格式但不修改原始字符串，让用户继续编辑
-                                    newParams.sequence.split(',')
+                                    const sequence = newParams.sequence.split(',')
                                         .map(s => parseFloat(s.trim()))
                                         .filter(n => !isNaN(n) && n > 0);
+                                    if (sequence.length === 0) {
+                                        this.fieldErrors.sequence = '马丁格尔序列必须包含至少一个大于0的数字';
+                                    } else {
+                                        delete this.fieldErrors.sequence;
+                                    }
                                 } catch (e) {
+                                    this.fieldErrors.sequence = '马丁格尔序列格式无效，请使用逗号分隔的数字';
                                     console.warn('序列格式验证失败:', e);
                                 }
                             }
                         }
                     },
                     deep: true
+                },
+
+                // 监听交易对变化
+                'optimizationParams.symbol': {
+                    handler(newValue) {
+                        this.validateField('symbol', newValue);
+                    }
+                },
+
+                // 监听K线周期变化
+                'optimizationParams.interval': {
+                    handler(newValue) {
+                        this.validateField('interval', newValue);
+                    }
+                },
+
+                // 监听事件周期变化
+                'optimizationParams.event_period': {
+                    handler(newValue) {
+                        this.validateField('event_period', newValue);
+                    }
+                },
+
+                // 监听开始日期变化
+                'optimizationParams.start_date': {
+                    handler(newValue) {
+                        this.validateField('start_date', newValue);
+                    }
+                },
+
+                // 监听结束日期变化
+                'optimizationParams.end_date': {
+                    handler(newValue) {
+                        this.validateField('end_date', newValue);
+                    }
+                },
+
+                // 监听最小投资额变化
+                'investmentSettings.min_investment_amount': {
+                    handler(newValue) {
+                        this.validateField('min_investment_amount', newValue);
+                    }
+                },
+
+                // 监听最大投资额变化
+                'investmentSettings.max_investment_amount': {
+                    handler(newValue) {
+                        this.validateField('max_investment_amount', newValue);
+                    }
+                },
+
+                // 监听初始资金变化
+                'investmentSettings.initial_balance': {
+                    handler(newValue) {
+                        this.validateField('initial_balance', newValue);
+                    }
+                },
+
+                // 监听策略选择变化
+                selectedStrategy: {
+                    handler(newValue) {
+                        this.validateField('strategy_id', newValue);
+                    }
                 }
             }
         }).mount('#app');

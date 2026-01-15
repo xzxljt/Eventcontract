@@ -197,7 +197,24 @@ class DataPreprocessor:
         if self.params.get('use_advanced_features', True):
             df_copy = AdvancedFeatureEngineer.add_advanced_features(df_copy)
         
-        self.feature_names = list(df_copy.columns)
+        # 确保预测时使用与训练时相同的特征集
+        if not is_training and hasattr(self, 'feature_names') and self.feature_names:
+            # 删除训练时没有的特征
+            extra_features = [col for col in df_copy.columns if col not in self.feature_names]
+            if extra_features:
+                df_copy = df_copy.drop(extra_features, axis=1)
+            
+            # 添加训练时有的但预测时没有的特征，设置为默认值
+            missing_features = [col for col in self.feature_names if col not in df_copy.columns]
+            if missing_features:
+                for feature in missing_features:
+                    df_copy[feature] = 0.0
+            
+            # 确保列顺序与训练时一致
+            df_copy = df_copy[self.feature_names]
+        else:
+            # 训练时更新特征名称
+            self.feature_names = list(df_copy.columns)
         
         if is_training:
             self._initialize_scaler()

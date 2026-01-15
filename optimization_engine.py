@@ -1865,12 +1865,23 @@ class OptimizationEngine:
         except Exception as e:
             logger.error(f"清理优化数据时发生错误: {e}")
 
-# 全局优化引擎实例
-optimization_engine = OptimizationEngine()
+# 全局优化引擎实例（延迟初始化）
+optimization_engine = None
+
 
 def get_optimization_engine(main_loop: Optional[asyncio.AbstractEventLoop] = None) -> OptimizationEngine:
     """获取全局优化引擎实例"""
     # 在首次从主线程调用时设置事件循环
-    if main_loop and not optimization_engine.main_loop:
+    global optimization_engine
+    if optimization_engine is None:
+        try:
+            optimization_engine = OptimizationEngine(main_loop=main_loop)
+        except Exception as e:
+            logger.warning(f"无法初始化优化引擎: {e}")
+            # 创建一个最小化的优化引擎实例，不使用市场客户端
+            optimization_engine = OptimizationEngine(main_loop=main_loop)
+            # 手动设置binance_client为None，避免后续操作失败
+            optimization_engine.binance_client = None
+    elif main_loop is not None and optimization_engine.main_loop is None:
         optimization_engine.main_loop = main_loop
     return optimization_engine
