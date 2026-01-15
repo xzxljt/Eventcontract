@@ -44,6 +44,7 @@ class TelegramChannel(PushChannel):
         """
         self.bot_token = config.get('bot_token', '')
         self.chat_id = config.get('chat_id', '')
+        self.api_base_url = config.get('api_base_url') or config.get('api_url') or 'https://api.telegram.org'
     
     def send(self, message: str, **kwargs) -> Dict[str, Any]:
         """发送Telegram消息
@@ -62,7 +63,8 @@ class TelegramChannel(PushChannel):
             }
         
         try:
-            url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
+            base_url = self.api_base_url.rstrip('/')
+            url = f"{base_url}/bot{self.bot_token}/sendMessage"
             payload = {
                 "chat_id": self.chat_id,
                 "text": message,

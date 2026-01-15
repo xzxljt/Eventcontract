@@ -107,6 +107,10 @@ class Predictor:
         """保存预处理器"""
         if not self.preprocessor_path:
             self.preprocessor_path = self._resolve_preprocessor_path(self.model_path)
+        dir_path = os.path.dirname(self.preprocessor_path)
+        if dir_path:
+            os.makedirs(dir_path, exist_ok=True)
+        self.data_preprocessor.save_preprocessor(self.preprocessor_path)
 
     def _load_preprocessor(self):
         """加载预处理器"""
@@ -519,6 +523,7 @@ class Predictor:
         self.params.update(params)
         self.cache_enabled = self.params.get('enable_cache', True)
         self.cache_expiry = self.params.get('cache_expiry', 3600)
+        self.clear_cache()
         
         if 'preprocessor_params' in params:
             self.data_preprocessor = DataPreprocessor(params['preprocessor_params'])
