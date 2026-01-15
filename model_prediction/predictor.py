@@ -243,12 +243,17 @@ class Predictor:
         
         # 准备机器学习预测格式（转换为分类预测）
         ml_predictions = []
-        for i, pred in enumerate(predictions):
+        if len(predictions) > 0:
+            latest_prediction = predictions[-1]
+            last_close = df['close'].iloc[-1]
             # 转换为分类预测（1为上涨，0为下跌）
-            signal = 1 if pred > df['close'].iloc[-1] * 1.001 else 0
+            signal = 1 if latest_prediction > last_close * 1.001 else 0
             # 基于预测与当前价格的差异计算置信度
-            confidence = min(0.9, abs(pred - df['close'].iloc[-1]) / df['close'].iloc[-1] * 100)
-            model_name = f"ML_{self.model_type if not self.use_ensemble else self.model_types[i % len(self.model_types)]}"
+            confidence = min(0.9, abs(latest_prediction - last_close) / last_close * 100)
+            if self.use_ensemble:
+                model_name = "ML_ENSEMBLE"
+            else:
+                model_name = f"ML_{self.model_type}"
             ml_predictions.append((model_name, signal, confidence))
         
         # 分析市场条件
