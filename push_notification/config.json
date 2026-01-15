@@ -1,0 +1,12 @@
+{
+  "channels": {
+    "telegram": [],
+    "wechat": [
+      {
+        "bot_token": "",
+        "chat_id": "",
+        "webhook_url": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=7fdba330-8119-4b89-8bda-083b56652e0d"
+      }
+    ]
+  }
+}

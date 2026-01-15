@@ -111,6 +111,9 @@ from market_client import get_market_client
 # 导入模型预测模块
 from model_prediction import Predictor, ResultProcessor
 
+# 导入推送通知模块
+from push_notification.push_manager import PushManager
+
 # --- 全局变量和配置 ---
 # 存储策略参数的配置字典
 strategy_parameters_config: Dict[str, Any] = {
@@ -131,6 +134,9 @@ persistent_autox_clients_data: Dict[str, Dict[str, Any]] = {}
 # --- 模型预测相关全局变量 ---# 模型预测器实例
 model_predictor: Optional[Predictor] = None
 result_processor: Optional[ResultProcessor] = None
+
+# --- 推送通知相关全局变量 ---# 推送管理器实例
+push_manager: Optional[PushManager] = None
 
 # 训练任务管理
 active_training_tasks: Dict[str, Dict[str, Any]] = {}  # task_id -> task_info
@@ -2544,6 +2550,149 @@ async def clear_prediction_cache():
     except Exception as e:
         logger.error(f"清除预测缓存失败: {e}", exc_info=True)
         return {"success": False, "message": str(e)}
+
+
+# --- 推送通知相关路由 ---# 推送通知页面
+@app.get("/push")
+async def push_notification_page():
+    """推送通知管理页面"""
+    try:
+        with open("frontend/push_notification.html", "r", encoding="utf-8") as f:
+            content = f.read()
+        return HTMLResponse(content=content)
+    except Exception as e:
+        logger.error(f"加载推送通知页面失败: {e}")
+        return HTMLResponse(content="<h1>推送通知页面加载失败</h1>", status_code=500)
+
+# 获取推送配置
+@app.get("/api/push/config")
+async def get_push_config():
+    """获取推送配置"""
+    try:
+        global push_manager
+        if not push_manager:
+            push_manager = PushManager()
+        
+        config = push_manager.get_config()
+        return {
+            "status": "success",
+            "channels": config.get("channels", {"telegram": [], "wechat": []})
+        }
+    except Exception as e:
+        logger.error(f"获取推送配置失败: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
+
+# 添加推送渠道
+@app.post("/api/push/add-channel")
+async def add_push_channel(request: Dict[str, Any]):
+    """添加推送渠道"""
+    try:
+        global push_manager
+        if not push_manager:
+            push_manager = PushManager()
+        
+        channel_type = request.get("channel_type")
+        config = request.get("config", {})
+        
+        result = push_manager.add_channel(channel_type, config)
+        return result
+    except Exception as e:
+        logger.error(f"添加推送渠道失败: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
+
+# 更新推送渠道
+@app.post("/api/push/update-channel")
+async def update_push_channel(request: Dict[str, Any]):
+    """更新推送渠道"""
+    try:
+        global push_manager
+        if not push_manager:
+            push_manager = PushManager()
+        
+        channel_type = request.get("channel_type")
+        channel_index = request.get("channel_index")
+        config = request.get("config", {})
+        
+        result = push_manager.update_channel(channel_type, channel_index, config)
+        return result
+    except Exception as e:
+        logger.error(f"更新推送渠道失败: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
+
+# 删除推送渠道
+@app.post("/api/push/delete-channel")
+async def delete_push_channel(request: Dict[str, Any]):
+    """删除推送渠道"""
+    try:
+        global push_manager
+        if not push_manager:
+            push_manager = PushManager()
+        
+        channel_type = request.get("channel_type")
+        channel_index = request.get("channel_index")
+        
+        result = push_manager.delete_channel(channel_type, channel_index)
+        return result
+    except Exception as e:
+        logger.error(f"删除推送渠道失败: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
+
+# 向所有渠道发送消息
+@app.post("/api/push/send-all")
+async def send_push_all(request: Dict[str, Any]):
+    """向所有渠道发送消息"""
+    try:
+        global push_manager
+        if not push_manager:
+            push_manager = PushManager()
+        
+        message = request.get("message", "")
+        
+        results = push_manager.send_all(message)
+        return {
+            "status": "success",
+            "results": results
+        }
+    except Exception as e:
+        logger.error(f"发送推送消息失败: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
+
+# 向指定渠道发送消息
+@app.post("/api/push/send-to-channel")
+async def send_push_to_channel(request: Dict[str, Any]):
+    """向指定渠道发送消息"""
+    try:
+        global push_manager
+        if not push_manager:
+            push_manager = PushManager()
+        
+        channel_type = request.get("channel_type")
+        channel_index = request.get("channel_index")
+        message = request.get("message", "")
+        
+        result = push_manager.send_to_channel(channel_type, channel_index, message)
+        return result
+    except Exception as e:
+        logger.error(f"发送推送消息失败: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
+
+# 测试推送渠道
+@app.post("/api/push/test-channel")
+async def test_push_channel(request: Dict[str, Any]):
+    """测试推送渠道"""
+    try:
+        global push_manager
+        if not push_manager:
+            push_manager = PushManager()
+        
+        channel_type = request.get("channel_type")
+        channel_index = request.get("channel_index")
+        
+        result = push_manager.test_channel(channel_type, channel_index)
+        return result
+    except Exception as e:
+        logger.error(f"测试推送渠道失败: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
 
 # 获取预测结果列表
 @app.get("/api/prediction/results")
